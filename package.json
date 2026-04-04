@@ -2,7 +2,7 @@
   "name": "zotero-citegeist",
   "version": "1.0.0",
   "description": "Citation intelligence for Zotero — powered by OpenAlex. See citation counts, explore citation networks, and add citing/cited works to your library.",
-  "homepage": "https://github.com/opusvita/zotero-citegeist",
+  "homepage": "https://github.com/phdemotions/zotero-citegeist",
   "author": "Opus Vita",
   "license": "AGPL-3.0-or-later",
   "scripts": {
