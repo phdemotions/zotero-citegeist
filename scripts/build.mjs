@@ -100,7 +100,7 @@ if (!isDev) {
         updates: [
           {
             version,
-            update_link: `https://github.com/opusvita/zotero-citegeist/releases/download/v${version}/${xpiName}`,
+            update_link: `https://github.com/phdemotions/zotero-citegeist/releases/download/v${version}/${xpiName}`,
             update_hash: `sha256:${hash}`,
             applications: {
               zotero: { strict_min_version: "6.999" },
