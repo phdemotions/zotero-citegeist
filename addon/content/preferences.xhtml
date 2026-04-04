@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<vbox xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+      xmlns:html="http://www.w3.org/1999/xhtml">
+
+  <groupbox>
+    <label><html:h2>Citegeist Settings</html:h2></label>
+
+    <hbox align="center">
+      <label value="Email for OpenAlex polite pool:" />
+      <html:input type="email" id="citegeist-pref-mailto"
+        preference="extensions.zotero.citegeist.mailto"
+        style="flex: 1; margin-left: 8px;" />
+    </hbox>
+    <description style="font-size: 11px; opacity: 0.6; margin-top: 4px;">
+      Adding your email gets you into OpenAlex's faster "polite pool." Recommended but not required.
+    </description>
+
+    <separator class="thin" />
+
+    <checkbox id="citegeist-pref-autofetch"
+      label="Automatically fetch citation data when viewing items"
+      preference="extensions.zotero.citegeist.autoFetch" />
+
+    <separator class="thin" />
+
+    <hbox align="center">
+      <label value="Cache lifetime (days):" />
+      <html:input type="number" id="citegeist-pref-cache"
+        preference="extensions.zotero.citegeist.cacheLifetimeDays"
+        min="1" max="90" style="width: 60px; margin-left: 8px;" />
+    </hbox>
+
+    <separator class="thin" />
+
+    <hbox align="center">
+      <label value="Results per page in citation browser:" />
+      <html:input type="number" id="citegeist-pref-pagesize"
+        preference="extensions.zotero.citegeist.networkPageSize"
+        min="10" max="200" step="5" style="width: 60px; margin-left: 8px;" />
+    </hbox>
+  </groupbox>
+</vbox>

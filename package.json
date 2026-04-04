@@ -1,0 +1,31 @@
+{
+  "name": "zotero-citegeist",
+  "version": "1.0.0",
+  "description": "Citation intelligence for Zotero — powered by OpenAlex. See citation counts, explore citation networks, and add citing/cited works to your library.",
+  "homepage": "https://github.com/opusvita/zotero-citegeist",
+  "author": "Opus Vita",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:dev": "node scripts/build.mjs --dev",
+    "start": "node scripts/build.mjs --dev && node scripts/start.mjs",
+    "release": "bumpp --commit 'release: v%s' --tag 'v%s' --push",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "config": {
+    "addonName": "Citegeist",
+    "addonID": "citegeist@opusvita.org",
+    "addonRef": "citegeist",
+    "addonInstance": "Citegeist",
+    "prefsPrefix": "extensions.zotero.citegeist"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0",
+    "bumpp": "^9.9.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

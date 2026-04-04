@@ -1,0 +1,18 @@
+{
+  "manifest_version": 2,
+  "name": "__addonName__",
+  "version": "__buildVersion__",
+  "description": "Citation intelligence powered by OpenAlex — counts, networks, and one-click import.",
+  "author": "Opus Vita",
+  "icons": {
+    "48": "content/icons/icon-48.png",
+    "96": "content/icons/icon-96.png"
+  },
+  "applications": {
+    "zotero": {
+      "id": "__addonID__",
+      "strict_min_version": "6.999",
+      "strict_max_version": "8.*"
+    }
+  }
+}
