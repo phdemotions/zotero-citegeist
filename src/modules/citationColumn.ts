@@ -1,59 +1,102 @@
 /**
- * Custom column in Zotero's item tree showing citation count.
+ * Custom columns in Zotero's item tree: Citations, FWCI, and Percentile.
  *
  * Uses Zotero 7's ItemTreeManager.registerColumn API.
  * Reads cached data from Extra field and triggers background fetches.
+ * All three columns share a single fetch queue to avoid duplicate requests.
  */
 
-import { getCachedCountAndStaleness } from "./cache";
+import { getCachedMetrics } from "./cache";
 import { fetchAndCacheItem } from "./citationService";
 
-const COLUMN_KEY = "citegeist-citation-count";
+const COL_CITATIONS = "citegeist-citation-count";
+const COL_FWCI = "citegeist-fwci";
+const COL_PERCENTILE = "citegeist-percentile";
 const MAX_ATTEMPTED_CACHE = 10000;
 
 let registered = false;
 let fetchTimer: ReturnType<typeof setTimeout> | null = null;
 let processingQueue = false;
 const fetchQueue = new Set<number>();
-// Track items already attempted (no DOI, not found, etc.) to avoid re-queuing
 const fetchAttempted = new Set<number>();
+
+/**
+ * Shared logic: check if an item needs fetching and queue it if so.
+ * Returns the cached metrics for immediate display.
+ */
+function getMetricsAndMaybeQueue(item: _ZoteroTypes.Item) {
+  if (!item.isRegularItem()) return null;
+
+  const doi = item.getField("DOI");
+  if (!doi || !doi.trim()) return null;
+
+  const metrics = getCachedMetrics(item);
+  const autoFetch = Zotero.Prefs.get(
+    "extensions.zotero.citegeist.autoFetch",
+  ) as boolean;
+
+  if (autoFetch && (metrics.count === null || metrics.isStale) && !fetchAttempted.has(item.id)) {
+    queueFetch(item.id);
+  }
+
+  return metrics;
+}
 
 export async function registerCitationColumn(pluginID: string): Promise<void> {
   if (registered) return;
 
+  // Citations column
   await Zotero.ItemTreeManager.registerColumn({
-    dataKey: COLUMN_KEY,
+    dataKey: COL_CITATIONS,
     label: "Citations",
     pluginID,
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
     dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      if (!item.isRegularItem()) return "";
+      const metrics = getMetricsAndMaybeQueue(item);
+      if (!metrics) return "";
+      if (metrics.count !== null) return String(metrics.count);
+      const autoFetch = Zotero.Prefs.get("extensions.zotero.citegeist.autoFetch") as boolean;
+      return autoFetch ? "…" : "";
+    },
+  });
 
-      const doi = item.getField("DOI");
-      if (!doi || !doi.trim()) return "";
+  // FWCI column
+  await Zotero.ItemTreeManager.registerColumn({
+    dataKey: COL_FWCI,
+    label: "FWCI",
+    pluginID,
+    zoteroPersist: ["width", "hidden", "sortDirection"],
+    sortReverse: true,
+    dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
+      const metrics = getMetricsAndMaybeQueue(item);
+      if (!metrics) return "";
+      if (metrics.fwci !== null) return metrics.fwci.toFixed(2);
+      if (metrics.count !== null) return "—"; // data fetched but no FWCI available
+      const autoFetch = Zotero.Prefs.get("extensions.zotero.citegeist.autoFetch") as boolean;
+      return autoFetch ? "…" : "";
+    },
+  });
 
-      const { count, isStale } = getCachedCountAndStaleness(item);
-      const autoFetch = Zotero.Prefs.get(
-        "extensions.zotero.citegeist.autoFetch",
-      ) as boolean;
-
-      if (count !== null) {
-        if (autoFetch && isStale && !fetchAttempted.has(item.id)) {
-          queueFetch(item.id);
-        }
-        return String(count);
-      }
-
-      if (autoFetch && !fetchAttempted.has(item.id)) {
-        queueFetch(item.id);
-      }
-      return count === null && !autoFetch ? "" : "…";
+  // Percentile column
+  await Zotero.ItemTreeManager.registerColumn({
+    dataKey: COL_PERCENTILE,
+    label: "Percentile",
+    pluginID,
+    zoteroPersist: ["width", "hidden", "sortDirection"],
+    sortReverse: true,
+    dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
+      const metrics = getMetricsAndMaybeQueue(item);
+      if (!metrics) return "";
+      if (metrics.percentile !== null) return metrics.percentile.toFixed(1);
+      if (metrics.count !== null) return "—";
+      const autoFetch = Zotero.Prefs.get("extensions.zotero.citegeist.autoFetch") as boolean;
+      return autoFetch ? "…" : "";
     },
   });
 
   registered = true;
-  Zotero.debug("[Citegeist] Citation count column registered");
+  Zotero.debug("[Citegeist] Citation columns registered (Citations, FWCI, Percentile)");
 }
 
 export function unregisterCitationColumn(): void {
@@ -68,11 +111,12 @@ export function unregisterCitationColumn(): void {
   processingQueue = false;
   registered = false;
 
-  // Fire and forget — Zotero manages column lifecycle on plugin removal
-  try {
-    Zotero.ItemTreeManager.unregisterColumn(COLUMN_KEY);
-  } catch {
-    // Column may already be removed
+  for (const key of [COL_CITATIONS, COL_FWCI, COL_PERCENTILE]) {
+    try {
+      Zotero.ItemTreeManager.unregisterColumn(key);
+    } catch {
+      // Column may already be removed
+    }
   }
 }
 
@@ -91,13 +135,10 @@ async function processFetchQueue(): Promise<void> {
   const ids = Array.from(fetchQueue);
   fetchQueue.clear();
 
-  // Cap the attempted set to prevent unbounded growth
   if (fetchAttempted.size > MAX_ATTEMPTED_CACHE) {
     fetchAttempted.clear();
   }
 
-  // Batch size of 2 with 500ms delay stays well within OpenAlex's
-  // polite-pool rate limit (~10 req/s) even with large libraries.
   const BATCH_SIZE = 2;
   const BATCH_DELAY = 500;
 
@@ -126,17 +167,15 @@ async function processFetchQueue(): Promise<void> {
 
   processingQueue = false;
 
-  // Notify the item tree to re-render with updated data
   try {
     const zp = Zotero.getActiveZoteroPane() as any;
     if (zp?.itemsView?.refreshAndMaintainSelection) {
       await zp.itemsView.refreshAndMaintainSelection();
     }
   } catch {
-    // Non-critical — tree will refresh on next user interaction
+    // Non-critical
   }
 
-  // If new items were queued during processing, schedule another run
   if (fetchQueue.size > 0 && !fetchTimer && registered) {
     fetchTimer = setTimeout(processFetchQueue, 500);
   }

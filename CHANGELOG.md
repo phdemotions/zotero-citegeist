@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Citations column** in the Zotero item list with sortable citation counts
+- **Sortable columns** for Citations, FWCI, and Percentile in the Zotero item list
 - **Citation Intelligence pane** showing citation count, FWCI, percentile ranking, top 1%/10% badges, and year-over-year trend
 - **Citation network browser** for exploring citing works and references, with search, sort, and one-click "Add to Zotero" import
 - **Right-click context menus** for fetching citations on individual items, multi-selections, and entire collections (including subcollections)

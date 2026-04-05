@@ -51,7 +51,7 @@ All of this data comes from [OpenAlex](https://openalex.org), a free and open in
 
 1. Download **[citegeist.xpi](https://github.com/phdemotions/zotero-citegeist/releases/latest)** from the latest release (click the `.xpi` file under "Assets" to download it)
 2. Open Zotero 7
-3. Go to **Tools &rarr; Add-ons** (on Mac: look in the menu bar at the top of your screen)
+3. Go to **Tools &rarr; Add-ons** from the menu bar
 4. Click the gear icon (**&#9881;**) in the top-right corner of the Add-ons window &rarr; **Install Add-on From File...**
 5. Find and select the `.xpi` file you downloaded (it's probably in your Downloads folder)
 6. **Restart Zotero** when prompted
@@ -68,7 +68,7 @@ Citegeist checks for updates automatically via GitHub Releases. When a new versi
 
 Once installed, Citegeist adds three things to Zotero:
 
-1. A **Citations column** in your item list
+1. **Sortable columns** for Citations, FWCI, and Percentile in your item list
 2. A **Citation Intelligence pane** in the item detail sidebar
 3. **Right-click menu options** for fetching and exploring citations
 
@@ -76,20 +76,26 @@ Here's how to use each one.
 
 ---
 
-### 1. The Citations Column
+### 1. The Sortable Columns
 
-A new **Citations** column appears in your item list showing the citation count for each paper.
+Citegeist adds three new columns to your item list:
 
-**If you don't see the column:**
+| Column | What it shows |
+|--------|--------------|
+| **Citations** | Total citation count for each paper |
+| **FWCI** | Field-Weighted Citation Impact &mdash; how the paper compares to the average for its field (1.0 = average, 2.0 = twice the average) |
+| **Percentile** | Where the paper ranks among all papers in its field and year (e.g., 85.0 = cited more than 85% of comparable papers) |
+
+**If you don't see the columns:**
 
 1. Right-click on any column header in the item list (e.g., "Title", "Creator", "Date")
 2. A dropdown will appear with all available columns
-3. Check **Citations** to enable it
-4. You can drag the column to reorder it, or click the header to sort by citation count
+3. Check **Citations**, **FWCI**, and/or **Percentile** to enable them
+4. You can drag columns to reorder them, or click any header to sort
 
-Citation counts are fetched automatically in the background as you browse your library. Papers without a DOI will show a blank cell.
+All data is fetched automatically in the background as you browse your library. Papers without a DOI will show blank cells. A dash (**—**) means data was fetched but that metric isn't available for this paper (common for very old or very recent publications).
 
-**Tip:** Click the **Citations** column header to sort your library by most-cited papers. Click again to reverse the sort order.
+**Tip:** Click the **FWCI** column header to sort your library by field-normalized impact. This is more meaningful than sorting by raw citation count because it accounts for differences between fields.
 
 ---
 
@@ -196,7 +202,7 @@ Right-click any collection in the left sidebar to see:
 
 ## Settings
 
-Go to **Zotero &rarr; Settings &rarr; Citegeist** (or **Edit &rarr; Preferences &rarr; Citegeist** on Windows/Linux) to configure:
+Open Zotero's settings (**Zotero &rarr; Settings** on macOS, **Edit &rarr; Preferences** on Windows/Linux) and select the **Citegeist** tab to configure:
 
 | Setting | Default | What it does |
 |---------|---------|-------------|
@@ -271,16 +277,15 @@ npm run typecheck
 
 ### Dev installation
 
-For development, create a proxy file pointing to the build output:
+For development, create a proxy file in your Zotero profile's `extensions/` folder. The file should be named `citegeist@opusvita.org` and contain the absolute path to `build/addon` in this repo.
 
-```bash
-# Find your Zotero profile
-ls ~/Library/Application\ Support/Zotero/Profiles/
+**Zotero profile locations:**
 
-# Create proxy file (replace PROFILE_ID with your profile folder name)
-echo "/path/to/citegeist/build/addon" > \
-  ~/Library/Application\ Support/Zotero/Profiles/PROFILE_ID/extensions/citegeist@opusvita.org
-```
+| OS | Path |
+|----|------|
+| macOS | `~/Library/Application Support/Zotero/Profiles/<PROFILE_ID>/extensions/` |
+| Windows | `%APPDATA%\Zotero\Zotero\Profiles\<PROFILE_ID>\extensions\` |
+| Linux | `~/.zotero/zotero/<PROFILE_ID>/extensions/` |
 
 Rebuild and restart Zotero to see changes.
 

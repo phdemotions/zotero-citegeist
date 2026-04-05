@@ -92,6 +92,21 @@ export function getCachedCountAndStaleness(
   return { count, isStale: isLastFetchedStale(citegeistFields) };
 }
 
+/**
+ * Read FWCI and percentile alongside count and staleness in one parse.
+ * Used by columns to avoid parsing Extra multiple times per item.
+ */
+export function getCachedMetrics(
+  item: _ZoteroTypes.Item,
+): { count: number | null; fwci: number | null; percentile: number | null; isStale: boolean } {
+  const { citegeistFields } = parseExtra(item);
+  const countStr = citegeistFields.get(`${PREFIX}citedByCount`);
+  const count = countStr !== undefined ? safeParseInt(countStr) : null;
+  const fwci = safeParseFloat(citegeistFields.get(`${PREFIX}fwci`));
+  const percentile = safeParseFloat(citegeistFields.get(`${PREFIX}percentile`));
+  return { count, fwci, percentile, isStale: isLastFetchedStale(citegeistFields) };
+}
+
 export function getCachedCitationCount(
   item: _ZoteroTypes.Item,
 ): number | null {

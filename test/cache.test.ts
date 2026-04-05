@@ -20,6 +20,7 @@ import {
   getCachedCitationCount,
   getCachedOpenAlexId,
   getCachedData,
+  getCachedMetrics,
   isCacheStale,
   getCachedCountAndStaleness,
 } from "../src/modules/cache";
@@ -156,6 +157,46 @@ describe("isCacheStale", () => {
     const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
     const item = mockItem(`Citegeist.lastFetched: ${twoDaysAgo}`);
     expect(isCacheStale(item)).toBe(true);
+  });
+});
+
+describe("getCachedMetrics", () => {
+  it("returns count, fwci, percentile, and staleness together", () => {
+    const recent = new Date().toISOString();
+    const extra = [
+      "Citegeist.citedByCount: 25",
+      "Citegeist.fwci: 1.85",
+      "Citegeist.percentile: 91.2",
+      `Citegeist.lastFetched: ${recent}`,
+    ].join("\n");
+    const item = mockItem(extra);
+    const result = getCachedMetrics(item);
+
+    expect(result.count).toBe(25);
+    expect(result.fwci).toBe(1.85);
+    expect(result.percentile).toBe(91.2);
+    expect(result.isStale).toBe(false);
+  });
+
+  it("returns null for missing fwci and percentile", () => {
+    const recent = new Date().toISOString();
+    const extra = `Citegeist.citedByCount: 10\nCitegeist.lastFetched: ${recent}`;
+    const item = mockItem(extra);
+    const result = getCachedMetrics(item);
+
+    expect(result.count).toBe(10);
+    expect(result.fwci).toBeNull();
+    expect(result.percentile).toBeNull();
+    expect(result.isStale).toBe(false);
+  });
+
+  it("returns all null for empty Extra", () => {
+    const item = mockItem("");
+    const result = getCachedMetrics(item);
+    expect(result.count).toBeNull();
+    expect(result.fwci).toBeNull();
+    expect(result.percentile).toBeNull();
+    expect(result.isStale).toBe(true);
   });
 });
 

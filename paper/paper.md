@@ -23,7 +23,7 @@ bibliography: paper.bib
 
 Citegeist is a plugin for Zotero 7 that brings citation intelligence directly into the reference manager. For any item with a DOI, Citegeist retrieves data from OpenAlex [@priem2022openalex], a free and open index of over 250 million scholarly works, and displays:
 
-1. A **sortable citation count column** in the item list.
+1. **Sortable columns** for citation count, FWCI, and percentile ranking in the item list.
 2. A **Citation Intelligence pane** showing contextual metrics — field-weighted citation impact (FWCI), percentile ranking, top 1%/10% badges, and year-over-year citation trends — all explained in plain language within the interface.
 3. A **citation network browser** for forward and backward citation chaining, with one-click import of discovered papers into Zotero.
 
@@ -46,8 +46,8 @@ Zotero [@zotero] is a widely used free, open-source reference manager, yet it pr
 | Data source | Crossref, Semantic Scholar | Crossref, Semantic Scholar | Google Scholar | scite.ai | Wikidata, OpenAlex | OpenAlex |
 | Cost | Free | Free | Free | Paid | Free | Free |
 | Raw citation counts | Yes | Yes | Yes | No | No | Yes |
-| Field-normalized metrics (FWCI) | No | No | No | No | No | Yes |
-| Percentile ranking | No | No | No | No | No | Yes |
+| Sortable FWCI column | No | No | No | No | No | Yes |
+| Sortable percentile column | No | No | No | No | No | Yes |
 | Citation trend over time | No | No | No | No | No | Yes |
 | Citation network browsing | No | No | No | No | Yes (graph) | Yes (list) |
 | One-click import to library | No | No | No | No | No | Yes |
@@ -56,7 +56,7 @@ Zotero [@zotero] is a widely used free, open-source reference manager, yet it pr
 
 Several plugins retrieve raw citation counts: ZoteroCitationCountsManager [@zotero_citationcounts_manager] and zotero-citation-tally [@zotero_citation_tally] use Crossref and Semantic Scholar, while zotero-google-scholar-citation-count [@zotero_google_scholar_count] scrapes Google Scholar with the associated risk of rate limiting and bot detection. These plugins provide counts without field context, offering no way to judge whether a count is high or low for a given discipline. The scite Zotero plugin [@scite_zotero] takes a different approach, classifying citations as supporting, mentioning, or contrasting, but requires a paid subscription and does not provide citation counts or field-normalized metrics. Cita [@zotero_cita] manages citation relationships via Wikidata and visualizes a citation graph, but focuses on metadata curation rather than metrics or literature discovery. The Inciteful plugin [@inciteful_zotero] provides network visualization but launches an external website rather than operating within Zotero.
 
-Citegeist is the only Zotero plugin that combines field-normalized citation metrics with in-Zotero citation network browsing and one-click import. By using OpenAlex — a fully open, free-to-use index built on Crossref, PubMed, and institutional repositories — it requires no authentication and no payment. The citation network browser enables the kind of forward and backward citation chaining that is foundational to systematic literature discovery [@wohlin2014guidelines], building on the concept of citation indexing introduced by @garfield1955citation, without leaving Zotero.
+Citegeist is the only Zotero plugin that combines field-normalized citation metrics with in-Zotero citation network browsing and one-click import. By using OpenAlex — a fully open, free-to-use index — it requires no authentication and no payment. The citation network browser enables the kind of forward and backward citation chaining that is foundational to systematic literature discovery [@wohlin2014guidelines], building on the concept of citation indexing introduced by @garfield1955citation, without leaving Zotero.
 
 # Design
 
@@ -66,7 +66,7 @@ Citegeist is the only Zotero plugin that combines field-normalized citation metr
 
 Citegeist adds three components to Zotero:
 
-**A sortable Citations column** in the item list displays each item's citation count, fetched automatically in the background. Clicking the column header sorts the library by citation count.
+**Sortable columns for Citations, FWCI, and Percentile** in the item list display each item's citation count, field-weighted citation impact, and percentile ranking. Clicking any column header sorts the library by that metric, allowing researchers to quickly identify the most-cited or highest-impact papers in a collection. Sorting by FWCI is particularly useful because it surfaces papers that are highly cited relative to their field, rather than papers in high-citation fields.
 
 **A Citation Intelligence pane** appears in the item detail sidebar. It displays the citation count, FWCI (with a plain-language explanation of what the number means), percentile ranking, top 1%/10% badges, and a year-over-year citation trend showing whether a paper's influence is growing or declining.
 
