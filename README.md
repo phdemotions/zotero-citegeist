@@ -5,7 +5,7 @@
 <h1 align="center">Citegeist</h1>
 
 <p align="center">
-  <strong>Citation intelligence for Zotero 7, powered by <a href="https://openalex.org">OpenAlex</a>.</strong><br>
+  <strong>Citation intelligence for Zotero 7.</strong><br>
   See how influential a paper really is. Explore what cites it. Add works to your library in one click.
 </p>
 
@@ -17,32 +17,19 @@
 
 ---
 
-## What is Zotero?
+## What Citegeist Does
 
-[Zotero](https://www.zotero.org) is a free, open-source reference manager. It helps you collect, organize, and cite research papers. If you've never used it, [download Zotero 7](https://www.zotero.org/downloads/) and add a few papers to your library before installing Citegeist.
+Citegeist is a free plugin for [Zotero 7](https://www.zotero.org/downloads/) that shows you how important a paper is &mdash; and helps you find more like it &mdash; without leaving your library.
 
-Key Zotero terms used in this guide:
+**For every paper in your library, you can:**
 
-- **Library** &mdash; Your collection of saved papers, articles, and books
-- **Item** &mdash; A single entry in your library (a paper, book chapter, etc.)
-- **Collection** &mdash; A folder you create to organize items by topic or project
-- **DOI** &mdash; A Digital Object Identifier, a unique code assigned to most published papers (e.g., `10.1038/nature12373`). Citegeist uses the DOI to look up citation data.
-- **Extra field** &mdash; A text field on each item where Zotero (and plugins) can store additional data
+- **Sort by impact** &mdash; see citation counts, field-weighted impact (FWCI), and percentile rankings as sortable columns
+- **Compare journals** &mdash; see journal impact metrics and check UTD24, FT50, ABDC, and AJG ranking lists at a glance
+- **Spot trends** &mdash; see whether a paper's citations are rising or falling year over year
+- **Discover related work** &mdash; browse papers that cite your paper (or that your paper cites), read their abstracts, and add them to your library in one click
+- **Catch retractions** &mdash; retracted papers are flagged automatically
 
----
-
-## What is Citegeist?
-
-Citegeist is a plugin (an add-on that extends Zotero's features) that adds citation data to your library. For any paper with a DOI, you can see:
-
-- How many times it's been cited by other papers
-- How it compares to other papers in its field (is it above or below average?)
-- Whether citations are increasing or decreasing over time
-- Which papers cite it, and which papers it references
-- Whether it's been retracted (formally withdrawn by the publisher)
-- What journal ranking lists the venue appears on (UTD24, FT50, ABDC, AJG)
-
-All of this data comes from [OpenAlex](https://openalex.org), a free and open index of hundreds of millions of scholarly works. Journal rankings are bundled with the plugin (no API calls). **No API key required.** You don't need to create an account or pay for anything.
+Everything is free. No account, no subscription, no API key.
 
 ---
 
@@ -61,7 +48,7 @@ That's it. Once Zotero restarts, Citegeist will begin fetching citation data aut
 
 ### Staying up to date
 
-Citegeist checks for updates automatically via GitHub Releases. When a new version is available, Zotero will install it on the next restart.
+Citegeist checks for updates automatically. When a new version is available, Zotero will install it on the next restart.
 
 ---
 
@@ -69,7 +56,7 @@ Citegeist checks for updates automatically via GitHub Releases. When a new versi
 
 Once installed, Citegeist adds three things to Zotero:
 
-1. **Nine sortable columns** for article metrics, journal metrics, and journal rankings
+1. **Sortable columns** for article metrics, journal metrics, and journal rankings
 2. A **Citation Intelligence pane** in the item detail sidebar
 3. **Right-click menu options** for fetching and exploring citations
 
@@ -81,22 +68,22 @@ Here's how to use each one.
 
 Citegeist adds nine new columns to your item list, organized in three groups.
 
-#### Article-level metrics (from OpenAlex)
+#### Article metrics
 
 | Column | What it shows |
 |--------|--------------|
-| **Citations** | Total citation count for each paper |
-| **FWCI** | Field-Weighted Citation Impact &mdash; how the paper compares to the average for its field (1.0 = average, 2.0 = twice the average) |
-| **Percentile** | Where the paper ranks among all papers in its field and year (e.g., 85.0 = cited more than 85% of comparable papers) |
+| **Citations** | Total citation count |
+| **FWCI** | Field-Weighted Citation Impact &mdash; how the paper compares to the world average for its field (1.0 = average, 2.0 = twice the average) |
+| **Percentile** | Where the paper ranks among comparable papers (e.g., 85.0 = cited more than 85% of papers in the same field and year) |
 
-#### Journal-level metrics (from OpenAlex Sources API)
+#### Journal metrics
 
 | Column | What it shows |
 |--------|--------------|
-| **Citedness** | The journal's 2-year mean citedness (OpenAlex's open equivalent of Journal Impact Factor) |
-| **J. H-Index** | The journal's h-index &mdash; how many papers have been cited at least that many times |
+| **Citedness** | The journal's 2-year mean citedness (an open equivalent of the Journal Impact Factor) |
+| **J. H-Index** | The journal's h-index |
 
-#### Journal ranking lists (bundled, no API calls)
+#### Journal rankings
 
 | Column | What it shows |
 |--------|--------------|
@@ -105,114 +92,83 @@ Citegeist adds nine new columns to your item list, organized in three groups.
 | **ABDC '22** | ABDC 2022 tier: A\*, A, B, or C |
 | **AJG '21** | ABS Academic Journal Guide 2021 tier: 4\*, 4, 3, 2, or 1 |
 
-**If you don't see the columns:**
+**To enable columns:** Right-click any column header (e.g., "Title", "Creator") and check the columns you want. You can drag columns to reorder them, or click any header to sort.
 
-1. Right-click on any column header in the item list (e.g., "Title", "Creator", "Date")
-2. A dropdown will appear with all available columns
-3. Check any Citegeist columns you want to enable
-4. You can drag columns to reorder them, or click any header to sort
+Data is fetched automatically in the background. Papers without a DOI will show blank cells. A dash (**&mdash;**) means the metric isn't available for that paper.
 
-All data is fetched automatically in the background as you browse your library. Papers without a DOI will show blank cells. A dash (**&mdash;**) means data was fetched but that metric isn't available for this paper (common for very old or very recent publications). Journal ranking columns use a bundled lookup table matched by ISSN, so they appear instantly with no network requests.
-
-**Tip:** Click the **FWCI** column header to sort your library by field-normalized impact. This is more meaningful than sorting by raw citation count because it accounts for differences between fields. For example, a paper in consumer psychology with 50 citations may have an FWCI well above 1.0, while the same count in biomedicine may be average.
+**Tip:** Sort by **FWCI** to find the most impactful papers relative to their field, rather than papers that simply happen to be in high-citation disciplines.
 
 ---
 
 ### 2. The Citation Intelligence Pane
 
-Select any item in your library and look at the right-hand detail panel. Scroll down (or look in the sidebar tabs) for the **Citation Intelligence** section.
-
-You'll see:
+Select any item in your library and look at the right-hand detail panel. You'll find a **Citation Intelligence** section showing:
 
 | Element | What it means |
 |---------|--------------|
-| **Citation count** | The total number of times other published papers have referenced this one |
-| **FWCI** | Field-Weighted Citation Impact &mdash; a way to compare papers across different fields fairly. A score of **1.0** means this paper has been cited the average amount for its field and year. **2.0** means twice the average. This matters because some fields (like biomedicine) cite more than others (like mathematics), so raw citation counts can be misleading. |
-| **Percentile** | Where this paper ranks compared to all other papers in its field and year. For example, "85th %ile" means it's been cited more than 85% of comparable papers. |
-| **Top 1% / Top 10%** | A badge appears if the paper is in the top 1% or top 10% most-cited papers in its field |
-| **Trend** | How citation rates are changing over time (e.g., "45 citations in 2025, up 23% from last year"). This helps you see whether a paper's influence is growing or fading. |
+| **Citation count** | How many published papers reference this one |
+| **FWCI** | How this paper compares to the world average for its field and year. **1.0** = average, **2.0** = twice the average. |
+| **Percentile** | Where this paper ranks compared to all papers in its field and year. "85th %ile" means cited more than 85% of comparable papers. |
+| **Top 1% / Top 10%** | A badge appears if the paper is among the most-cited in its field |
+| **Trend** | Whether citation rates are rising or falling (e.g., "45 citations in 2025, +23%") |
 
-Below the stats, you'll see two buttons:
+Below the stats, two buttons let you explore the paper's citation network:
 
-- **View N citing works &rarr;** &mdash; Opens the citation network browser showing papers that cite this one
-- **View references &rarr;** &mdash; Opens the citation network browser showing papers this one cites
+- **View N citing works &rarr;** &mdash; papers that cite this one
+- **View references &rarr;** &mdash; papers this one cites
 
-**Refreshing data:** Click the refresh button (**&#8635;**) in the pane header to force-refresh from OpenAlex. By default, cached data expires after 7 days.
+Click the refresh button (**&#8635;**) in the pane header to force-refresh. Cached data expires after 7 days by default (configurable in settings).
 
 ---
 
 ### 3. The Citation Network Browser
 
-The citation network browser lets you explore the web of papers connected to any item in your library. "Citing works" are papers published *after* your paper that reference it. "References" are papers your paper cites &mdash; the older work it builds on. Exploring both directions is a common technique for finding relevant literature (sometimes called "snowballing").
-
-Click either **"View citing works"** or **"View references"** to open the browser.
+The citation network browser lets you explore papers connected to any item in your library &mdash; either papers that cite it (forward) or papers it cites (backward). This is sometimes called "snowballing" and is one of the most effective ways to find relevant literature.
 
 #### Browsing results
 
-The browser shows a scrollable list of papers. Each result displays:
+Each result shows:
 
-- **Paper title** (click to open on OpenAlex)
-- **Authors** (first author listed; "et al." means "and others" when there are many authors)
-- **Journal/venue and year**
-- **Citation count** (color-coded: gold for highly cited, white for moderate, grey for low)
-- **Badges:** Open Access (green), Retracted (red), In Library (blue)
+- **Title** (click to open the full record)
+- **Authors, journal, and year**
+- **Citation count** (color-coded by impact)
+- **Badges:** Open Access, Retracted, In Library
 
-Click any result to expand its **abstract** (fetched on demand from OpenAlex).
+Click any result to expand its **abstract**.
 
-#### Switching between Cited By and References
+#### Adding papers to your library
 
-At the top of the browser, you'll see two pill-shaped tabs:
+Each result has a button to add it directly to your Zotero library:
 
-- **Cited By** &mdash; Papers that cite the selected work
-- **References** &mdash; Papers that the selected work cites
+1. **Click "+ Add to *Collection Name*"** to add with full metadata (title, authors, journal, DOI, etc.)
+2. **Click the dropdown arrow** to choose specific collections
+3. Papers already in your library show a **File** button for moving between collections
 
-Click either tab to switch views.
+**Set a default collection** using the picker at the top of the browser. This saves clicks when adding multiple papers to the same project folder.
 
-#### Searching and sorting
-
-Type in the search bar to filter results by title or author. Use the dropdown next to the search bar to sort by:
-
-- **Most cited** (default) &mdash; Highest citation count first
-- **Newest** &mdash; Most recent publications first
-- **Oldest** &mdash; Oldest publications first
-
-#### Adding papers to your Zotero library
-
-Each result row has a split button:
-
-1. **Click the main button** ("+ Add to *Collection Name*") to add the paper to your default collection with full metadata: title, authors, journal, volume, issue, pages, DOI, date, URL, and cached citation data.
-2. **Click the dropdown arrow** (&blacktriangledown;) to choose specific collections using a folder picker.
-3. **After adding**, the button briefly shows "Added &middot; Undo" (3 seconds) in case of a misclick, then transitions to a **File** button for managing which collections the paper belongs to.
-
-Papers already in your library show a **File** button immediately, letting you move them between collections directly from the browser.
-
-**Set a default collection:** Use the collection picker at the top of the browser to choose where new papers are added by default. This saves clicks when you're adding multiple papers to the same project folder.
-
-**Tip:** This is especially useful for literature reviews. Open a key paper, view its citing works, sort by most cited, and add relevant results to your library &mdash; all without leaving Zotero.
+**Tip:** Open a key paper in your field, view its citing works, sort by most cited, and add the relevant ones to your library &mdash; all without leaving Zotero.
 
 ---
 
 ### 4. Right-Click Menus
 
-Citegeist adds options to Zotero's right-click context menus.
+#### On items
 
-#### On individual items (or multiple items)
-
-Right-click one or more items in your library to see:
+Right-click one or more items in your library:
 
 | Menu item | What it does |
 |-----------|-------------|
-| **Fetch Citation Counts** | Fetches (or refreshes) citation data for the selected items. Works with multi-select &mdash; highlight 50 papers and fetch them all at once. |
-| **View Citing Works...** | Opens the citation network browser in "Cited By" mode. Only appears for single items with a DOI. |
-| **View References...** | Opens the citation network browser in "References" mode. Only appears for single items with a DOI. |
+| **Fetch Citation Counts** | Fetches (or refreshes) citation data for selected items. Works with multi-select. |
+| **View Citing Works...** | Opens the citation network browser (single items with a DOI only) |
+| **View References...** | Opens the citation network browser in references mode |
 
 #### On collections (folders)
 
-Right-click any collection in the left sidebar to see:
+Right-click any collection in the left sidebar:
 
 | Menu item | What it does |
 |-----------|-------------|
-| **Fetch All Citation Counts (Citegeist)** | Fetches citation data for every item in this collection **and all subcollections**. A progress bar shows how many items have been processed. |
+| **Fetch All Citation Counts (Citegeist)** | Fetches data for every item in this collection and all subcollections |
 
 **Tip:** Right-click your top-level collection after importing a batch of papers to populate all citation counts at once.
 
@@ -220,71 +176,92 @@ Right-click any collection in the left sidebar to see:
 
 ## Settings
 
-Open Zotero's settings (**Zotero &rarr; Settings** on macOS, **Edit &rarr; Preferences** on Windows/Linux) and select the **Citegeist** tab to configure:
+Open Zotero's settings (**Zotero &rarr; Settings** on macOS, **Edit &rarr; Preferences** on Windows/Linux) and select the **Citegeist** tab:
 
 | Setting | Default | What it does |
 |---------|---------|-------------|
-| **Email for OpenAlex polite pool** | *(empty)* | OpenAlex offers faster speeds if you identify yourself with an email. This is optional but recommended if you have a large library (100+ papers). Your email is only sent to OpenAlex, not to us. |
-| **Auto-fetch** | On | When enabled, citation data is fetched automatically as you browse items. Disable if you prefer to fetch manually via right-click. |
-| **Cache lifetime** | 7 days | How many days before cached citation data is considered stale and re-fetched. Set higher (30-90) for large libraries to reduce API calls. |
-| **Results per page** | 25 | How many results to load at a time in the citation network browser. Higher values load more at once but take longer. |
+| **Email** | *(empty)* | Optional. Providing an email gets you faster data from OpenAlex. Only sent to OpenAlex, not to us. |
+| **Auto-fetch** | On | Fetches citation data automatically as you browse. Turn off to fetch manually via right-click. |
+| **Cache lifetime** | 7 days | How long before cached data is refreshed. Set higher (30&ndash;90 days) for large libraries. |
+| **Results per page** | 25 | How many results to load at a time in the citation network browser. |
 
 ---
 
 ## FAQ
 
-### What if a paper doesn't have a DOI?
+<details>
+<summary><strong>What if a paper doesn't have a DOI?</strong></summary>
 
-Most journal articles, conference papers, and book chapters have a DOI. But some older papers, working papers, or dissertations may not. If a paper in your library doesn't have a DOI, Citegeist will show "No DOI available." You can sometimes find the DOI on the publisher's website and add it manually by editing the item's DOI field in Zotero.
+Most journal articles and conference papers have a DOI. Some older papers, working papers, or dissertations may not. Citegeist will show "No DOI available" for these items. You can often find the DOI on the publisher's website and add it manually to the item's DOI field in Zotero.
+</details>
 
-### Where does the citation data come from?
+<details>
+<summary><strong>Where does the data come from?</strong></summary>
 
-All data comes from [OpenAlex](https://openalex.org), a free and open index of over 250 million scholarly works. OpenAlex aggregates data from Crossref, PubMed, institutional repositories, and other sources. Journal ranking columns (UTD24, FT50, ABDC, AJG) use a bundled lookup table matched by ISSN &mdash; no API calls needed.
+Citation data comes from [OpenAlex](https://openalex.org), a free and open index of over 250 million scholarly works. Journal rankings (UTD24, FT50, ABDC, AJG) are bundled with the plugin and matched by ISSN &mdash; no extra network requests needed.
+</details>
 
-### Is an API key required?
+<details>
+<summary><strong>What does FWCI mean?</strong></summary>
 
-No. OpenAlex is free to use without any authentication. However, adding your email in Citegeist settings opts you into OpenAlex's "polite pool," which has higher rate limits and is recommended for large libraries.
+**Field-Weighted Citation Impact** compares a paper's citation count to the expected average for papers in the same field, year, and document type.
 
-### Where is the citation data stored?
+- **1.0** = exactly the world average
+- **2.5** = 2.5x more cited than expected
+- **0.5** = half the expected citations
 
-Citation data is cached in each item's **Extra** field using namespaced keys (e.g., `Citegeist.citedByCount: 42`). This means:
+This matters because citation norms vary widely between fields. A paper in marketing with 50 citations may be exceptional, while the same count in biomedicine may be unremarkable.
+</details>
 
-- Data persists across Zotero restarts
-- Data syncs to other devices via Zotero Sync
-- Citegeist never modifies any other content in your Extra field
+<details>
+<summary><strong>What journal ranking lists are included?</strong></summary>
 
-### How often is citation data updated?
-
-By default, cached data expires after 7 days. You can change this in settings. You can also force-refresh any item by clicking the refresh button in the Citation Intelligence pane, or by right-clicking and selecting "Fetch Citation Counts."
-
-### What does FWCI mean?
-
-**Field-Weighted Citation Impact** (FWCI) compares a paper's citation count to the expected number of citations for papers in the same field, year, and document type.
-
-- **FWCI = 1.0** &mdash; Exactly the world average
-- **FWCI = 2.5** &mdash; 2.5x more citations than expected
-- **FWCI = 0.5** &mdash; Half the expected citations
-
-This is more meaningful than raw citation counts because it accounts for differences between fields (e.g., biomedical papers are cited more often than mathematics papers).
-
-### What journal ranking lists are included?
-
-Citegeist bundles four commonly used ranking lists for business, management, economics, and related fields:
+Citegeist bundles four ranking lists commonly used in business, management, economics, and related fields:
 
 - **UTD24** &mdash; UT Dallas 24 (2024): 24 premier research journals
 - **FT50** &mdash; Financial Times 50 (2024): 50 journals used in business school research rankings
 - **ABDC** &mdash; Australian Business Deans Council Quality List (2022): tiered A\*, A, B, C
 - **AJG** &mdash; Chartered ABS Academic Journal Guide (2021): tiered 4\*, 4, 3, 2, 1
 
-Rankings are matched by ISSN against a bundled table covering ~180 journals. If a journal you need is missing, contributions to the lookup table are welcome &mdash; see [CONTRIBUTING.md](CONTRIBUTING.md).
+The lookup table covers ~180 journals. If a journal you need is missing, contributions are welcome &mdash; see [CONTRIBUTING.md](CONTRIBUTING.md).
+</details>
 
-### Can I use Citegeist with Zotero 6?
+<details>
+<summary><strong>Do I need an API key or account?</strong></summary>
 
-No. Citegeist only works with Zotero 7 or later. If you're still on Zotero 6, you can [upgrade for free](https://www.zotero.org/downloads/).
+No. Everything is free, no sign-up required. Optionally add your email in settings for faster data speeds.
+</details>
 
-### Will Citegeist slow down Zotero?
+<details>
+<summary><strong>Where is citation data stored?</strong></summary>
 
-No. Citation data is fetched in the background with centralized rate limiting (8 requests/second max). Journal rankings use a local lookup table with zero network requests. Zotero remains responsive during fetches.
+In each item's Extra field using namespaced keys (e.g., `Citegeist.citedByCount: 42`). Data persists across restarts, syncs via Zotero Sync, and Citegeist never touches your other Extra field content.
+</details>
+
+<details>
+<summary><strong>Will Citegeist slow down Zotero?</strong></summary>
+
+No. Data is fetched in the background. Journal rankings use a local lookup table with zero network requests. Zotero stays responsive.
+</details>
+
+<details>
+<summary><strong>Can I use Citegeist with Zotero 6?</strong></summary>
+
+No. Citegeist requires Zotero 7 or later. You can [upgrade for free](https://www.zotero.org/downloads/).
+</details>
+
+---
+
+<details>
+<summary><strong>New to Zotero? Key terms used in this guide</strong></summary>
+
+[Zotero](https://www.zotero.org) is a free, open-source reference manager for collecting, organizing, and citing research. If you've never used it, [download Zotero 7](https://www.zotero.org/downloads/) and add a few papers before installing Citegeist.
+
+- **Library** &mdash; Your collection of saved papers, articles, and books
+- **Item** &mdash; A single entry in your library (a paper, book chapter, etc.)
+- **Collection** &mdash; A folder you create to organize items by topic or project
+- **DOI** &mdash; A Digital Object Identifier, a unique code assigned to most published papers (e.g., `10.1038/nature12373`). Citegeist uses the DOI to look up citation data.
+</details>
 
 ---
 
@@ -338,7 +315,7 @@ GitHub Actions builds the XPI and creates a release automatically when a version
 
 ## Support
 
-Citegeist is **completely free** and always will be. If you find it useful, you can [sponsor the project on GitHub](https://github.com/sponsors/phdemotions). Donations go directly toward supporting the author's academic research.
+Citegeist is **completely free** and always will be. If you find it useful, you can [sponsor the project on GitHub](https://github.com/sponsors/phdemotions).
 
 ## License
 
