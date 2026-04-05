@@ -17,17 +17,31 @@
 
 ---
 
+## What is Zotero?
+
+[Zotero](https://www.zotero.org) is a free, open-source reference manager. It helps you collect, organize, and cite research papers. If you've never used it, [download Zotero 7](https://www.zotero.org/downloads/) and add a few papers to your library before installing Citegeist.
+
+Key Zotero terms used in this guide:
+
+- **Library** &mdash; Your collection of saved papers, articles, and books
+- **Item** &mdash; A single entry in your library (a paper, book chapter, etc.)
+- **Collection** &mdash; A folder you create to organize items by topic or project
+- **DOI** &mdash; A Digital Object Identifier, a unique code assigned to most published papers (e.g., `10.1038/nature12373`). Citegeist uses the DOI to look up citation data.
+- **Extra field** &mdash; A text field on each item where Zotero (and plugins) can store additional data
+
+---
+
 ## What is Citegeist?
 
-Citegeist turns Zotero into a citation intelligence tool. For any paper with a DOI, you can instantly see:
+Citegeist is a plugin (an add-on that extends Zotero's features) that adds citation data to your library. For any paper with a DOI, you can see:
 
-- How many times it's been cited
-- How it ranks against every other paper in its field
-- What the citation trend looks like year-over-year
-- Which papers cite it, and which papers it cites
-- Whether it's been retracted
+- How many times it's been cited by other papers
+- How it compares to other papers in its field (is it above or below average?)
+- Whether citations are increasing or decreasing over time
+- Which papers cite it, and which papers it references
+- Whether it's been retracted (formally withdrawn by the publisher)
 
-All of this data comes from [OpenAlex](https://openalex.org), a free and open index of hundreds of millions of scholarly works. **No API key required.**
+All of this data comes from [OpenAlex](https://openalex.org), a free and open index of hundreds of millions of scholarly works. **No API key required.** You don't need to create an account or pay for anything.
 
 ---
 
@@ -35,13 +49,14 @@ All of this data comes from [OpenAlex](https://openalex.org), a free and open in
 
 > **Requires [Zotero 7](https://www.zotero.org/downloads/) or later.** Citegeist does not work with Zotero 6.
 
-1. Download **[citegeist.xpi](https://github.com/phdemotions/zotero-citegeist/releases/latest)** from the latest release
-2. In Zotero, go to **Tools &rarr; Add-ons**
-3. Click the gear icon (**&#9881;**) in the top-right &rarr; **Install Add-on From File...**
-4. Select the `.xpi` file you downloaded
-5. **Restart Zotero** when prompted
+1. Download **[citegeist.xpi](https://github.com/phdemotions/zotero-citegeist/releases/latest)** from the latest release (click the `.xpi` file under "Assets" to download it)
+2. Open Zotero 7
+3. Go to **Tools &rarr; Add-ons** (on Mac: look in the menu bar at the top of your screen)
+4. Click the gear icon (**&#9881;**) in the top-right corner of the Add-ons window &rarr; **Install Add-on From File...**
+5. Find and select the `.xpi` file you downloaded (it's probably in your Downloads folder)
+6. **Restart Zotero** when prompted
 
-That's it. Citegeist will start fetching citation data automatically.
+That's it. Once Zotero restarts, Citegeist will begin fetching citation data automatically for papers in your library.
 
 ### Staying up to date
 
@@ -86,11 +101,11 @@ You'll see:
 
 | Element | What it means |
 |---------|--------------|
-| **Citation count** | Total times this paper has been cited, displayed as a large number |
-| **FWCI** | Field-Weighted Citation Impact. A score of **1.0** means world average for this field and year. **2.0** means twice the expected citations. |
-| **Percentile** | Where this paper ranks among all papers in its field and year (e.g., "85th %ile" means it's cited more than 85% of comparable papers) |
-| **Top 1% / Top 10%** | A badge appears if the paper is in the top 1% or top 10% of its field |
-| **Trend** | Year-over-year citation change (e.g., "&#8599; 45 citations in 2025 (+23%)") and peak year if different |
+| **Citation count** | The total number of times other published papers have referenced this one |
+| **FWCI** | Field-Weighted Citation Impact &mdash; a way to compare papers across different fields fairly. A score of **1.0** means this paper has been cited the average amount for its field and year. **2.0** means twice the average. This matters because some fields (like biomedicine) cite more than others (like mathematics), so raw citation counts can be misleading. |
+| **Percentile** | Where this paper ranks compared to all other papers in its field and year. For example, "85th %ile" means it's been cited more than 85% of comparable papers. |
+| **Top 1% / Top 10%** | A badge appears if the paper is in the top 1% or top 10% most-cited papers in its field |
+| **Trend** | How citation rates are changing over time (e.g., "45 citations in 2025, up 23% from last year"). This helps you see whether a paper's influence is growing or fading. |
 
 Below the stats, you'll see two buttons:
 
@@ -103,14 +118,16 @@ Below the stats, you'll see two buttons:
 
 ### 3. The Citation Network Browser
 
-This is the core feature. Click either **"View citing works"** or **"View references"** to open the citation network browser.
+The citation network browser lets you explore the web of papers connected to any item in your library. "Citing works" are papers published *after* your paper that reference it. "References" are papers your paper cites &mdash; the older work it builds on. Exploring both directions is a common technique for finding relevant literature (sometimes called "snowballing").
+
+Click either **"View citing works"** or **"View references"** to open the browser.
 
 #### Browsing results
 
 The browser shows a scrollable list of papers. Each result displays:
 
 - **Paper title** (click to open on OpenAlex)
-- **Authors** (first author + "et al." for papers with many authors)
+- **Authors** (first author listed; "et al." means "and others" when there are many authors)
 - **Journal/venue and year**
 - **Citation count** (color-coded: gold for highly cited, white for moderate, grey for low)
 - **Badges:** Open Access (green), Retracted (red), In Library (blue)
@@ -138,7 +155,7 @@ Use the dropdown next to the search bar to sort by:
 
 #### Adding papers to your Zotero library
 
-This is where Citegeist saves you hours of manual work:
+This is where Citegeist saves time over manual lookups:
 
 1. **Check the box** next to any paper you want to add
 2. Select as many papers as you like
@@ -147,7 +164,7 @@ This is where Citegeist saves you hours of manual work:
 
 Papers already in your library are shown with a green checkmark (**&#10003;**) and an "In Library" badge. They can't be selected again, so you'll never create duplicates.
 
-**Tip:** This is powerful for literature reviews. Open a seminal paper, view its citing works, sort by most cited, and add the top results to your library in seconds.
+**Tip:** This is useful for literature reviews. Open a key paper, view its citing works, sort by most cited, and add relevant results to your library.
 
 ---
 
@@ -183,7 +200,7 @@ Go to **Zotero &rarr; Settings &rarr; Citegeist** (or **Edit &rarr; Preferences 
 
 | Setting | Default | What it does |
 |---------|---------|-------------|
-| **Email for OpenAlex polite pool** | *(empty)* | Enter your email to get into OpenAlex's faster API tier. Strongly recommended for large libraries. Your email is only sent to OpenAlex. |
+| **Email for OpenAlex polite pool** | *(empty)* | OpenAlex offers faster speeds if you identify yourself with an email. This is optional but recommended if you have a large library (100+ papers). Your email is only sent to OpenAlex, not to us. |
 | **Auto-fetch** | On | When enabled, citation data is fetched automatically as you browse items. Disable if you prefer to fetch manually via right-click. |
 | **Cache lifetime** | 7 days | How many days before cached citation data is considered stale and re-fetched. Set higher (30-90) for large libraries to reduce API calls. |
 | **Results per page** | 25 | How many results to load at a time in the citation network browser. Higher values load more at once but take longer. |
@@ -192,11 +209,9 @@ Go to **Zotero &rarr; Settings &rarr; Citegeist** (or **Edit &rarr; Preferences 
 
 ## FAQ
 
-### What is a DOI and why does Citegeist need one?
+### What if a paper doesn't have a DOI?
 
-A DOI (Digital Object Identifier) is a unique identifier for a published work, like `10.1038/nature12373`. Most journal articles, conference papers, and book chapters have one. Citegeist uses the DOI to look up citation data on OpenAlex.
-
-If a paper in your library doesn't have a DOI, Citegeist will show "No DOI available." You can add a DOI manually by editing the item's DOI field in Zotero.
+Most journal articles, conference papers, and book chapters have a DOI. But some older papers, working papers, or dissertations may not. If a paper in your library doesn't have a DOI, Citegeist will show "No DOI available." You can sometimes find the DOI on the publisher's website and add it manually by editing the item's DOI field in Zotero.
 
 ### Where does the citation data come from?
 
@@ -230,11 +245,11 @@ This is more meaningful than raw citation counts because it accounts for differe
 
 ### Can I use Citegeist with Zotero 6?
 
-No. Citegeist requires Zotero 7 or later. It uses Zotero 7's plugin APIs (`ItemPaneManager`, `ItemTreeManager`) which don't exist in Zotero 6.
+No. Citegeist only works with Zotero 7 or later. If you're still on Zotero 6, you can [upgrade for free](https://www.zotero.org/downloads/).
 
 ### Will Citegeist slow down Zotero?
 
-No. Citation fetches happen in the background with rate limiting (2 requests at a time, 500ms between batches) to stay within OpenAlex's polite-pool limits. The UI remains responsive during fetches.
+No. Citation data is fetched in the background while you work. Zotero remains responsive during fetches.
 
 ---
 
@@ -279,10 +294,14 @@ GitHub Actions builds the XPI and creates a release automatically when a version
 
 ---
 
+## Support
+
+Citegeist is **completely free** and always will be. If you find it useful, you can [sponsor the project on GitHub](https://github.com/sponsors/phdemotions). Donations go directly toward supporting the author's academic research.
+
 ## License
 
 [GPL-3.0-or-later](LICENSE)
 
 ## Credits
 
-Built by [Opus Vita](https://opusvita.org). Citation data from [OpenAlex](https://openalex.org).
+Built by [Josh Gonzales](https://github.com/phdemotions). Citation data from [OpenAlex](https://openalex.org).

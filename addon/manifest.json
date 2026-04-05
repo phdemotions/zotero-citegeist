@@ -3,7 +3,7 @@
   "name": "__addonName__",
   "version": "__buildVersion__",
   "description": "Citation intelligence powered by OpenAlex — counts, networks, and one-click import.",
-  "author": "Opus Vita",
+  "author": "Josh Gonzales",
   "icons": {
     "48": "content/icons/icon-48.png",
     "96": "content/icons/icon-96.png"
