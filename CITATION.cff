@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
-title: "Citegeist: Citation Intelligence for Zotero"
+title: "Citegeist: Citation Impact Analysis and Scholarly Literature Discovery"
 version: 1.0.0
 date-released: "2026-04-04"
 license: GPL-3.0-or-later

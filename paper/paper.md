@@ -1,5 +1,5 @@
 ---
-title: "Citegeist: Citation Intelligence for Zotero"
+title: "Citegeist: Citation Impact Analysis and Scholarly Literature Discovery"
 tags:
   - Zotero
   - citation analysis
@@ -37,9 +37,26 @@ Raw citation counts alone are misleading across disciplines. Citation norms vary
 
 The typical workflow today involves leaving the reference manager, navigating to Web of Science, Scopus, or Google Scholar, searching for each paper individually, and manually recording results. This is especially burdensome during large-scale literature reviews common in fields where review articles are central to the discipline [@palmatier2018review].
 
-Zotero [@zotero] is a widely used free, open-source reference manager, yet it provides no built-in citation metrics. Two existing plugins have attempted to address this gap. Zotero Scholar Citations [@zotero_scholar_citations] retrieves counts from Google Scholar but has not been updated for Zotero 7, is limited to raw counts without field context, and is subject to Google Scholar's aggressive rate limiting and bot detection. The scite Zotero plugin [@scite_zotero] provides smart citation classifications (supporting, mentioning, contrasting) but requires a paid subscription to scite.ai, putting it out of reach for many researchers and institutions.
+Zotero [@zotero] is a widely used free, open-source reference manager, yet it provides no built-in citation metrics. Several existing plugins address parts of this gap, but none combine field-normalized metrics with citation network browsing. \autoref{tab:comparison} summarizes the landscape.
 
-Citegeist addresses these limitations. By using OpenAlex — a fully open, free-to-use index built on Crossref, PubMed, and institutional repositories — it requires no authentication and no payment. The citation network browser enables the kind of forward and backward citation chaining that is foundational to systematic literature discovery [@wohlin2014guidelines], building on the concept of citation indexing introduced by @garfield1955citation, without leaving Zotero.
+: Comparison of Zotero citation plugins. Only actively maintained plugins with Zotero 7 support are included. \label{tab:comparison}
+
+| Feature | CitationCounts Manager | Citation Tally | Google Scholar Count | scite | Cita | **Citegeist** |
+|---|---|---|---|---|---|---|
+| Data source | Crossref, Semantic Scholar | Crossref, Semantic Scholar | Google Scholar | scite.ai | Wikidata, OpenAlex | OpenAlex |
+| Cost | Free | Free | Free | Paid | Free | Free |
+| Raw citation counts | Yes | Yes | Yes | No | No | Yes |
+| Field-normalized metrics (FWCI) | No | No | No | No | No | Yes |
+| Percentile ranking | No | No | No | No | No | Yes |
+| Citation trend over time | No | No | No | No | No | Yes |
+| Citation network browsing | No | No | No | No | Yes (graph) | Yes (list) |
+| One-click import to library | No | No | No | No | No | Yes |
+| Retraction detection | No | No | No | No | No | Yes |
+| Citation context (supporting/contrasting) | No | No | No | Yes | No | No |
+
+Several plugins retrieve raw citation counts: ZoteroCitationCountsManager [@zotero_citationcounts_manager] and zotero-citation-tally [@zotero_citation_tally] use Crossref and Semantic Scholar, while zotero-google-scholar-citation-count [@zotero_google_scholar_count] scrapes Google Scholar with the associated risk of rate limiting and bot detection. These plugins provide counts without field context, offering no way to judge whether a count is high or low for a given discipline. The scite Zotero plugin [@scite_zotero] takes a different approach, classifying citations as supporting, mentioning, or contrasting, but requires a paid subscription and does not provide citation counts or field-normalized metrics. Cita [@zotero_cita] manages citation relationships via Wikidata and visualizes a citation graph, but focuses on metadata curation rather than metrics or literature discovery. The Inciteful plugin [@inciteful_zotero] provides network visualization but launches an external website rather than operating within Zotero.
+
+Citegeist is the only Zotero plugin that combines field-normalized citation metrics with in-Zotero citation network browsing and one-click import. By using OpenAlex — a fully open, free-to-use index built on Crossref, PubMed, and institutional repositories — it requires no authentication and no payment. The citation network browser enables the kind of forward and backward citation chaining that is foundational to systematic literature discovery [@wohlin2014guidelines], building on the concept of citation indexing introduced by @garfield1955citation, without leaving Zotero.
 
 # Design
 
