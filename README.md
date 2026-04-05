@@ -281,7 +281,7 @@ GitHub Actions builds the XPI and creates a release automatically when a version
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE)
+[GPL-3.0-or-later](LICENSE)
 
 ## Credits
 

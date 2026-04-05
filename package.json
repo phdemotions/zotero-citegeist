@@ -4,7 +4,7 @@
   "description": "Citation intelligence for Zotero — powered by OpenAlex. See citation counts, explore citation networks, and add citing/cited works to your library.",
   "homepage": "https://github.com/phdemotions/zotero-citegeist",
   "author": "Opus Vita",
-  "license": "AGPL-3.0-or-later",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:dev": "node scripts/build.mjs --dev",
