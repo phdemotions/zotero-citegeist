@@ -221,6 +221,63 @@ describe("getCachedMetrics", () => {
   });
 });
 
+describe("getCachedMetrics — journal fields", () => {
+  it("returns sourceId, citedness2yr, journalHIndex from Extra", () => {
+    const recent = new Date().toISOString();
+    const extra = [
+      "Citegeist.citedByCount: 30",
+      "Citegeist.sourceId: S1234",
+      "Citegeist.citedness2yr: 5.67",
+      "Citegeist.journalHIndex: 142",
+      `Citegeist.lastFetched: ${recent}`,
+    ].join("\n");
+    const item = mockItem(extra);
+    const result = getCachedMetrics(item);
+
+    expect(result.sourceId).toBe("S1234");
+    expect(result.citedness2yr).toBe(5.67);
+    expect(result.journalHIndex).toBe(142);
+  });
+
+  it("returns null for missing journal fields", () => {
+    const recent = new Date().toISOString();
+    const extra = `Citegeist.citedByCount: 10\nCitegeist.lastFetched: ${recent}`;
+    const item = mockItem(extra);
+    const result = getCachedMetrics(item);
+
+    expect(result.sourceId).toBeNull();
+    expect(result.citedness2yr).toBeNull();
+    expect(result.journalHIndex).toBeNull();
+    expect(result.sourceISSNs).toEqual([]);
+  });
+
+  it("parses sourceISSNs from comma-separated string", () => {
+    const recent = new Date().toISOString();
+    const extra = [
+      "Citegeist.citedByCount: 5",
+      "Citegeist.sourceISSNs: 0001-4273,1948-0989",
+      `Citegeist.lastFetched: ${recent}`,
+    ].join("\n");
+    const item = mockItem(extra);
+    const result = getCachedMetrics(item);
+
+    expect(result.sourceISSNs).toEqual(["0001-4273", "1948-0989"]);
+  });
+
+  it("falls back to issnL when sourceISSNs is absent", () => {
+    const recent = new Date().toISOString();
+    const extra = [
+      "Citegeist.citedByCount: 5",
+      "Citegeist.issnL: 0001-4273",
+      `Citegeist.lastFetched: ${recent}`,
+    ].join("\n");
+    const item = mockItem(extra);
+    const result = getCachedMetrics(item);
+
+    expect(result.sourceISSNs).toEqual(["0001-4273"]);
+  });
+});
+
 describe("getCachedCountAndStaleness", () => {
   it("returns count and staleness together", () => {
     const recent = new Date().toISOString();

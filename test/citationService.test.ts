@@ -25,6 +25,7 @@ vi.stubGlobal("Zotero", mockZotero);
 // Mock the openalex module so we don't make real HTTP requests
 vi.mock("../src/modules/openalex", () => ({
   getWorkByDOI: vi.fn(),
+  getSourceStats: vi.fn().mockResolvedValue(null),
 }));
 
 import { fetchAndCacheItem } from "../src/modules/citationService";

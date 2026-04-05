@@ -93,6 +93,21 @@ function buildUrl(path: string, params: Record<string, string> = {}): string {
   return `${OPENALEX_BASE}${path}${query ? "?" + query : ""}`;
 }
 
+// ── Centralized rate limiter ──
+// OpenAlex polite pool allows 10 req/s. We target 8 to stay safe.
+const RATE_LIMIT_INTERVAL_MS = 125; // 8 req/s
+let lastRequestTime = 0;
+
+async function rateLimitedFetch<T>(url: string, retries = 2): Promise<T> {
+  const now = Date.now();
+  const elapsed = now - lastRequestTime;
+  if (elapsed < RATE_LIMIT_INTERVAL_MS) {
+    await new Promise((r) => setTimeout(r, RATE_LIMIT_INTERVAL_MS - elapsed));
+  }
+  lastRequestTime = Date.now();
+  return fetchJson<T>(url, retries);
+}
+
 async function fetchJson<T>(url: string, retries = 2): Promise<T> {
   const response = await Zotero.HTTP.request("GET", url, {
     headers: {
@@ -160,7 +175,7 @@ export async function getWorkByDOI(
   });
 
   try {
-    return await fetchJson<OpenAlexWork>(url);
+    return await rateLimitedFetch<OpenAlexWork>(url);
   } catch (e) {
     Zotero.debug(`[Citegeist] Failed to fetch work for DOI ${cleanDOI}: ${e}`);
     return null;
@@ -184,7 +199,7 @@ export async function getCitingWorks(
     cursor,
   });
 
-  return fetchJson<OpenAlexListResponse>(url);
+  return rateLimitedFetch<OpenAlexListResponse>(url);
 }
 
 /**
@@ -209,7 +224,7 @@ export async function getReferencedWorks(
     cursor,
   });
 
-  return fetchJson<OpenAlexListResponse>(url);
+  return rateLimitedFetch<OpenAlexListResponse>(url);
 }
 
 /**
@@ -243,7 +258,7 @@ export async function getWorkById(
   });
 
   try {
-    return await fetchJson<OpenAlexWork>(url);
+    return await rateLimitedFetch<OpenAlexWork>(url);
   } catch (e) {
     Zotero.debug(`[Citegeist] Failed to fetch work ${shortId}: ${e}`);
     return null;
@@ -286,7 +301,7 @@ export async function getSourceStats(
     const url = buildUrl(`/sources/${encodeURIComponent(shortId)}`, {
       select: "id,issn_l,issn,summary_stats",
     });
-    const data = await fetchJson<{
+    const data = await rateLimitedFetch<{
       id: string;
       issn_l: string | null;
       issn: string[] | null;
@@ -323,6 +338,13 @@ export async function getSourceStats(
 /** Clear the session-level source stats cache (call on shutdown). */
 export function clearSourceStatsCache(): void {
   sourceStatsCache.clear();
+}
+
+/** Get cached ISSNs for a source (if previously fetched). Synchronous. */
+export function getCachedSourceISSNs(sourceId: string): string[] {
+  const shortId = sourceId.replace("https://openalex.org/", "");
+  const cached = sourceStatsCache.get(shortId);
+  return cached?.issns ?? [];
 }
 
 /**

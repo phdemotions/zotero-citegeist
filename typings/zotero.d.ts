@@ -19,10 +19,14 @@ declare namespace _ZoteroTypes {
     getTags(): { tag: string; type?: number }[];
     addTag(tag: string, type?: number): boolean;
     getCollections(): number[];
+    addToCollection(collectionID: number): void;
+    removeFromCollection(collectionID: number): void;
     getNotes(): number[];
     getAttachments(): number[];
     saveTx(options?: Record<string, unknown>): Promise<number>;
     save(options?: Record<string, unknown>): Promise<number>;
+    eraseTx(options?: Record<string, unknown>): Promise<void>;
+    deleted: boolean;
   }
 
   interface Creator {
@@ -36,6 +40,10 @@ declare namespace _ZoteroTypes {
     id: number;
     name: string;
     libraryID: number;
+    parentID: number | false;
+    hasChildCollections(): boolean;
+    getChildCollections(asIDs?: false): Collection[];
+    getChildCollections(asIDs: true): number[];
     getChildItems(asIDs?: false): Item[];
     getChildItems(asIDs: true): number[];
   }
@@ -147,7 +155,11 @@ declare namespace _ZoteroTypes {
 declare const Zotero: {
   debug(msg: string, level?: number): void;
   log(msg: string): void;
-  getActiveZoteroPane(): ZoteroPane;
+  getActiveZoteroPane(): {
+    getSelectedItems(asIDs?: boolean): _ZoteroTypes.Item[];
+    getSelectedCollection(): _ZoteroTypes.Collection | null;
+    itemsView?: _ZoteroTypes.ItemsView;
+  };
   Item: new (itemType: string) => _ZoteroTypes.Item;
   Items: {
     get(id: number): _ZoteroTypes.Item | false;
@@ -161,6 +173,9 @@ declare const Zotero: {
   };
   Libraries: {
     userLibraryID: number;
+  };
+  Collections: {
+    getByLibrary(libraryID: number): _ZoteroTypes.Collection[];
   };
   Prefs: {
     get(pref: string, global?: boolean): unknown;
@@ -231,6 +246,14 @@ declare const Services: {
     confirm(parent: Window | null, title: string, text: string): boolean;
   };
 };
+
+/**
+ * XUL document extensions available in Zotero's Gecko/Firefox context.
+ * Standard Document doesn't include createXULElement.
+ */
+interface XULDocument extends Document {
+  createXULElement(tagName: string): HTMLElement;
+}
 
 declare const dump: (msg: string) => void;
 

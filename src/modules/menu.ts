@@ -28,11 +28,11 @@ export function registerMenus(win: Window): void {
   }
 
   if (itemMenu) {
-    const sep = (doc as any).createXULElement("menuseparator");
+    const sep = (doc as XULDocument).createXULElement("menuseparator");
     sep.id = MENU_IDS.separator;
     itemMenu.appendChild(sep);
 
-    const fetchItem = (doc as any).createXULElement("menuitem");
+    const fetchItem = (doc as XULDocument).createXULElement("menuitem");
     fetchItem.id = MENU_IDS.fetchCitations;
     fetchItem.setAttribute("label", "Fetch Citation Counts");
     fetchItem.setAttribute("image", "chrome://citegeist/content/icons/icon-16.svg");
@@ -65,7 +65,7 @@ export function registerMenus(win: Window): void {
     });
     itemMenu.appendChild(fetchItem);
 
-    const citingItem = (doc as any).createXULElement("menuitem");
+    const citingItem = (doc as XULDocument).createXULElement("menuitem");
     citingItem.id = MENU_IDS.viewCiting;
     citingItem.setAttribute("label", "View Citing Works\u2026");
     citingItem.addEventListener("command", () => {
@@ -76,7 +76,7 @@ export function registerMenus(win: Window): void {
     });
     itemMenu.appendChild(citingItem);
 
-    const refsItem = (doc as any).createXULElement("menuitem");
+    const refsItem = (doc as XULDocument).createXULElement("menuitem");
     refsItem.id = MENU_IDS.viewRefs;
     refsItem.setAttribute("label", "View References\u2026");
     refsItem.addEventListener("command", () => {
@@ -99,11 +99,11 @@ export function registerMenus(win: Window): void {
   }
 
   if (collectionMenu) {
-    const sep = (doc as any).createXULElement("menuseparator");
+    const sep = (doc as XULDocument).createXULElement("menuseparator");
     sep.id = MENU_IDS.collectionSeparator;
     collectionMenu.appendChild(sep);
 
-    const fetchAll = (doc as any).createXULElement("menuitem");
+    const fetchAll = (doc as XULDocument).createXULElement("menuitem");
     fetchAll.id = MENU_IDS.fetchCollection;
     fetchAll.setAttribute("label", "Fetch All Citation Counts (Citegeist)");
     fetchAll.setAttribute("image", "chrome://citegeist/content/icons/icon-16.svg");
@@ -113,7 +113,7 @@ export function registerMenus(win: Window): void {
 
       // Recursively gather items from this collection and all subcollections
       const allItems = new Map<number, _ZoteroTypes.Item>();
-      const collectRecursive = (col: any) => {
+      const collectRecursive = (col: _ZoteroTypes.Collection) => {
         for (const item of col.getChildItems()) {
           if (!allItems.has(item.id)) allItems.set(item.id, item);
         }

@@ -110,6 +110,8 @@ export interface AllMetrics {
   sourceId: string | null;
   citedness2yr: number | null;
   journalHIndex: number | null;
+  /** All known ISSNs from OpenAlex (for ranking lookups) */
+  sourceISSNs: string[];
 }
 
 export function getCachedMetrics(item: _ZoteroTypes.Item): AllMetrics {
@@ -121,7 +123,9 @@ export function getCachedMetrics(item: _ZoteroTypes.Item): AllMetrics {
   const sourceId = citegeistFields.get(`${PREFIX}sourceId`) || null;
   const citedness2yr = safeParseFloat(citegeistFields.get(`${PREFIX}citedness2yr`));
   const journalHIndex = safeParseInt(citegeistFields.get(`${PREFIX}journalHIndex`)) || null;
-  return { count, fwci, percentile, isStale: isLastFetchedStale(citegeistFields), sourceId, citedness2yr, journalHIndex };
+  const issnRaw = citegeistFields.get(`${PREFIX}sourceISSNs`) || citegeistFields.get(`${PREFIX}issnL`) || "";
+  const sourceISSNs = issnRaw ? issnRaw.split(",").filter(Boolean) : [];
+  return { count, fwci, percentile, isStale: isLastFetchedStale(citegeistFields), sourceId, citedness2yr, journalHIndex, sourceISSNs };
 }
 
 export function getCachedCitationCount(
@@ -205,6 +209,14 @@ export async function cacheWorkData(
   if (sourceStats) {
     citegeistFields.set(`${PREFIX}citedness2yr`, sourceStats.citedness2yr.toFixed(2));
     citegeistFields.set(`${PREFIX}journalHIndex`, String(sourceStats.hIndex));
+    if (sourceStats.issns.length > 0) {
+      citegeistFields.set(`${PREFIX}sourceISSNs`, sourceStats.issns.join(","));
+    }
+  }
+  // Also store the issn_l from the work's primary location as fallback
+  const issnL = work.primary_location?.source?.issn_l;
+  if (issnL) {
+    citegeistFields.set(`${PREFIX}issnL`, issnL);
   }
 
   writeExtra(item, citegeistFields, otherLines);

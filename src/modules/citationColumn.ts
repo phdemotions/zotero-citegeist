@@ -14,6 +14,7 @@
 import { getCachedMetrics, type AllMetrics } from "./cache";
 import { fetchAndCacheItem } from "./citationService";
 import { lookupRanking, RANKING_VERSIONS, type JournalRanking } from "../data/journalRankings";
+import { getCachedSourceISSNs } from "./openalex";
 
 // Column data keys
 const COL_CITATIONS = "citegeist-citation-count";
@@ -101,18 +102,38 @@ function getRanking(item: _ZoteroTypes.Item): JournalRanking | null {
     return rankingCache.get(item.id) ?? null;
   }
 
-  // Collect all ISSNs we can find on this item
+  // Collect ISSNs from multiple sources for best match coverage
   const issns: string[] = [];
+
+  // 1. Zotero item's ISSN field (may contain print or electronic ISSN)
   try {
     const issn = item.getField("ISSN") as string;
     if (issn?.trim()) {
-      // ISSN field can contain multiple ISSNs separated by comma or space
       for (const part of issn.split(/[,;\s]+/)) {
         if (part.trim()) issns.push(part.trim());
       }
     }
   } catch {
     // Item type may not have ISSN field
+  }
+
+  // 2. ISSNs stored in Extra from previous OpenAlex fetch (persists across sessions)
+  const metrics = metricsCache.get(item.id);
+  if (metrics?.sourceISSNs) {
+    for (const stored of metrics.sourceISSNs) {
+      if (stored && !issns.some((i) => i.toUpperCase() === stored.toUpperCase())) {
+        issns.push(stored);
+      }
+    }
+  }
+
+  // 3. In-memory OpenAlex source cache (current session, best coverage)
+  if (metrics?.sourceId) {
+    for (const oa of getCachedSourceISSNs(metrics.sourceId)) {
+      if (oa && !issns.some((i) => i.toUpperCase() === oa.toUpperCase())) {
+        issns.push(oa);
+      }
+    }
   }
 
   const ranking = issns.length > 0 ? lookupRanking(issns) : null;
@@ -267,7 +288,7 @@ export function invalidateColumnCache(itemId?: number): void {
     rankingCache.clear();
   }
   try {
-    const zp = Zotero.getActiveZoteroPane() as any;
+    const zp = Zotero.getActiveZoteroPane();
     if (zp?.itemsView?.refreshAndMaintainSelection) {
       zp.itemsView.refreshAndMaintainSelection();
     }
@@ -349,7 +370,7 @@ async function processFetchQueue(): Promise<void> {
   metricsCache.clear();
 
   try {
-    const zp = Zotero.getActiveZoteroPane() as any;
+    const zp = Zotero.getActiveZoteroPane();
     if (zp?.itemsView?.refreshAndMaintainSelection) {
       await zp.itemsView.refreshAndMaintainSelection();
     }
