@@ -12,8 +12,7 @@
     "release": "bumpp --commit 'release: v%s' --tag 'v%s' --push",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint src --ext .ts",
-    "typecheck": "tsc --noEmit"
+"typecheck": "tsc --noEmit"
   },
   "config": {
     "addonName": "Citegeist",
