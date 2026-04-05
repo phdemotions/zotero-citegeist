@@ -23,7 +23,7 @@ See the [README](README.md#development) for full development instructions, inclu
 ## Pull Request Guidelines
 
 1. Fork the repo and create your branch from `main`
-2. Run `npm run typecheck` before submitting
+2. Run `npm test` and `npm run typecheck` before submitting
 3. Keep PRs focused — one feature or fix per PR
 4. Describe what your PR does and why
 
@@ -49,7 +49,7 @@ By contributing, you agree that your contributions will be licensed under the [G
 
 ## Support the Project
 
-Citegeist is and always will be **completely free**. If you find it useful and want to support continued development, contributions are appreciated but never expected.
+Citegeist is and always will be **completely free**. If you find it useful and want to support continued development, you can [sponsor the project on GitHub](https://github.com/sponsors/phdemotions). Contributions are appreciated but never expected.
 
 ---
 
