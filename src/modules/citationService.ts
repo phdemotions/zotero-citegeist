@@ -3,7 +3,7 @@
  * Used by column, pane, and batch operations.
  */
 
-import { getWorkByDOI, type OpenAlexWork } from "./openalex";
+import { getWorkByDOI, getSourceStats, type OpenAlexWork } from "./openalex";
 import { cacheWorkData, isCacheStale, getCachedData } from "./cache";
 
 export interface FetchResult {
@@ -29,7 +29,11 @@ export async function fetchAndCacheItem(
   const work = await getWorkByDOI(doi);
   if (!work) return { success: false, work: null };
 
-  await cacheWorkData(item, work);
+  // Fetch journal-level stats in parallel (non-blocking — null if unavailable)
+  const sourceId = work.primary_location?.source?.id;
+  const sourceStats = sourceId ? await getSourceStats(sourceId) : null;
+
+  await cacheWorkData(item, work, sourceStats);
   return { success: true, work };
 }
 

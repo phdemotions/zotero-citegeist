@@ -13,11 +13,14 @@
  * <button> elements set via innerHTML.
  */
 
-import { getCachedData, clearCache, type CachedData } from "./cache";
+import { getCachedData, clearCache, isCacheStale, type CachedData } from "./cache";
 import { fetchAndCacheItem } from "./citationService";
+import { invalidateColumnCache } from "./citationColumn";
 import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork } from "./citationNetwork";
 import { escapeHTML } from "./utils";
+
+let refreshing = false;
 
 const PANE_ID = "citegeist-citation-details";
 
@@ -198,14 +201,21 @@ export function registerCitationPane(pluginID: string): void {
       const doi = item.getField("DOI");
       if (!doi || !doi.trim()) return;
 
+      // If we already rendered cached data in onRender, skip the network call
+      // unless the cache is stale. This avoids redundant re-renders.
+      const alreadyCached = getCachedData(item);
+      if (alreadyCached && !isCacheStale(item)) return;
+
       const result = await fetchAndCacheItem(item);
-      if (result.success) {
+      if (result.success && result.work) {
         const freshData = getCachedData(item);
         if (freshData) {
-          renderPane(container, freshData, item, result.work ?? undefined);
+          renderPane(container, freshData, item, result.work);
           setSectionSummary(`${freshData.citedByCount.toLocaleString()} citations`);
+          // Notify columns to refresh so citation data appears immediately
+          invalidateColumnCache(item.id);
         }
-      } else if (!getCachedData(item)) {
+      } else if (!alreadyCached && !result.success) {
         container.innerHTML = `<div class="cg-no-doi">Could not find this work on OpenAlex.</div>`;
         setSectionSummary("Not found");
       }
@@ -216,21 +226,28 @@ export function registerCitationPane(pluginID: string): void {
         icon: "chrome://zotero/skin/16/universal/sync.svg",
         l10nID: "citegeist-pane-refresh",
         onClick: async ({ body, item, setSectionSummary }) => {
-          const container = body.querySelector("#citegeist-content") as HTMLElement;
-          if (container) {
-            container.innerHTML = `<div class="cg-loading">Refreshing…</div>`;
-          }
-          await clearCache(item);
-          const result = await fetchAndCacheItem(item);
-          const cached = getCachedData(item);
-          if (container) {
-            if (cached) {
-              renderPane(container, cached, item, result.work ?? undefined);
-              setSectionSummary(`${cached.citedByCount.toLocaleString()} citations`);
-            } else {
-              container.innerHTML = `<div class="cg-no-doi">Could not refresh — OpenAlex may be unavailable.</div>`;
-              setSectionSummary("Error");
+          if (refreshing) return;
+          refreshing = true;
+          try {
+            const container = body.querySelector("#citegeist-content") as HTMLElement;
+            if (container) {
+              container.innerHTML = `<div class="cg-loading">Refreshing\u2026</div>`;
             }
+            await clearCache(item);
+            const result = await fetchAndCacheItem(item);
+            const cached = getCachedData(item);
+            if (container) {
+              if (cached) {
+                renderPane(container, cached, item, result.work ?? undefined);
+                setSectionSummary(`${cached.citedByCount.toLocaleString()} citations`);
+                invalidateColumnCache(item.id);
+              } else {
+                container.innerHTML = `<div class="cg-no-doi">Could not refresh \u2014 OpenAlex may be unavailable.</div>`;
+                setSectionSummary("Error");
+              }
+            }
+          } finally {
+            refreshing = false;
           }
         },
       },

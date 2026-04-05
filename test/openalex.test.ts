@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatAuthors, getSourceName, type OpenAlexWork } from "../src/modules/openalex";
+import { formatAuthors, getSourceName, reconstructAbstract, type OpenAlexWork } from "../src/modules/openalex";
 
 function makeAuthorship(name: string) {
   return {
@@ -96,6 +96,52 @@ describe("formatAuthors", () => {
   it("preserves complex names like 'van der Berg'", () => {
     const authorships = [makeAuthorship("Jan van der Berg")];
     expect(formatAuthors(authorships)).toBe("Jan van der Berg");
+  });
+});
+
+describe("reconstructAbstract", () => {
+  it("reconstructs abstract from inverted index", () => {
+    const index = { This: [0], is: [1], a: [2], test: [3] };
+    expect(reconstructAbstract(index)).toBe("This is a test");
+  });
+
+  it("handles words appearing at multiple positions", () => {
+    const index = { the: [0, 4], cat: [1], sat: [2], on: [3], mat: [5] };
+    expect(reconstructAbstract(index)).toBe("the cat sat on the mat");
+  });
+
+  it("returns null for null input", () => {
+    expect(reconstructAbstract(null)).toBeNull();
+  });
+
+  it("returns null for empty object", () => {
+    expect(reconstructAbstract({})).toBeNull();
+  });
+
+  it("handles sparse inverted index (gaps in positions)", () => {
+    const index = { hello: [0], world: [5] };
+    expect(reconstructAbstract(index)).toBe("hello world");
+  });
+
+  it("handles single-word abstract", () => {
+    const index = { Abstract: [0] };
+    expect(reconstructAbstract(index)).toBe("Abstract");
+  });
+
+  it("handles real-world OpenAlex inverted index", () => {
+    const index = {
+      We: [0],
+      study: [1],
+      the: [2, 7],
+      effect: [3],
+      of: [4],
+      brand: [5],
+      love: [6],
+      consumer: [8],
+    };
+    expect(reconstructAbstract(index)).toBe(
+      "We study the effect of brand love the consumer",
+    );
   });
 });
 

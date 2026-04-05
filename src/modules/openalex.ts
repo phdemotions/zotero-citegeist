@@ -213,6 +213,119 @@ export async function getReferencedWorks(
 }
 
 /**
+ * Reconstruct an abstract from OpenAlex's inverted index format.
+ * The inverted index maps each word to its position(s) in the text.
+ */
+export function reconstructAbstract(
+  invertedIndex: Record<string, number[]> | null,
+): string | null {
+  if (!invertedIndex) return null;
+  const words: string[] = [];
+  for (const [word, positions] of Object.entries(invertedIndex)) {
+    for (const pos of positions) {
+      words[pos] = word;
+    }
+  }
+  const text = words.filter((w) => w !== undefined).join(" ").trim();
+  return text || null;
+}
+
+/**
+ * Look up a work by its OpenAlex ID (e.g., "W1234567890" or full URL).
+ * Returns full data including abstract.
+ */
+export async function getWorkById(
+  openAlexId: string,
+): Promise<OpenAlexWork | null> {
+  const shortId = openAlexId.replace("https://openalex.org/", "");
+  const url = buildUrl(`/works/${encodeURIComponent(shortId)}`, {
+    select: FULL_SELECT,
+  });
+
+  try {
+    return await fetchJson<OpenAlexWork>(url);
+  } catch (e) {
+    Zotero.debug(`[Citegeist] Failed to fetch work ${shortId}: ${e}`);
+    return null;
+  }
+}
+
+// ────────────────────────────────────────────────────────
+// Source (journal) stats
+// ────────────────────────────────────────────────────────
+
+export interface OpenAlexSourceStats {
+  /** OpenAlex's JIF equivalent (mean citations for works published in last 2 years) */
+  citedness2yr: number;
+  /** Journal-level h-index */
+  hIndex: number;
+  /** Number of works with >= 10 citations */
+  i10Index: number;
+  /** All ISSNs for this source (for ranking lookups) */
+  issns: string[];
+}
+
+/** In-memory cache for source stats to avoid repeated API calls within a session. */
+const sourceStatsCache = new Map<string, OpenAlexSourceStats | null>();
+
+/**
+ * Fetch summary stats for a source/journal by its OpenAlex source ID.
+ * Returns null if the source doesn't exist or has no stats.
+ */
+export async function getSourceStats(
+  sourceId: string,
+): Promise<OpenAlexSourceStats | null> {
+  const shortId = sourceId.replace("https://openalex.org/", "");
+  if (!shortId) return null;
+
+  if (sourceStatsCache.has(shortId)) {
+    return sourceStatsCache.get(shortId) ?? null;
+  }
+
+  try {
+    const url = buildUrl(`/sources/${encodeURIComponent(shortId)}`, {
+      select: "id,issn_l,issn,summary_stats",
+    });
+    const data = await fetchJson<{
+      id: string;
+      issn_l: string | null;
+      issn: string[] | null;
+      summary_stats: {
+        "2yr_mean_citedness": number;
+        h_index: number;
+        i10_index: number;
+      } | null;
+    }>(url);
+
+    if (!data.summary_stats) {
+      sourceStatsCache.set(shortId, null);
+      return null;
+    }
+
+    const result: OpenAlexSourceStats = {
+      citedness2yr: data.summary_stats["2yr_mean_citedness"],
+      hIndex: data.summary_stats.h_index,
+      i10Index: data.summary_stats.i10_index,
+      issns: [
+        ...(data.issn_l ? [data.issn_l] : []),
+        ...(data.issn ?? []),
+      ],
+    };
+    sourceStatsCache.set(shortId, result);
+    return result;
+  } catch (e) {
+    Zotero.debug(`[Citegeist] Failed to fetch source stats for ${shortId}: ${e}`);
+    sourceStatsCache.set(shortId, null);
+    return null;
+  }
+}
+
+/** Clear the session-level source stats cache (call on shutdown). */
+export function clearSourceStatsCache(): void {
+  sourceStatsCache.clear();
+}
+
+/**
  * Format authors for display: "Smith, Jones & Lee" or "Smith et al."
  */
 export function formatAuthors(

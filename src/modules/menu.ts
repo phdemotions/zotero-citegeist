@@ -42,7 +42,7 @@ export function registerMenus(win: Window): void {
       if (items.length === 0) return;
 
       const eligible = items.filter(
-        (i) => i.isRegularItem() && i.getField("DOI")?.trim(),
+        (i: _ZoteroTypes.Item) => i.isRegularItem() && i.getField("DOI")?.trim(),
       );
       if (eligible.length === 0) return;
 
@@ -70,7 +70,9 @@ export function registerMenus(win: Window): void {
     citingItem.setAttribute("label", "View Citing Works\u2026");
     citingItem.addEventListener("command", () => {
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
-      if (items.length === 1) showCitationNetwork(items[0], "citing");
+      if (items.length === 1) {
+        showCitationNetwork(items[0], "citing").catch((e) => Zotero.debug(`[Citegeist] ${e}`));
+      }
     });
     itemMenu.appendChild(citingItem);
 
@@ -79,17 +81,18 @@ export function registerMenus(win: Window): void {
     refsItem.setAttribute("label", "View References\u2026");
     refsItem.addEventListener("command", () => {
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
-      if (items.length === 1) showCitationNetwork(items[0], "references");
+      if (items.length === 1) {
+        showCitationNetwork(items[0], "references").catch((e) => Zotero.debug(`[Citegeist] ${e}`));
+      }
     });
     itemMenu.appendChild(refsItem);
 
     // Hide citing/refs options when multiple items are selected (they only work on single items)
     itemMenu.addEventListener("popupshowing", () => {
-      const pane = Zotero.getActiveZoteroPane();
-      const count = pane.getSelectedItems().length;
-      const singleWithDOI = count === 1 &&
-        pane.getSelectedItems()[0].isRegularItem() &&
-        !!pane.getSelectedItems()[0].getField("DOI")?.trim();
+      const items = Zotero.getActiveZoteroPane().getSelectedItems();
+      const singleWithDOI = items.length === 1 &&
+        items[0].isRegularItem() &&
+        !!items[0].getField("DOI")?.trim();
       citingItem.hidden = !singleWithDOI;
       refsItem.hidden = !singleWithDOI;
     });

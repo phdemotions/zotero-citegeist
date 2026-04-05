@@ -12,7 +12,7 @@
  * PMIDs, and other plugin data. We only touch lines prefixed with "Citegeist.".
  */
 
-import type { OpenAlexWork } from "./openalex";
+import type { OpenAlexWork, OpenAlexSourceStats } from "./openalex";
 import { safeParseInt, safeParseFloat } from "./utils";
 
 const PREFIX = "Citegeist.";
@@ -26,6 +26,12 @@ export interface CachedData {
   isTop10Percent: boolean;
   isRetracted: boolean;
   lastFetched: string;
+  /** OpenAlex source ID (e.g., "S1234") for journal-level lookups */
+  sourceId: string | null;
+  /** Journal 2-year mean citedness (OpenAlex's JIF equivalent) */
+  citedness2yr: number | null;
+  /** Journal h-index */
+  journalHIndex: number | null;
 }
 
 /**
@@ -96,15 +102,26 @@ export function getCachedCountAndStaleness(
  * Read FWCI and percentile alongside count and staleness in one parse.
  * Used by columns to avoid parsing Extra multiple times per item.
  */
-export function getCachedMetrics(
-  item: _ZoteroTypes.Item,
-): { count: number | null; fwci: number | null; percentile: number | null; isStale: boolean } {
+export interface AllMetrics {
+  count: number | null;
+  fwci: number | null;
+  percentile: number | null;
+  isStale: boolean;
+  sourceId: string | null;
+  citedness2yr: number | null;
+  journalHIndex: number | null;
+}
+
+export function getCachedMetrics(item: _ZoteroTypes.Item): AllMetrics {
   const { citegeistFields } = parseExtra(item);
   const countStr = citegeistFields.get(`${PREFIX}citedByCount`);
   const count = countStr !== undefined ? safeParseInt(countStr) : null;
   const fwci = safeParseFloat(citegeistFields.get(`${PREFIX}fwci`));
   const percentile = safeParseFloat(citegeistFields.get(`${PREFIX}percentile`));
-  return { count, fwci, percentile, isStale: isLastFetchedStale(citegeistFields) };
+  const sourceId = citegeistFields.get(`${PREFIX}sourceId`) || null;
+  const citedness2yr = safeParseFloat(citegeistFields.get(`${PREFIX}citedness2yr`));
+  const journalHIndex = safeParseInt(citegeistFields.get(`${PREFIX}journalHIndex`)) || null;
+  return { count, fwci, percentile, isStale: isLastFetchedStale(citegeistFields), sourceId, citedness2yr, journalHIndex };
 }
 
 export function getCachedCitationCount(
@@ -138,22 +155,28 @@ export function getCachedData(
     isTop10Percent: citegeistFields.get(`${PREFIX}isTop10Percent`) === "true",
     isRetracted: citegeistFields.get(`${PREFIX}isRetracted`) === "true",
     lastFetched: citegeistFields.get(`${PREFIX}lastFetched`) || "",
+    sourceId: citegeistFields.get(`${PREFIX}sourceId`) || null,
+    citedness2yr: safeParseFloat(citegeistFields.get(`${PREFIX}citedness2yr`)),
+    journalHIndex: safeParseInt(citegeistFields.get(`${PREFIX}journalHIndex`)) || null,
   };
 }
 
 export async function cacheWorkData(
   item: _ZoteroTypes.Item,
   work: OpenAlexWork,
+  sourceStats?: OpenAlexSourceStats | null,
 ): Promise<void> {
   const { citegeistFields, otherLines } = parseExtra(item);
 
   citegeistFields.set(`${PREFIX}openAlexId`, work.id.replace("https://openalex.org/", ""));
   citegeistFields.set(`${PREFIX}citedByCount`, String(work.cited_by_count));
 
-  if (work.fwci !== null && work.fwci !== undefined) {
+  if (work.fwci !== null && work.fwci !== undefined && work.cited_by_count > 0) {
     citegeistFields.set(`${PREFIX}fwci`, work.fwci.toFixed(2));
+  } else {
+    citegeistFields.delete(`${PREFIX}fwci`);
   }
-  if (work.citation_normalized_percentile) {
+  if (work.citation_normalized_percentile && work.cited_by_count > 0) {
     citegeistFields.set(
       `${PREFIX}percentile`,
       (work.citation_normalized_percentile.value * 100).toFixed(1),
@@ -166,9 +189,23 @@ export async function cacheWorkData(
       `${PREFIX}isTop10Percent`,
       String(work.citation_normalized_percentile.is_in_top_10_percent),
     );
+  } else {
+    citegeistFields.delete(`${PREFIX}percentile`);
+    citegeistFields.delete(`${PREFIX}isTop1Percent`);
+    citegeistFields.delete(`${PREFIX}isTop10Percent`);
   }
   citegeistFields.set(`${PREFIX}isRetracted`, String(work.is_retracted));
   citegeistFields.set(`${PREFIX}lastFetched`, new Date().toISOString());
+
+  // Source/journal data
+  const sourceId = work.primary_location?.source?.id?.replace("https://openalex.org/", "");
+  if (sourceId) {
+    citegeistFields.set(`${PREFIX}sourceId`, sourceId);
+  }
+  if (sourceStats) {
+    citegeistFields.set(`${PREFIX}citedness2yr`, sourceStats.citedness2yr.toFixed(2));
+    citegeistFields.set(`${PREFIX}journalHIndex`, String(sourceStats.hIndex));
+  }
 
   writeExtra(item, citegeistFields, otherLines);
   await item.saveTx();
@@ -181,8 +218,9 @@ function isLastFetchedStale(citegeistFields: Map<string, string>): boolean {
   const lastFetched = citegeistFields.get(`${PREFIX}lastFetched`);
   if (!lastFetched) return true;
 
-  const lifetimeDays =
-    (Zotero.Prefs.get("extensions.zotero.citegeist.cacheLifetimeDays") as number) || 7;
+  const rawLifetime = Zotero.Prefs.get("extensions.zotero.citegeist.cacheLifetimeDays");
+  const lifetimeDays = (typeof rawLifetime === "number" && Number.isFinite(rawLifetime) && rawLifetime > 0)
+    ? rawLifetime : 7;
   const fetchedTime = new Date(lastFetched).getTime();
   if (Number.isNaN(fetchedTime)) return true; // corrupted date → treat as stale
   const ageMs = Date.now() - fetchedTime;

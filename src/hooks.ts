@@ -9,6 +9,7 @@ import {
 } from "./modules/citationColumn";
 import { registerCitationPane, unregisterCitationPane } from "./modules/citationPane";
 import { registerMenus, unregisterMenus } from "./modules/menu";
+import { clearSourceStatsCache } from "./modules/openalex";
 
 const FTL_LINK_ID = "citegeist-ftl-link";
 
@@ -57,6 +58,7 @@ export function onShutdown(_data: PluginData): void {
 
   unregisterCitationColumn();
   unregisterCitationPane();
+  clearSourceStatsCache();
 
   Zotero.debug("[Citegeist] Shutdown complete");
 }

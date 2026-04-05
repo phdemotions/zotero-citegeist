@@ -158,6 +158,27 @@ describe("isCacheStale", () => {
     const item = mockItem(`Citegeist.lastFetched: ${twoDaysAgo}`);
     expect(isCacheStale(item)).toBe(true);
   });
+
+  it("falls back to 7 days for NaN cache lifetime", () => {
+    mockZotero.Prefs.get.mockReturnValue(NaN);
+    const sixDaysAgo = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString();
+    const item = mockItem(`Citegeist.lastFetched: ${sixDaysAgo}`);
+    expect(isCacheStale(item)).toBe(false); // 6 days < 7 day default
+  });
+
+  it("falls back to 7 days for negative cache lifetime", () => {
+    mockZotero.Prefs.get.mockReturnValue(-5);
+    const sixDaysAgo = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString();
+    const item = mockItem(`Citegeist.lastFetched: ${sixDaysAgo}`);
+    expect(isCacheStale(item)).toBe(false);
+  });
+
+  it("falls back to 7 days for string cache lifetime", () => {
+    mockZotero.Prefs.get.mockReturnValue("abc");
+    const sixDaysAgo = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString();
+    const item = mockItem(`Citegeist.lastFetched: ${sixDaysAgo}`);
+    expect(isCacheStale(item)).toBe(false);
+  });
 });
 
 describe("getCachedMetrics", () => {
