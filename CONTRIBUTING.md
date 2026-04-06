@@ -53,4 +53,4 @@ Citegeist is and always will be **completely free**. If you find it useful and w
 
 ---
 
-Questions? Open an issue or reach out to josh@opusvita.org.
+Questions? Open an issue or reach out to joshgonzalesphd@gmail.com.
