@@ -60,13 +60,11 @@ Once installed, Citegeist adds three things to Zotero:
 2. A **Citation Intelligence pane** in the item detail sidebar
 3. **Right-click menu options** for fetching and exploring citations
 
-Here's how to use each one.
-
 ---
 
 ### 1. Sortable Columns
 
-Citegeist adds nine new columns to your item list, organized in three groups.
+Citegeist adds nine new columns to your item list.
 
 #### Article metrics
 
@@ -180,7 +178,7 @@ Open Zotero's settings (**Zotero &rarr; Settings** on macOS, **Edit &rarr; Prefe
 
 | Setting | Default | What it does |
 |---------|---------|-------------|
-| **Email** | *(empty)* | Optional. Providing an email gets you faster data from OpenAlex. Only sent to OpenAlex, not to us. |
+| **Email** | *(empty)* | Optional. Providing an email gets you faster data speeds. Only shared with OpenAlex (our data source), never with us. |
 | **Auto-fetch** | On | Fetches citation data automatically as you browse. Turn off to fetch manually via right-click. |
 | **Cache lifetime** | 7 days | How long before cached data is refreshed. Set higher (30&ndash;90 days) for large libraries. |
 | **Results per page** | 25 | How many results to load at a time in the citation network browser. |
@@ -198,7 +196,7 @@ Most journal articles and conference papers have a DOI. Some older papers, worki
 <details>
 <summary><strong>Where does the data come from?</strong></summary>
 
-Citation data comes from [OpenAlex](https://openalex.org), a free and open index of over 250 million scholarly works. Journal rankings (UTD24, FT50, ABDC, AJG) are bundled with the plugin and matched by ISSN &mdash; no extra network requests needed.
+Citation data comes from [OpenAlex](https://openalex.org), a free, open index of over 250 million scholarly works. Journal rankings (UTD24, FT50, ABDC, AJG) are built into the plugin &mdash; no extra setup needed.
 </details>
 
 <details>
@@ -216,14 +214,14 @@ This matters because citation norms vary widely between fields. A paper in marke
 <details>
 <summary><strong>What journal ranking lists are included?</strong></summary>
 
-Citegeist bundles four ranking lists commonly used in business, management, economics, and related fields:
+Citegeist includes four ranking lists commonly used in business, management, economics, and related fields:
 
 - **UTD24** &mdash; UT Dallas 24 (2024): 24 premier research journals
 - **FT50** &mdash; Financial Times 50 (2024): 50 journals used in business school research rankings
 - **ABDC** &mdash; Australian Business Deans Council Quality List (2022): tiered A\*, A, B, C
 - **AJG** &mdash; Chartered ABS Academic Journal Guide (2021): tiered 4\*, 4, 3, 2, 1
 
-The lookup table covers ~180 journals. If a journal you need is missing, contributions are welcome &mdash; see [CONTRIBUTING.md](CONTRIBUTING.md).
+~180 journals are covered. If a journal you use is missing, [let us know](https://github.com/phdemotions/zotero-citegeist/issues).
 </details>
 
 <details>
@@ -233,15 +231,15 @@ No. Everything is free, no sign-up required. Optionally add your email in settin
 </details>
 
 <details>
-<summary><strong>Where is citation data stored?</strong></summary>
+<summary><strong>Does my data sync across devices?</strong></summary>
 
-In each item's Extra field using namespaced keys (e.g., `Citegeist.citedByCount: 42`). Data persists across restarts, syncs via Zotero Sync, and Citegeist never touches your other Extra field content.
+Yes. Citation data is stored inside each item in your Zotero library, so it syncs automatically through Zotero Sync. Citegeist never modifies your existing data &mdash; it only adds its own fields.
 </details>
 
 <details>
 <summary><strong>Will Citegeist slow down Zotero?</strong></summary>
 
-No. Data is fetched in the background. Journal rankings use a local lookup table with zero network requests. Zotero stays responsive.
+No. Data is fetched in the background. Journal rankings are built into the plugin with no network requests needed. Zotero stays responsive.
 </details>
 
 <details>
@@ -265,38 +263,36 @@ No. Citegeist requires Zotero 7 or later. You can [upgrade for free](https://www
 
 ---
 
-## Development
+## Community & Support
+
+- **Bug reports & feature requests:** [GitHub Issues](https://github.com/phdemotions/zotero-citegeist/issues)
+- **Contributing:** See [CONTRIBUTING.md](CONTRIBUTING.md)
+- Citegeist is **completely free** and always will be. If you find it useful, you can [sponsor the project on GitHub](https://github.com/sponsors/phdemotions).
+
+---
+
+<details>
+<summary><strong>For Developers</strong></summary>
+
+### Building from source
 
 ```bash
-# Install dependencies
-npm install
-
-# Build for development (no minification, inline sourcemaps)
-npm run build:dev
-
-# Build for production (minified, creates .xpi)
-npm run build
-
-# Run tests
-npm test
-
-# Type-check
-npm run typecheck
+npm install          # Install dependencies
+npm run build:dev    # Development build (no minification)
+npm run build        # Production build (creates .xpi)
+npm test             # Run tests
+npm run typecheck    # Type-check
 ```
 
 ### Dev installation
 
-For development, create a proxy file in your Zotero profile's `extensions/` folder. The file should be named `citegeist@opusvita.org` and contain the absolute path to `build/addon` in this repo.
+Create a proxy file in your Zotero profile's `extensions/` folder named `citegeist@opusvita.org` containing the absolute path to `build/addon` in this repo.
 
-**Zotero profile locations:**
-
-| OS | Path |
-|----|------|
-| macOS | `~/Library/Application Support/Zotero/Profiles/<PROFILE_ID>/extensions/` |
-| Windows | `%APPDATA%\Zotero\Zotero\Profiles\<PROFILE_ID>\extensions\` |
-| Linux | `~/.zotero/zotero/<PROFILE_ID>/extensions/` |
-
-Rebuild and restart Zotero to see changes.
+| OS | Profile path |
+|----|-------------|
+| macOS | `~/Library/Application Support/Zotero/Profiles/<ID>/extensions/` |
+| Windows | `%APPDATA%\Zotero\Zotero\Profiles\<ID>\extensions\` |
+| Linux | `~/.zotero/zotero/<ID>/extensions/` |
 
 ### Releasing
 
@@ -304,18 +300,9 @@ Rebuild and restart Zotero to see changes.
 npm run release   # Bumps version, creates tag, pushes
 ```
 
-GitHub Actions builds the XPI and creates a release automatically when a version tag is pushed.
+GitHub Actions builds the XPI and creates a release automatically.
 
----
-
-## Community
-
-- **Bug reports & feature requests:** [GitHub Issues](https://github.com/phdemotions/zotero-citegeist/issues)
-- **Contributing:** See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
-
-## Support
-
-Citegeist is **completely free** and always will be. If you find it useful, you can [sponsor the project on GitHub](https://github.com/sponsors/phdemotions).
+</details>
 
 ## License
 
