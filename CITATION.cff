@@ -1,19 +1,20 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
-title: "Citegeist: Citation Impact Analysis and Scholarly Literature Discovery"
+title: "Citegeist: Real-Time Citation Intelligence for Business and Management Research in Zotero"
 version: 1.0.0
 date-released: "2026-04-04"
 license: GPL-3.0-or-later
 url: "https://github.com/phdemotions/zotero-citegeist"
 repository-code: "https://github.com/phdemotions/zotero-citegeist"
 abstract: >-
-  Citegeist is a Zotero 7 plugin that surfaces citation intelligence
-  directly inside the reference manager. It displays citation counts,
-  field-weighted citation impact, percentile rankings, and citation
-  trends for any paper with a DOI, and provides a citation network
-  browser for discovering and importing related works — all powered
-  by the OpenAlex open bibliometric index.
+  Citegeist is a Zotero 7 plugin that embeds citation intelligence
+  directly into the reference manager. It displays citation counts,
+  field-weighted citation impact, percentile rankings, citation trends,
+  journal-level metrics, and journal ranking lists (UTD24, FT50, ABDC,
+  AJG) for any paper with a DOI, and provides a citation network browser
+  for discovering and importing related works — all powered by the
+  OpenAlex open bibliometric index.
 keywords:
   - zotero
   - citation-analysis
