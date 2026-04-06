@@ -5,7 +5,7 @@
 <h1 align="center">Citegeist</h1>
 
 <p align="center">
-  <strong>Citation intelligence for Zotero 7.</strong><br>
+  <strong>Citation intelligence for Zotero 7+.</strong><br>
   See how influential a paper really is. Explore what cites it. Add works to your library in one click.
 </p>
 
