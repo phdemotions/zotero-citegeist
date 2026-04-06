@@ -8,7 +8,7 @@ license: GPL-3.0-or-later
 url: "https://github.com/phdemotions/zotero-citegeist"
 repository-code: "https://github.com/phdemotions/zotero-citegeist"
 abstract: >-
-  Citegeist is a Zotero 7 plugin that embeds citation intelligence
+  Citegeist is a Zotero 7+ plugin (compatible with Zotero 8) that embeds citation intelligence
   directly into the reference manager. It displays citation counts,
   field-weighted citation impact, percentile rankings, citation trends,
   journal-level metrics, and journal ranking lists (UTD24, FT50, ABDC,

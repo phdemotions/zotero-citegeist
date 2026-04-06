@@ -19,7 +19,7 @@
 
 ## What Citegeist Does
 
-Citegeist is a free plugin for [Zotero 7](https://www.zotero.org/downloads/) that shows you how important a paper is &mdash; and helps you find more like it &mdash; without leaving your library.
+Citegeist is a free plugin for [Zotero 7+](https://www.zotero.org/downloads/) that shows you how important a paper is &mdash; and helps you find more like it &mdash; without leaving your library.
 
 **For every paper in your library, you can:**
 
@@ -35,7 +35,7 @@ Everything is free. No account, no subscription, no API key.
 
 ## Install
 
-> **Requires [Zotero 7](https://www.zotero.org/downloads/) or later.** Citegeist does not work with Zotero 6.
+> **Requires [Zotero 7 or later](https://www.zotero.org/downloads/)** (including Zotero 8). Citegeist does not work with Zotero 6.
 
 1. Download **[citegeist.xpi](https://github.com/phdemotions/zotero-citegeist/releases/latest)** from the latest release (click the `.xpi` file under "Assets" to download it)
 2. Open Zotero 7
@@ -245,7 +245,7 @@ No. Data is fetched in the background. Journal rankings are built into the plugi
 <details>
 <summary><strong>Can I use Citegeist with Zotero 6?</strong></summary>
 
-No. Citegeist requires Zotero 7 or later. You can [upgrade for free](https://www.zotero.org/downloads/).
+No. Citegeist requires Zotero 7 or later (including Zotero 8). You can [upgrade for free](https://www.zotero.org/downloads/).
 </details>
 
 ---

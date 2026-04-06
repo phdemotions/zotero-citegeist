@@ -21,7 +21,7 @@ bibliography: paper.bib
 
 # Summary
 
-Citegeist is a plugin for Zotero 7 that embeds citation intelligence directly into the reference manager. For any item with a DOI, Citegeist retrieves article-level metrics from OpenAlex [@priem2022openalex], a free and open index of over 250 million scholarly works, and displays them as sortable columns and a contextual detail pane. It also provides journal-level metrics from the OpenAlex Sources API and matches journals against four bundled ranking lists. A built-in citation network browser supports forward and backward citation chaining with one-click import of discovered papers into the researcher's Zotero library.
+Citegeist is a plugin for Zotero 7+ (including Zotero 8) that embeds citation intelligence directly into the reference manager. For any item with a DOI, Citegeist retrieves article-level metrics from OpenAlex [@priem2022openalex], a free and open index of over 250 million scholarly works, and displays them as sortable columns and a contextual detail pane. It also provides journal-level metrics from the OpenAlex Sources API and matches journals against four bundled ranking lists. A built-in citation network browser supports forward and backward citation chaining with one-click import of discovered papers into the researcher's Zotero library.
 
 No API key, institutional subscription, or account is required.
 
@@ -35,7 +35,7 @@ The typical workflow today involves leaving the reference manager, navigating to
 
 Zotero [@zotero] is a widely used free, open-source reference manager, yet it provides no built-in citation metrics. Several existing plugins address parts of this gap. \autoref{tab:comparison} summarizes the landscape.
 
-: Comparison of Zotero citation plugins. Only actively maintained plugins with Zotero 7 support are included. \label{tab:comparison}
+: Comparison of Zotero citation plugins. Only actively maintained plugins with Zotero 7+ support are included. \label{tab:comparison}
 
 | Feature | Cit.Counts Mgr | Cit. Tally | GS Count | scite | Cita | **Citegeist** |
 |---|---|---|---|---|---|---|
@@ -75,7 +75,7 @@ All data is cached in each item's Extra field using namespaced keys (e.g., `Cite
 
 # Implementation
 
-Citegeist is implemented in TypeScript and built with esbuild into a single bundle. It uses Zotero 7's plugin APIs: `ItemPaneManager` for the sidebar section, `ItemTreeManager` for custom sortable columns, and standard DOM APIs for the citation network dialog. The plugin communicates with the OpenAlex REST API through a centralized rate limiter that enforces a maximum of 8 requests per second (below OpenAlex's polite-pool limit of 10 req/s), with exponential backoff on HTTP 429 responses. Responses are cached locally with a configurable expiration period (default: 7 days). Users can optionally provide an email to access OpenAlex's polite pool for higher rate limits.
+Citegeist is implemented in TypeScript and built with esbuild into a single bundle. It targets Zotero 7 and later (including Zotero 8), using the plugin APIs introduced in Zotero 7: `ItemPaneManager` for the sidebar section, `ItemTreeManager` for custom sortable columns, and standard DOM APIs for the citation network dialog. The plugin communicates with the OpenAlex REST API through a centralized rate limiter that enforces a maximum of 8 requests per second (below OpenAlex's polite-pool limit of 10 req/s), with exponential backoff on HTTP 429 responses. Responses are cached locally with a configurable expiration period (default: 7 days). Users can optionally provide an email to access OpenAlex's polite pool for higher rate limits.
 
 Journal ranking columns use a bundled ISSN-keyed lookup table covering approximately 180 journals across business, management, economics, finance, information systems, marketing, and psychology. Rankings are matched against up to three ISSN sources per item &mdash; the Zotero item's ISSN field, ISSNs cached from previous OpenAlex fetches, and ISSNs from the in-memory OpenAlex source cache &mdash; to maximize match coverage across ISSN variants (ISSN-L, print, and electronic).
 
