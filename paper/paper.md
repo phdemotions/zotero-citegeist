@@ -1,5 +1,5 @@
 ---
-title: "Citegeist: Real-Time Citation Intelligence for Business and Management Research in Zotero"
+title: "Citegeist: Real-Time Citation Intelligence for Business and Management Research"
 tags:
   - Zotero
   - citation analysis
