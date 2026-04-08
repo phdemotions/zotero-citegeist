@@ -2,18 +2,11 @@
  * Add / Undo / File actions and item creation for Citation Network.
  */
 
-import {
-  getSourceStats,
-  type OpenAlexWork,
-} from "../openalex";
+import { getSourceStats, type OpenAlexWork } from "../openalex";
 import { cacheWorkData } from "../cache";
 import { invalidateColumnCache } from "../citationColumn";
 import { escapeHTML, safeInnerHTML } from "../utils";
-import {
-  SURNAME_PREFIXES,
-  UNDO_TIMEOUT_MS,
-  type NetworkState,
-} from "./types";
+import { SURNAME_PREFIXES, UNDO_TIMEOUT_MS, type NetworkState } from "./types";
 
 // ────────────────────────────────────────────────────────
 // Shared add-to-library logic (deduplicated from handleAdd + handleAddWithCollections)
@@ -58,11 +51,14 @@ export async function addItemToLibrary(
     state.createdItemIds.set(workId, item.id);
 
     // Transition to "Added · Undo"
-    state.undoTimers.set(workId, setTimeout(() => {
-      state.undoTimers.delete(workId);
-      state.addedThisSession.add(workId);
-      updateRowButton(state, workId);
-    }, UNDO_TIMEOUT_MS));
+    state.undoTimers.set(
+      workId,
+      setTimeout(() => {
+        state.undoTimers.delete(workId);
+        state.addedThisSession.add(workId);
+        updateRowButton(state, workId);
+      }, UNDO_TIMEOUT_MS),
+    );
 
     updateRowButton(state, workId);
   } catch (e) {
@@ -153,23 +149,32 @@ export function updateRowButton(state: NetworkState, workId: string): void {
   if (isUndo) {
     btnWrap.classList.add("cg-state-added");
     btnWrap.style.overflow = "hidden";
-    safeInnerHTML(btnWrap, `<button class="cg-split-main" data-work-id="${escapeHTML(workId)}" data-action="undo"
+    safeInnerHTML(
+      btnWrap,
+      `<button class="cg-split-main" data-work-id="${escapeHTML(workId)}" data-action="undo"
       aria-label="Undo adding ${escapeHTML(titleText)}">\u2713 Added \u00B7 Undo</button>
-      <div class="cg-undo-bar"></div>`);
+      <div class="cg-undo-bar"></div>`,
+    );
   } else if (showAsInLibrary) {
     btnWrap.classList.add("cg-state-file");
-    safeInnerHTML(btnWrap, `
+    safeInnerHTML(
+      btnWrap,
+      `
       <button class="cg-split-main" data-work-id="${escapeHTML(workId)}" data-action="file"
         aria-label="Manage collections for ${escapeHTML(titleText)}">\uD83D\uDCC1 File</button>
       <button class="cg-split-arrow" data-work-id="${escapeHTML(workId)}"
-        aria-label="Choose collections" aria-haspopup="listbox">\u25BE</button>`);
+        aria-label="Choose collections" aria-haspopup="listbox">\u25BE</button>`,
+    );
   } else {
     const label = defaultName ? `+ Add to ${escapeHTML(defaultName)}` : "+ Add to Library";
-    safeInnerHTML(btnWrap, `
+    safeInnerHTML(
+      btnWrap,
+      `
       <button class="cg-split-main" data-work-id="${escapeHTML(workId)}" data-action="add"
         aria-label="Add ${escapeHTML(titleText)} to ${defaultName || "library"}">${label}</button>
       <button class="cg-split-arrow" data-work-id="${escapeHTML(workId)}"
-        aria-label="Choose collections" aria-haspopup="listbox">\u25BE</button>`);
+        aria-label="Choose collections" aria-haspopup="listbox">\u25BE</button>`,
+    );
   }
 
   right.appendChild(btnWrap);
@@ -198,20 +203,20 @@ export async function createZoteroItemFromWork(
   collectionIds?: Set<number>,
 ): Promise<_ZoteroTypes.Item> {
   const typeMap: Record<string, string> = {
-    "article": "journalArticle",
+    article: "journalArticle",
     "book-chapter": "bookSection",
-    "book": "book",
-    "dissertation": "thesis",
-    "dataset": "dataset",
-    "preprint": "preprint",
-    "review": "journalArticle",
-    "paratext": "journalArticle",
-    "report": "report",
-    "editorial": "journalArticle",
-    "letter": "journalArticle",
-    "erratum": "journalArticle",
+    book: "book",
+    dissertation: "thesis",
+    dataset: "dataset",
+    preprint: "preprint",
+    review: "journalArticle",
+    paratext: "journalArticle",
+    report: "report",
+    editorial: "journalArticle",
+    letter: "journalArticle",
+    erratum: "journalArticle",
     "proceedings-article": "conferencePaper",
-    "proceedings": "conferencePaper",
+    proceedings: "conferencePaper",
   };
 
   const itemType = typeMap[work.type] || "journalArticle";

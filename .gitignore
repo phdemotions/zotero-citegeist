@@ -18,6 +18,3 @@ Thumbs.db
 # Environment
 .env
 .env.local
-
-# Temp files
-ROADMAP_ISSUES.md

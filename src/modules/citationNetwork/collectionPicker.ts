@@ -94,8 +94,10 @@ function bindPickerOptionEvents(
     optEl.addEventListener("click", handler);
     optEl.addEventListener("keydown", (e: Event) => {
       const ke = e as KeyboardEvent;
-      if (ke.key === "Enter" || ke.key === " ") { ke.preventDefault(); handler(e); }
-      else if (ke.key === "ArrowDown") {
+      if (ke.key === "Enter" || ke.key === " ") {
+        ke.preventDefault();
+        handler(e);
+      } else if (ke.key === "ArrowDown") {
         ke.preventDefault();
         let next = optEl.nextElementSibling as HTMLElement;
         while (next && (next.hidden || !next.classList.contains("cg-picker-option"))) {
@@ -131,7 +133,11 @@ function bindPickerOptionEvents(
 // Per-item collection picker
 // ────────────────────────────────────────────────────────
 
-export async function toggleItemPicker(state: NetworkState, workId: string, anchor: HTMLElement): Promise<void> {
+export async function toggleItemPicker(
+  state: NetworkState,
+  workId: string,
+  anchor: HTMLElement,
+): Promise<void> {
   const splitBtn = anchor.closest(".cg-split-btn") as HTMLElement;
   if (!splitBtn) return;
 
@@ -210,20 +216,25 @@ export function renderItemPickerContent(
   safeInnerHTML(picker, html);
 
   // Bind shared option events
-  bindPickerOptionEvents(picker, expanded, (optEl) => {
-    const colId = Number(optEl.dataset.colId);
-    if (selectedCols.has(colId)) {
-      selectedCols.delete(colId);
-      optEl.classList.remove("checked");
-      optEl.setAttribute("aria-selected", "false");
-    } else {
-      selectedCols.add(colId);
-      optEl.classList.add("checked");
-      optEl.setAttribute("aria-selected", "true");
-    }
-  }, () => {
-    picker.remove();
-  });
+  bindPickerOptionEvents(
+    picker,
+    expanded,
+    (optEl) => {
+      const colId = Number(optEl.dataset.colId);
+      if (selectedCols.has(colId)) {
+        selectedCols.delete(colId);
+        optEl.classList.remove("checked");
+        optEl.setAttribute("aria-selected", "false");
+      } else {
+        selectedCols.add(colId);
+        optEl.classList.add("checked");
+        optEl.setAttribute("aria-selected", "true");
+      }
+    },
+    () => {
+      picker.remove();
+    },
+  );
 
   // Done button
   const doneBtn = picker.querySelector(".cg-picker-done") as HTMLButtonElement;
@@ -310,28 +321,33 @@ export function renderDefaultDropdown(state: NetworkState): void {
   safeInnerHTML(dropdown, html);
 
   // Bind shared option events
-  bindPickerOptionEvents(dropdown, expanded, (optEl) => {
-    const colId = optEl.dataset.colId;
-    if (colId === "root") {
-      state.defaultCollectionIds.clear();
-    } else if (colId) {
-      const numId = Number(colId);
-      if (state.defaultCollectionIds.has(numId)) {
-        state.defaultCollectionIds.delete(numId);
-      } else {
-        state.defaultCollectionIds.add(numId);
+  bindPickerOptionEvents(
+    dropdown,
+    expanded,
+    (optEl) => {
+      const colId = optEl.dataset.colId;
+      if (colId === "root") {
+        state.defaultCollectionIds.clear();
+      } else if (colId) {
+        const numId = Number(colId);
+        if (state.defaultCollectionIds.has(numId)) {
+          state.defaultCollectionIds.delete(numId);
+        } else {
+          state.defaultCollectionIds.add(numId);
+        }
       }
-    }
-    renderDefaultDropdown(state);
-    updateDefaultCollectionLabel(state);
-    updateAllAddButtons(state);
-  }, () => {
-    const dd = state.dialog.querySelector("#cg-default-dropdown") as HTMLElement;
-    const chip = state.dialog.querySelector("#cg-default-chip") as HTMLElement;
-    if (dd) dd.hidden = true;
-    chip?.setAttribute("aria-expanded", "false");
-    chip?.focus();
-  });
+      renderDefaultDropdown(state);
+      updateDefaultCollectionLabel(state);
+      updateAllAddButtons(state);
+    },
+    () => {
+      const dd = state.dialog.querySelector("#cg-default-dropdown") as HTMLElement;
+      const chip = state.dialog.querySelector("#cg-default-chip") as HTMLElement;
+      if (dd) dd.hidden = true;
+      chip?.setAttribute("aria-expanded", "false");
+      chip?.focus();
+    },
+  );
 }
 
 export function updateDefaultCollectionLabel(state: NetworkState): void {
@@ -349,7 +365,8 @@ export function updateDefaultCollectionLabel(state: NetworkState): void {
     const name = state.allCollections.find((c) => c.id === ids[0])?.name || "Collection";
     label.textContent = name;
     extra.textContent = ids.length > 1 ? ` +${ids.length - 1}` : "";
-    if (footerLabel) footerLabel.textContent = ids.length > 1 ? "Default folders:" : "Default folder:";
+    if (footerLabel)
+      footerLabel.textContent = ids.length > 1 ? "Default folders:" : "Default folder:";
   }
 }
 
@@ -430,7 +447,10 @@ export function buildCollectionTree(): CollectionNode[] {
 
     // Build a map of id → collection and parentId → children
     const byId = new Map<number, { id: number; name: string; parentID: number | false }>();
-    const childrenOf = new Map<number | false, Array<{ id: number; name: string; parentID: number | false }>>();
+    const childrenOf = new Map<
+      number | false,
+      Array<{ id: number; name: string; parentID: number | false }>
+    >();
 
     for (const col of allCollections) {
       const entry = { id: col.id, name: col.name, parentID: col.parentID ?? false };
@@ -453,7 +473,9 @@ export function buildCollectionTree(): CollectionNode[] {
               childrenOf.get(col.id)!.push(childEntry);
             }
           }
-        } catch (_) { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
     }
 
@@ -463,7 +485,7 @@ export function buildCollectionTree(): CollectionNode[] {
     }
 
     // Walk tree starting from root (parentID === false)
-    function walk(parentId: number | false, depth: number): void {
+    const walk = (parentId: number | false, depth: number): void => {
       const children = childrenOf.get(parentId);
       if (!children) return;
       for (const col of children) {
@@ -471,7 +493,7 @@ export function buildCollectionTree(): CollectionNode[] {
         nodes.push({ id: col.id, name: col.name, depth, parentId: col.parentID, hasChildren });
         walk(col.id, depth + 1);
       }
-    }
+    };
     walk(false, 0);
   } catch (e) {
     Zotero.debug(`[Citegeist] Error building collection tree: ${e}`);

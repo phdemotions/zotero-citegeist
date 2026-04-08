@@ -18,10 +18,7 @@ export function safeInnerHTML(element: Element, html: string): void {
 
   // Parse as HTML (not XML) using DOMParser
   const parser = new DOMParser();
-  const htmlDoc = parser.parseFromString(
-    `<body>${html}</body>`,
-    "text/html",
-  );
+  const htmlDoc = parser.parseFromString(`<body>${html}</body>`, "text/html");
 
   // Import each child node from the parsed body into the target document
   const ownerDoc = element.ownerDocument;
@@ -59,4 +56,81 @@ export function safeParseFloat(val: string | undefined): number | null {
   if (val === undefined) return null;
   const parsed = parseFloat(val);
   return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Normalize an unknown caught value into a string suitable for logging.
+ *
+ * Zotero.debug(msg + e) coerces objects to "[object Object]" and drops
+ * stack traces. Use this helper in every catch() so log lines are useful
+ * in production.
+ */
+export function normalizeError(e: unknown): string {
+  if (e instanceof Error) {
+    const first = e.stack?.split("\n")[1]?.trim();
+    return first ? `${e.message} (${first})` : e.message;
+  }
+  if (typeof e === "string") return e;
+  if (e === undefined) return "undefined";
+  if (e === null) return "null";
+  try {
+    const json = JSON.stringify(e);
+    return json ?? String(e);
+  } catch {
+    return String(e);
+  }
+}
+
+/** Prefixed debug logger with consistent formatting. */
+export function logError(context: string, e: unknown): void {
+  Zotero.debug(`[Citegeist] ERROR ${context}: ${normalizeError(e)}`);
+}
+
+/**
+ * Distinguishes "OpenAlex unreachable" from "work not found" so UI layers
+ * can render a helpful message instead of a flat "not found" dead end.
+ */
+export class OpenAlexNetworkError extends Error {
+  constructor(
+    message: string,
+    public readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = "OpenAlexNetworkError";
+  }
+}
+
+/**
+ * Marker for values that are already HTML-escaped, consumed by {@link safeHTML}.
+ */
+export interface SafeHTMLValue {
+  readonly __safeHTML: true;
+  readonly html: string;
+}
+
+/** Wrap a string that is already HTML-safe so {@link safeHTML} won't re-escape it. */
+export function rawHTML(html: string): SafeHTMLValue {
+  return { __safeHTML: true, html };
+}
+
+/**
+ * Tagged template literal that HTML-escapes every interpolated value by default.
+ * Wrap pre-sanitized fragments in {@link rawHTML} to skip escaping.
+ *
+ *     safeHTML`<a href="${url}">${label}</a>`
+ */
+export function safeHTML(strings: TemplateStringsArray, ...values: unknown[]): string {
+  let out = strings[0];
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (v && typeof v === "object" && (v as SafeHTMLValue).__safeHTML === true) {
+      out += (v as SafeHTMLValue).html;
+    } else if (v === null || v === undefined) {
+      out += "";
+    } else {
+      out += escapeHTML(String(v));
+    }
+    out += strings[i + 1];
+  }
+  return out;
 }

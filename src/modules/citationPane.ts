@@ -18,7 +18,8 @@ import { fetchAndCacheItem } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork } from "./citationNetwork";
-import { escapeHTML } from "./utils";
+import { escapeHTML, logError } from "./utils";
+import { HEADLINE_COUNT_FONT_SIZE_PX } from "../constants";
 
 let refreshing = false;
 
@@ -84,7 +85,7 @@ export function registerCitationPane(pluginID: string): void {
             margin-bottom: 10px;
           }
           .cg-headline-count {
-            font-size: 24px;
+            font-size: ${HEADLINE_COUNT_FONT_SIZE_PX}px;
             font-weight: 800;
             letter-spacing: -0.8px;
             color: var(--fill-primary);
@@ -141,11 +142,16 @@ export function registerCitationPane(pluginID: string): void {
             color: var(--fill-primary, #e8e8ed);
             font-size: 12px;
             font-weight: 500;
+            font-family: inherit;
             cursor: pointer;
             text-align: center;
             text-decoration: none;
             -moz-user-select: none;
             user-select: none;
+          }
+          .cg-action-btn:focus-visible {
+            outline: 2px solid var(--accent-blue40, #5a9cff);
+            outline-offset: 2px;
           }
           .cg-action-btn:hover {
             background: var(--fill-quinary, rgba(255,255,255,0.1));
@@ -216,8 +222,13 @@ export function registerCitationPane(pluginID: string): void {
           invalidateColumnCache(item.id);
         }
       } else if (!alreadyCached && !result.success) {
-        container.innerHTML = `<div class="cg-no-doi">Could not find this work on OpenAlex.</div>`;
-        setSectionSummary("Not found");
+        if (result.error === "network") {
+          container.innerHTML = `<div class="cg-no-doi">OpenAlex is currently unavailable. Try again in a few minutes.</div>`;
+          setSectionSummary("Unavailable");
+        } else {
+          container.innerHTML = `<div class="cg-no-doi">This work was not found on OpenAlex.</div>`;
+          setSectionSummary("Not found");
+        }
       }
     },
     sectionButtons: [
@@ -241,9 +252,12 @@ export function registerCitationPane(pluginID: string): void {
                 renderPane(container, cached, item, result.work ?? undefined);
                 setSectionSummary(`${cached.citedByCount.toLocaleString()} citations`);
                 invalidateColumnCache(item.id);
+              } else if (result.error === "network") {
+                container.innerHTML = `<div class="cg-no-doi">OpenAlex is currently unavailable. Try again in a few minutes.</div>`;
+                setSectionSummary("Unavailable");
               } else {
-                container.innerHTML = `<div class="cg-no-doi">Could not refresh \u2014 OpenAlex may be unavailable.</div>`;
-                setSectionSummary("Error");
+                container.innerHTML = `<div class="cg-no-doi">This work was not found on OpenAlex.</div>`;
+                setSectionSummary("Not found");
               }
             }
           } finally {
@@ -309,55 +323,51 @@ function renderPane(
   headline.innerHTML = headlineHTML;
   container.appendChild(headline);
 
-  // ── Action buttons — created via DOM API for reliable rendering ──
+  // ── Action buttons — real <button> elements for keyboard + screen reader support ──
   const actions = doc.createElement("div");
   actions.className = "cg-actions";
 
-  const citingBtn = doc.createElement("div");
-  citingBtn.className = "cg-action-btn cg-action-btn-primary";
-  citingBtn.setAttribute("role", "button");
-  citingBtn.setAttribute("tabindex", "0");
-  citingBtn.textContent = `View ${data.citedByCount.toLocaleString()} citing works \u2192`;
-  citingBtn.addEventListener("click", () => {
-    Zotero.debug("[Citegeist] Citing button clicked for item " + item.id);
-    showCitationNetwork(item, "citing").catch((e: unknown) => {
-      Zotero.debug("[Citegeist] ERROR in showCitationNetwork (citing): " + e);
-    });
-  });
-  citingBtn.addEventListener("keydown", (e: Event) => {
-    if ((e as KeyboardEvent).key === "Enter" || (e as KeyboardEvent).key === " ") {
-      e.preventDefault();
-      showCitationNetwork(item, "citing").catch((e2: unknown) => {
-        Zotero.debug("[Citegeist] ERROR in showCitationNetwork (citing, key): " + e2);
+  const makeActionButton = (
+    label: string,
+    ariaLabel: string,
+    variant: "primary" | "secondary",
+    mode: "citing" | "references",
+  ): HTMLButtonElement => {
+    const btn = doc.createElement("button");
+    btn.type = "button";
+    btn.className = "cg-action-btn" + (variant === "primary" ? " cg-action-btn-primary" : "");
+    btn.textContent = label;
+    btn.setAttribute("aria-label", ariaLabel);
+    btn.addEventListener("click", () => {
+      Zotero.debug(`[Citegeist] ${mode} button clicked for item ${item.id}`);
+      showCitationNetwork(item, mode).catch((e: unknown) => {
+        logError(`showCitationNetwork(${mode})`, e);
       });
-    }
-  });
+    });
+    return btn;
+  };
+
+  const citingBtn = makeActionButton(
+    `View ${data.citedByCount.toLocaleString()} citing works \u2192`,
+    `View ${data.citedByCount.toLocaleString()} works that cite this paper`,
+    "primary",
+    "citing",
+  );
   actions.appendChild(citingBtn);
 
-  const refsBtn = doc.createElement("div");
-  refsBtn.className = "cg-action-btn";
-  refsBtn.setAttribute("role", "button");
-  refsBtn.setAttribute("tabindex", "0");
-  refsBtn.textContent = "View references \u2192";
-  refsBtn.addEventListener("click", () => {
-    Zotero.debug("[Citegeist] References button clicked for item " + item.id);
-    showCitationNetwork(item, "references").catch((e: unknown) => {
-      Zotero.debug("[Citegeist] ERROR in showCitationNetwork (refs): " + e);
-    });
-  });
-  refsBtn.addEventListener("keydown", (e: Event) => {
-    if ((e as KeyboardEvent).key === "Enter" || (e as KeyboardEvent).key === " ") {
-      e.preventDefault();
-      showCitationNetwork(item, "references").catch((e2: unknown) => {
-        Zotero.debug("[Citegeist] ERROR in showCitationNetwork (refs, key): " + e2);
-      });
-    }
-  });
+  const refsBtn = makeActionButton(
+    "View references \u2192",
+    "View works cited by this paper",
+    "secondary",
+    "references",
+  );
   actions.appendChild(refsBtn);
 
   container.appendChild(actions);
 
-  Zotero.debug(`[Citegeist] Pane rendered: ${data.citedByCount} citations, 2 action buttons appended`);
+  Zotero.debug(
+    `[Citegeist] Pane rendered: ${data.citedByCount} citations, 2 action buttons appended`,
+  );
 
   // ── Trend insight — actionable text, not a tiny chart ──
   if (work?.counts_by_year && work.counts_by_year.length >= 2) {
@@ -392,9 +402,7 @@ function renderPane(
     }
 
     // Peak year insight (if different from most recent)
-    const peak = sorted.reduce((a, b) =>
-      b.cited_by_count > a.cited_by_count ? b : a,
-    );
+    const peak = sorted.reduce((a, b) => (b.cited_by_count > a.cited_by_count ? b : a));
     if (peak.year !== recent.year && peak.cited_by_count > recentCount) {
       trendText += ` \u00B7 peak: ${peak.cited_by_count} in ${peak.year}`;
     }

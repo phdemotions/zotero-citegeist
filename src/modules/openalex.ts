@@ -3,7 +3,22 @@
  *
  * Uses Zotero.HTTP for requests. Implements polite pool via mailto,
  * field selection for minimal payloads, and cursor-based pagination.
+ *
+ * Error semantics: lookup helpers return `null` when a work is not found
+ * on OpenAlex, and throw {@link OpenAlexNetworkError} when the API is
+ * unreachable or returns a non-200 after retries. This lets callers
+ * distinguish "no data" from "service unavailable" to render a helpful
+ * message to users.
  */
+
+import {
+  OPENALEX_RATE_LIMIT_MS,
+  OPENALEX_REQUEST_TIMEOUT_MS,
+  OPENALEX_RETRY_DELAYS_MS,
+  MAX_ABSTRACT_LENGTH,
+  MAX_ABSTRACT_POSITION,
+} from "../constants";
+import { OpenAlexNetworkError, normalizeError, logError } from "./utils";
 
 const OPENALEX_BASE = "https://api.openalex.org";
 
@@ -73,9 +88,7 @@ export interface OpenAlexListResponse {
 
 function getMailto(): string {
   try {
-    const mailto = Zotero.Prefs.get(
-      "extensions.zotero.citegeist.mailto",
-    ) as string;
+    const mailto = Zotero.Prefs.get("extensions.zotero.citegeist.mailto") as string;
     return mailto || "";
   } catch {
     return "";
@@ -95,57 +108,89 @@ function buildUrl(path: string, params: Record<string, string> = {}): string {
 
 // ── Centralized rate limiter ──
 // OpenAlex polite pool allows 10 req/s. We target 8 to stay safe.
-const RATE_LIMIT_INTERVAL_MS = 125; // 8 req/s
 let lastRequestTime = 0;
 
-async function rateLimitedFetch<T>(url: string, retries = 2): Promise<T> {
+async function rateLimitedFetch<T>(url: string, label: string, attempt = 0): Promise<T> {
   const now = Date.now();
   const elapsed = now - lastRequestTime;
-  if (elapsed < RATE_LIMIT_INTERVAL_MS) {
-    await new Promise((r) => setTimeout(r, RATE_LIMIT_INTERVAL_MS - elapsed));
+  if (elapsed < OPENALEX_RATE_LIMIT_MS) {
+    await new Promise((r) => setTimeout(r, OPENALEX_RATE_LIMIT_MS - elapsed));
   }
   lastRequestTime = Date.now();
-  return fetchJson<T>(url, retries);
+  return fetchJson<T>(url, label, attempt);
 }
 
-async function fetchJson<T>(url: string, retries = 2): Promise<T> {
-  const response = await Zotero.HTTP.request("GET", url, {
-    headers: {
-      Accept: "application/json",
-      "User-Agent": `Citegeist/1.0 (Zotero plugin; ${getMailto() || "no-mailto"})`,
-    },
-    responseType: "text",
-    timeout: 30000,
-  });
+async function fetchJson<T>(url: string, label: string, attempt: number): Promise<T> {
+  let response: { status: number; responseText: string };
+  try {
+    response = await Zotero.HTTP.request("GET", url, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": `Citegeist/1.0 (Zotero plugin; ${getMailto() || "no-mailto"})`,
+      },
+      responseType: "text",
+      timeout: OPENALEX_REQUEST_TIMEOUT_MS,
+    });
+  } catch (e) {
+    // Network-level failure (timeout, DNS, offline) — retry then bubble up.
+    if (attempt < OPENALEX_RETRY_DELAYS_MS.length) {
+      const delay = OPENALEX_RETRY_DELAYS_MS[attempt];
+      Zotero.debug(
+        `[Citegeist] Network error on ${label} (${normalizeError(e)}), retrying in ${delay}ms`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+      return fetchJson<T>(url, label, attempt + 1);
+    }
+    throw new OpenAlexNetworkError(`OpenAlex unreachable while fetching ${label}`, e);
+  }
 
-  // Retry with backoff on rate limiting
-  if (response.status === 429 && retries > 0) {
-    const delay = (3 - retries) * 2000; // 2s, 4s
-    Zotero.debug(`[Citegeist] Rate limited (429), retrying in ${delay}ms…`);
+  // Retry with backoff on rate limiting / transient 5xx.
+  if (
+    (response.status === 429 || response.status >= 500) &&
+    attempt < OPENALEX_RETRY_DELAYS_MS.length
+  ) {
+    const delay = OPENALEX_RETRY_DELAYS_MS[attempt];
+    Zotero.debug(`[Citegeist] ${response.status} on ${label}, retrying in ${delay}ms`);
     await new Promise((r) => setTimeout(r, delay));
-    return fetchJson<T>(url, retries - 1);
+    return fetchJson<T>(url, label, attempt + 1);
+  }
+
+  if (response.status === 404) {
+    // Let callers distinguish "not found" from other errors.
+    throw new OpenAlexNotFoundError(label);
   }
 
   if (response.status !== 200) {
-    throw new Error(`OpenAlex API error: ${response.status} for ${url}`);
+    throw new OpenAlexNetworkError(`OpenAlex ${response.status} while fetching ${label}`);
   }
 
   try {
     return JSON.parse(response.responseText) as T;
-  } catch {
-    throw new Error(`OpenAlex returned invalid JSON for ${url}`);
+  } catch (e) {
+    throw new OpenAlexNetworkError(`OpenAlex returned invalid JSON for ${label}`, e);
+  }
+}
+
+/** Thrown internally when OpenAlex responds 404. Callers convert to `null`. */
+class OpenAlexNotFoundError extends Error {
+  constructor(label: string) {
+    super(`OpenAlex 404: ${label}`);
+    this.name = "OpenAlexNotFoundError";
   }
 }
 
 /**
- * Normalize a DOI string: strip URL prefix, trim whitespace.
- * Encodes the DOI for safe use in URLs.
+ * Normalize a DOI string for safe use in an OpenAlex path segment.
+ * Handles URL prefixes (http/https, with or without `dx.`), the `doi:`
+ * scheme, mixed case, trailing slashes, and URL-encoded forward slashes.
  */
-function normalizeDOI(doi: string): string {
+export function normalizeDOI(doi: string): string {
   return doi
     .trim()
-    .replace(/^https?:\/\/doi\.org\//i, "")
-    .replace(/^doi:/i, "");
+    .replace(/^(?:https?:\/\/)?(?:dx\.)?doi\.org\//i, "")
+    .replace(/^doi:\s*/i, "")
+    .replace(/%2[Ff]/g, "/")
+    .replace(/\/+$/, "");
 }
 
 /** Full select fields for single-work lookups. */
@@ -162,10 +207,15 @@ const LIST_SELECT =
 
 /**
  * Look up a work by DOI.
+ *
+ * @param doi Raw DOI ("10.1234/foo"), URL, or `doi:` scheme — see
+ *            {@link normalizeDOI} for accepted forms.
+ * @returns The OpenAlex work, or `null` if the DOI is blank or the work
+ *          is not indexed on OpenAlex (404).
+ * @throws {@link OpenAlexNetworkError} when OpenAlex is unreachable,
+ *         rate-limiting persists past retries, or returns invalid JSON.
  */
-export async function getWorkByDOI(
-  doi: string,
-): Promise<OpenAlexWork | null> {
+export async function getWorkByDOI(doi: string): Promise<OpenAlexWork | null> {
   const cleanDOI = normalizeDOI(doi);
   if (!cleanDOI) return null;
 
@@ -175,15 +225,19 @@ export async function getWorkByDOI(
   });
 
   try {
-    return await rateLimitedFetch<OpenAlexWork>(url);
+    const work = await rateLimitedFetch<OpenAlexWork>(url, `work doi:${cleanDOI}`);
+    return normalizeWork(work);
   } catch (e) {
-    Zotero.debug(`[Citegeist] Failed to fetch work for DOI ${cleanDOI}: ${e}`);
-    return null;
+    if (e instanceof OpenAlexNotFoundError) return null;
+    // Surface network errors so UI can render a distinct message.
+    throw e;
   }
 }
 
 /**
- * Get works that cite a given work (by OpenAlex ID).
+ * Fetch works that cite a given work (pagination via OpenAlex cursor).
+ *
+ * @throws {@link OpenAlexNetworkError} on unreachable/5xx/invalid responses.
  */
 export async function getCitingWorks(
   openAlexId: string,
@@ -199,16 +253,17 @@ export async function getCitingWorks(
     cursor,
   });
 
-  return rateLimitedFetch<OpenAlexListResponse>(url);
+  return rateLimitedFetch<OpenAlexListResponse>(url, `citing works for ${shortId}`);
 }
 
 /**
- * Get works referenced by a given work.
- * Uses the `cited_by` filter which means "works whose reference list includes X"
- * — effectively returning X's references.
+ * Fetch the works cited by a given work.
  *
- * For papers with many references, this uses cursor pagination properly
- * since it's a single filter query, not a batch ID lookup.
+ * Uses the `cited_by` filter ("works whose reference list includes X"),
+ * which returns X's references with cursor pagination — reliable even
+ * when the reference list is very long.
+ *
+ * @throws {@link OpenAlexNetworkError} on unreachable/5xx/invalid responses.
  */
 export async function getReferencedWorks(
   parentOpenAlexId: string,
@@ -224,44 +279,80 @@ export async function getReferencedWorks(
     cursor,
   });
 
-  return rateLimitedFetch<OpenAlexListResponse>(url);
+  return rateLimitedFetch<OpenAlexListResponse>(url, `references for ${shortId}`);
 }
 
 /**
- * Reconstruct an abstract from OpenAlex's inverted index format.
- * The inverted index maps each word to its position(s) in the text.
+ * Reconstruct an abstract from OpenAlex's inverted index.
+ *
+ * Defends against malformed indices: non-finite or out-of-range positions
+ * are dropped, empty words are skipped, and the result is capped at
+ * {@link MAX_ABSTRACT_LENGTH} characters so a runaway index can't exhaust
+ * memory or blow up the UI.
  */
-export function reconstructAbstract(
-  invertedIndex: Record<string, number[]> | null,
-): string | null {
-  if (!invertedIndex) return null;
+export function reconstructAbstract(invertedIndex: Record<string, number[]> | null): string | null {
+  if (!invertedIndex || typeof invertedIndex !== "object") return null;
   const words: string[] = [];
+
   for (const [word, positions] of Object.entries(invertedIndex)) {
+    if (typeof word !== "string" || word.length === 0) continue;
+    if (!Array.isArray(positions)) continue;
     for (const pos of positions) {
+      if (
+        typeof pos !== "number" ||
+        !Number.isFinite(pos) ||
+        pos < 0 ||
+        pos > MAX_ABSTRACT_POSITION ||
+        !Number.isInteger(pos)
+      ) {
+        continue;
+      }
       words[pos] = word;
     }
   }
-  const text = words.filter((w) => w !== undefined).join(" ").trim();
-  return text || null;
+
+  const text = words
+    .filter((w) => w !== undefined)
+    .join(" ")
+    .trim();
+  if (!text) return null;
+  if (text.length > MAX_ABSTRACT_LENGTH) {
+    return text.slice(0, MAX_ABSTRACT_LENGTH);
+  }
+  return text;
 }
 
 /**
- * Look up a work by its OpenAlex ID (e.g., "W1234567890" or full URL).
- * Returns full data including abstract.
+ * Sanitize an OpenAlex work response so downstream code can assume
+ * required array/object fields are present.
  */
-export async function getWorkById(
-  openAlexId: string,
-): Promise<OpenAlexWork | null> {
+function normalizeWork(work: OpenAlexWork): OpenAlexWork {
+  if (!Array.isArray(work.authorships)) work.authorships = [];
+  if (!Array.isArray(work.counts_by_year)) work.counts_by_year = [];
+  if (!Array.isArray(work.referenced_works)) work.referenced_works = [];
+  return work;
+}
+
+/**
+ * Look up a work by its OpenAlex ID (e.g., "W1234567890" or the full URL).
+ * Returns full data including the inverted-index abstract.
+ *
+ * @returns The work, or `null` if not found (404).
+ * @throws {@link OpenAlexNetworkError} on unreachable/5xx/invalid responses.
+ */
+export async function getWorkById(openAlexId: string): Promise<OpenAlexWork | null> {
   const shortId = openAlexId.replace("https://openalex.org/", "");
   const url = buildUrl(`/works/${encodeURIComponent(shortId)}`, {
     select: FULL_SELECT,
   });
 
   try {
-    return await rateLimitedFetch<OpenAlexWork>(url);
+    const work = await rateLimitedFetch<OpenAlexWork>(url, `work ${shortId}`);
+    return normalizeWork(work);
   } catch (e) {
-    Zotero.debug(`[Citegeist] Failed to fetch work ${shortId}: ${e}`);
-    return null;
+    if (e instanceof OpenAlexNotFoundError) return null;
+    logError(`getWorkById(${shortId})`, e);
+    throw e;
   }
 }
 
@@ -287,9 +378,7 @@ const sourceStatsCache = new Map<string, OpenAlexSourceStats | null>();
  * Fetch summary stats for a source/journal by its OpenAlex source ID.
  * Returns null if the source doesn't exist or has no stats.
  */
-export async function getSourceStats(
-  sourceId: string,
-): Promise<OpenAlexSourceStats | null> {
+export async function getSourceStats(sourceId: string): Promise<OpenAlexSourceStats | null> {
   const shortId = sourceId.replace("https://openalex.org/", "");
   if (!shortId) return null;
 
@@ -310,7 +399,7 @@ export async function getSourceStats(
         h_index: number;
         i10_index: number;
       } | null;
-    }>(url);
+    }>(url, `source ${shortId}`);
 
     if (!data.summary_stats) {
       sourceStatsCache.set(shortId, null);
@@ -321,16 +410,17 @@ export async function getSourceStats(
       citedness2yr: data.summary_stats["2yr_mean_citedness"],
       hIndex: data.summary_stats.h_index,
       i10Index: data.summary_stats.i10_index,
-      issns: [
-        ...(data.issn_l ? [data.issn_l] : []),
-        ...(data.issn ?? []),
-      ],
+      issns: [...(data.issn_l ? [data.issn_l] : []), ...(data.issn ?? [])],
     };
     sourceStatsCache.set(shortId, result);
     return result;
   } catch (e) {
-    Zotero.debug(`[Citegeist] Failed to fetch source stats for ${shortId}: ${e}`);
-    sourceStatsCache.set(shortId, null);
+    if (e instanceof OpenAlexNotFoundError) {
+      sourceStatsCache.set(shortId, null);
+      return null;
+    }
+    // For network issues, don't poison the cache — let the next call retry.
+    logError(`getSourceStats(${shortId})`, e);
     return null;
   }
 }

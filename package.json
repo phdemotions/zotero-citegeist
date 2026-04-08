@@ -1,6 +1,6 @@
 {
   "name": "zotero-citegeist",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Citation intelligence for Zotero — powered by OpenAlex. See citation counts, explore citation networks, and add citing/cited works to your library.",
   "homepage": "https://github.com/phdemotions/zotero-citegeist",
   "author": "Josh Gonzales",
@@ -12,7 +12,11 @@
     "release": "bumpp --commit 'release: v%s' --tag 'v%s' --push",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
+    "lint:fix": "eslint --fix \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"*.{json,md}\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\""
   },
   "config": {
     "addonName": "Citegeist",
@@ -22,8 +26,13 @@
     "prefsPrefix": "extensions.zotero.citegeist"
   },
   "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
     "bumpp": "^9.9.0",
     "esbuild": "^0.24.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.2"
   },

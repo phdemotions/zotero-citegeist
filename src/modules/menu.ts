@@ -4,6 +4,7 @@
 
 import { fetchAndCacheItems } from "./citationService";
 import { showCitationNetwork } from "./citationNetwork";
+import { logError } from "./utils";
 
 const MENU_IDS = {
   fetchCitations: "citegeist-menu-fetch",
@@ -19,7 +20,9 @@ export function registerMenus(win: Window): void {
   const itemMenu = doc.getElementById("zotero-itemmenu");
   const collectionMenu = doc.getElementById("zotero-collectionmenu");
 
-  Zotero.debug(`[Citegeist] registerMenus: itemMenu=${!!itemMenu}, collectionMenu=${!!collectionMenu}`);
+  Zotero.debug(
+    `[Citegeist] registerMenus: itemMenu=${!!itemMenu}, collectionMenu=${!!collectionMenu}`,
+  );
 
   // Guard against double registration (startup + onMainWindowLoad can both fire)
   if (doc.getElementById(MENU_IDS.fetchCitations)) {
@@ -71,7 +74,9 @@ export function registerMenus(win: Window): void {
     citingItem.addEventListener("command", () => {
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
       if (items.length === 1) {
-        showCitationNetwork(items[0], "citing").catch((e) => Zotero.debug(`[Citegeist] ${e}`));
+        showCitationNetwork(items[0], "citing").catch((e) =>
+          logError("menu showCitationNetwork", e),
+        );
       }
     });
     itemMenu.appendChild(citingItem);
@@ -82,7 +87,9 @@ export function registerMenus(win: Window): void {
     refsItem.addEventListener("command", () => {
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
       if (items.length === 1) {
-        showCitationNetwork(items[0], "references").catch((e) => Zotero.debug(`[Citegeist] ${e}`));
+        showCitationNetwork(items[0], "references").catch((e) =>
+          logError("menu showCitationNetwork", e),
+        );
       }
     });
     itemMenu.appendChild(refsItem);
@@ -90,9 +97,8 @@ export function registerMenus(win: Window): void {
     // Hide citing/refs options when multiple items are selected (they only work on single items)
     itemMenu.addEventListener("popupshowing", () => {
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
-      const singleWithDOI = items.length === 1 &&
-        items[0].isRegularItem() &&
-        !!items[0].getField("DOI")?.trim();
+      const singleWithDOI =
+        items.length === 1 && items[0].isRegularItem() && !!items[0].getField("DOI")?.trim();
       citingItem.hidden = !singleWithDOI;
       refsItem.hidden = !singleWithDOI;
     });

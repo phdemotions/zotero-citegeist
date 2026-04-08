@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { formatAuthors, getSourceName, reconstructAbstract, type OpenAlexWork } from "../src/modules/openalex";
+import {
+  formatAuthors,
+  getSourceName,
+  reconstructAbstract,
+  normalizeDOI,
+  type OpenAlexWork,
+} from "../src/modules/openalex";
 
 function makeAuthorship(name: string) {
   return {
@@ -86,10 +92,7 @@ describe("formatAuthors", () => {
   });
 
   it("respects custom maxAuthors parameter", () => {
-    const authorships = [
-      makeAuthorship("Alice Smith"),
-      makeAuthorship("Bob Jones"),
-    ];
+    const authorships = [makeAuthorship("Alice Smith"), makeAuthorship("Bob Jones")];
     expect(formatAuthors(authorships, 1)).toBe("Alice Smith et al.");
   });
 
@@ -139,9 +142,82 @@ describe("reconstructAbstract", () => {
       love: [6],
       consumer: [8],
     };
-    expect(reconstructAbstract(index)).toBe(
-      "We study the effect of brand love the consumer",
-    );
+    expect(reconstructAbstract(index)).toBe("We study the effect of brand love the consumer");
+  });
+
+  it("skips empty-string keys", () => {
+    const index = { "": [0], hello: [1], world: [2] };
+    expect(reconstructAbstract(index)).toBe("hello world");
+  });
+
+  it("skips non-array position values", () => {
+    // Malformed upstream response — function must not throw.
+    const index = { hello: [0], bogus: "not-an-array" as unknown as number[] };
+    expect(reconstructAbstract(index)).toBe("hello");
+  });
+
+  it("skips non-integer / negative / NaN positions", () => {
+    const index = {
+      valid: [0],
+      skipFloat: [1.5 as number],
+      skipNeg: [-3],
+      skipNaN: [Number.NaN],
+      tail: [1],
+    };
+    expect(reconstructAbstract(index)).toBe("valid tail");
+  });
+
+  it("rejects absurdly large positions to cap memory use", () => {
+    const index = { hello: [0], bomb: [1e9] };
+    expect(reconstructAbstract(index)).toBe("hello");
+  });
+
+  it("caps final text length", () => {
+    const index: Record<string, number[]> = {};
+    for (let i = 0; i < 50_000; i++) index[`w${i}`] = [i];
+    const out = reconstructAbstract(index);
+    expect(out).not.toBeNull();
+    expect(out!.length).toBeLessThanOrEqual(100_000);
+  });
+});
+
+describe("normalizeDOI", () => {
+  it("returns a bare DOI unchanged", () => {
+    expect(normalizeDOI("10.1234/foo.bar")).toBe("10.1234/foo.bar");
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(normalizeDOI("  10.1234/foo  ")).toBe("10.1234/foo");
+  });
+
+  it("strips https://doi.org/ prefix", () => {
+    expect(normalizeDOI("https://doi.org/10.1038/nature12373")).toBe("10.1038/nature12373");
+  });
+
+  it("strips http:// prefix", () => {
+    expect(normalizeDOI("http://doi.org/10.1/x")).toBe("10.1/x");
+  });
+
+  it("strips dx.doi.org prefix", () => {
+    expect(normalizeDOI("https://dx.doi.org/10.1/y")).toBe("10.1/y");
+  });
+
+  it("strips case-insensitive doi: scheme", () => {
+    expect(normalizeDOI("DOI:10.1/z")).toBe("10.1/z");
+    expect(normalizeDOI("doi: 10.1/z")).toBe("10.1/z");
+  });
+
+  it("decodes %2F slashes", () => {
+    expect(normalizeDOI("10.1234%2Ffoo%2fbar")).toBe("10.1234/foo/bar");
+  });
+
+  it("strips trailing slashes", () => {
+    expect(normalizeDOI("10.1/x///")).toBe("10.1/x");
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(normalizeDOI("")).toBe("");
+    expect(normalizeDOI("   ")).toBe("");
   });
 });
 

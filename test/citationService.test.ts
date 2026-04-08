@@ -33,16 +33,14 @@ import { getWorkByDOI } from "../src/modules/openalex";
 
 const mockedGetWorkByDOI = vi.mocked(getWorkByDOI);
 
-function mockItem(overrides: {
-  isRegular?: boolean;
-  doi?: string;
-  extra?: string;
-} = {}) {
-  const {
-    isRegular = true,
-    doi = "10.1234/test",
-    extra = "",
-  } = overrides;
+function mockItem(
+  overrides: {
+    isRegular?: boolean;
+    doi?: string;
+    extra?: string;
+  } = {},
+) {
+  const { isRegular = true, doi = "10.1234/test", extra = "" } = overrides;
 
   return {
     id: 1,
@@ -75,12 +73,14 @@ function makeFakeWork() {
     },
     counts_by_year: [{ year: 2024, cited_by_count: 42 }],
     open_access: { is_oa: false, oa_status: "closed", oa_url: null },
-    authorships: [{
-      author_position: "first",
-      author: { id: "A1", display_name: "Test Author", orcid: null },
-      institutions: [],
-      is_corresponding: false,
-    }],
+    authorships: [
+      {
+        author_position: "first",
+        author: { id: "A1", display_name: "Test Author", orcid: null },
+        institutions: [],
+        is_corresponding: false,
+      },
+    ],
     primary_location: {
       source: { id: "S1", display_name: "Test Journal", issn_l: null, type: "journal" },
     },

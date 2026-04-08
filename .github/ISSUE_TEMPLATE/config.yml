@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Zotero Forums
+    url: https://forums.zotero.org/
+    about: For general Zotero questions unrelated to Citegeist.
+  - name: OpenAlex data questions
+    url: https://docs.openalex.org/
+    about: Citation counts, FWCI, and other metrics come from OpenAlex. Data issues are usually best reported upstream.

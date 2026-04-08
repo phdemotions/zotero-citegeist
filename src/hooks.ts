@@ -3,10 +3,7 @@
  * Called by bootstrap.js — manages startup, shutdown, and window events.
  */
 
-import {
-  registerCitationColumn,
-  unregisterCitationColumn,
-} from "./modules/citationColumn";
+import { registerCitationColumn, unregisterCitationColumn } from "./modules/citationColumn";
 import { registerCitationPane, unregisterCitationPane } from "./modules/citationPane";
 import { registerMenus, unregisterMenus } from "./modules/menu";
 import { clearSourceStatsCache } from "./modules/openalex";

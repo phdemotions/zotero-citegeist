@@ -6,13 +6,33 @@ import type { OpenAlexWork } from "../openalex";
 
 export type NetworkMode = "citing" | "references";
 
-export const MAX_RENDERED_RESULTS = 200;
-export const UNDO_TIMEOUT_MS = 3000;
+// Re-export so existing imports in this folder keep working.
+export { MAX_RENDERED_RESULTS, UNDO_TIMEOUT_MS } from "../../constants";
+
+/** Explicit lifecycle state so guards against closed-mid-load are obvious. */
+export type DialogPhase = "loading-skeleton" | "loading-data" | "ready" | "closed";
 
 /** Common surname prefixes that belong with the last name, not the first. */
 export const SURNAME_PREFIXES = new Set([
-  "van", "von", "de", "del", "della", "di", "da", "dos", "das", "du",
-  "la", "le", "el", "al", "bin", "ibn", "ben", "ter", "ten",
+  "van",
+  "von",
+  "de",
+  "del",
+  "della",
+  "di",
+  "da",
+  "dos",
+  "das",
+  "du",
+  "la",
+  "le",
+  "el",
+  "al",
+  "bin",
+  "ibn",
+  "ben",
+  "ter",
+  "ten",
 ]);
 
 export interface CollectionNode {
@@ -24,6 +44,8 @@ export interface CollectionNode {
 }
 
 export interface NetworkState {
+  /** Current dialog lifecycle phase (see {@link DialogPhase}). */
+  phase: DialogPhase;
   overlay: HTMLElement;
   dialog: HTMLElement;
   win: Window;

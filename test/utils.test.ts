@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { escapeHTML, safeParseInt, safeParseFloat } from "../src/modules/utils";
+import {
+  escapeHTML,
+  safeParseInt,
+  safeParseFloat,
+  normalizeError,
+  OpenAlexNetworkError,
+  rawHTML,
+  safeHTML,
+} from "../src/modules/utils";
 
 describe("escapeHTML", () => {
   it("escapes ampersands", () => {
@@ -96,5 +104,75 @@ describe("safeParseFloat", () => {
 
   it("parses negative floats", () => {
     expect(safeParseFloat("-1.5")).toBe(-1.5);
+  });
+});
+
+describe("normalizeError", () => {
+  it("extracts message from an Error instance", () => {
+    const err = new Error("boom");
+    const out = normalizeError(err);
+    expect(out).toContain("boom");
+  });
+
+  it("returns strings as-is", () => {
+    expect(normalizeError("plain message")).toBe("plain message");
+  });
+
+  it("stringifies plain objects", () => {
+    expect(normalizeError({ code: 500, msg: "x" })).toBe('{"code":500,"msg":"x"}');
+  });
+
+  it("handles null", () => {
+    expect(normalizeError(null)).toBe("null");
+  });
+
+  it("handles undefined", () => {
+    expect(normalizeError(undefined)).toBe("undefined");
+  });
+
+  it("falls back for values that cannot be JSON-serialized", () => {
+    const circ: Record<string, unknown> = {};
+    circ.self = circ;
+    // Should not throw; falls back to String()
+    expect(() => normalizeError(circ)).not.toThrow();
+    expect(typeof normalizeError(circ)).toBe("string");
+  });
+
+  it("normalizes an OpenAlexNetworkError", () => {
+    const err = new OpenAlexNetworkError("unreachable");
+    expect(normalizeError(err)).toContain("unreachable");
+    expect(err.name).toBe("OpenAlexNetworkError");
+  });
+});
+
+describe("safeHTML tagged template", () => {
+  it("escapes interpolated values by default", () => {
+    const userInput = "<script>alert(1)</script>";
+    const out = safeHTML`<p>${userInput}</p>`;
+    expect(out).toBe("<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>");
+  });
+
+  it("escapes quotes in attribute values", () => {
+    const title = `a "quoted" value`;
+    const out = safeHTML`<a title="${title}">x</a>`;
+    expect(out).toBe(`<a title="a &quot;quoted&quot; value">x</a>`);
+  });
+
+  it("leaves rawHTML() values unescaped", () => {
+    const safe = rawHTML("<strong>bold</strong>");
+    const out = safeHTML`<p>${safe}</p>`;
+    expect(out).toBe("<p><strong>bold</strong></p>");
+  });
+
+  it("renders null and undefined as empty strings", () => {
+    expect(safeHTML`<p>${null}${undefined}</p>`).toBe("<p></p>");
+  });
+
+  it("coerces numbers to strings", () => {
+    expect(safeHTML`<p>${42}</p>`).toBe("<p>42</p>");
+  });
+
+  it("handles templates with no interpolations", () => {
+    expect(safeHTML`<p>hello</p>`).toBe("<p>hello</p>");
   });
 });

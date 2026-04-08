@@ -1,0 +1,81 @@
+name: Bug report
+description: Report something that isn't working in Citegeist
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please fill out the fields below so we can reproduce the problem.
+
+  - type: input
+    id: citegeist-version
+    attributes:
+      label: Citegeist version
+      description: "Find this in Tools → Add-ons → Citegeist"
+      placeholder: e.g. 1.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: zotero-version
+    attributes:
+      label: Zotero version
+      description: "Help → About Zotero"
+      placeholder: e.g. 7.0.11 or 8.0.0-beta.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do, step by step?
+      placeholder: |
+        1. Open Zotero
+        2. Select an item with a DOI
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: If you see an error, paste it here. Debug output from Zotero's Help → Debug Output Logging is very helpful.
+    validations:
+      required: true
+
+  - type: input
+    id: doi
+    attributes:
+      label: DOI (if relevant)
+      description: If the bug is about a specific paper, include its DOI so we can reproduce it.
+      placeholder: e.g. 10.1038/nature12373
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow this project's [Code of Conduct](../blob/main/CODE_OF_CONDUCT.md)
+          required: true

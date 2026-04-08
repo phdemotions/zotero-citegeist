@@ -88,9 +88,10 @@ function writeExtra(
  * Combined read: returns citation count + staleness in one parse.
  * Used by the column dataProvider to avoid double-parsing.
  */
-export function getCachedCountAndStaleness(
-  item: _ZoteroTypes.Item,
-): { count: number | null; isStale: boolean } {
+export function getCachedCountAndStaleness(item: _ZoteroTypes.Item): {
+  count: number | null;
+  isStale: boolean;
+} {
   const { citegeistFields } = parseExtra(item);
   const countStr = citegeistFields.get(`${PREFIX}citedByCount`);
   const count = countStr !== undefined ? safeParseInt(countStr) : null;
@@ -123,29 +124,33 @@ export function getCachedMetrics(item: _ZoteroTypes.Item): AllMetrics {
   const sourceId = citegeistFields.get(`${PREFIX}sourceId`) || null;
   const citedness2yr = safeParseFloat(citegeistFields.get(`${PREFIX}citedness2yr`));
   const journalHIndex = safeParseInt(citegeistFields.get(`${PREFIX}journalHIndex`)) || null;
-  const issnRaw = citegeistFields.get(`${PREFIX}sourceISSNs`) || citegeistFields.get(`${PREFIX}issnL`) || "";
+  const issnRaw =
+    citegeistFields.get(`${PREFIX}sourceISSNs`) || citegeistFields.get(`${PREFIX}issnL`) || "";
   const sourceISSNs = issnRaw ? issnRaw.split(",").filter(Boolean) : [];
-  return { count, fwci, percentile, isStale: isLastFetchedStale(citegeistFields), sourceId, citedness2yr, journalHIndex, sourceISSNs };
+  return {
+    count,
+    fwci,
+    percentile,
+    isStale: isLastFetchedStale(citegeistFields),
+    sourceId,
+    citedness2yr,
+    journalHIndex,
+    sourceISSNs,
+  };
 }
 
-export function getCachedCitationCount(
-  item: _ZoteroTypes.Item,
-): number | null {
+export function getCachedCitationCount(item: _ZoteroTypes.Item): number | null {
   const { citegeistFields } = parseExtra(item);
   const val = citegeistFields.get(`${PREFIX}citedByCount`);
   return val !== undefined ? safeParseInt(val) : null;
 }
 
-export function getCachedOpenAlexId(
-  item: _ZoteroTypes.Item,
-): string | null {
+export function getCachedOpenAlexId(item: _ZoteroTypes.Item): string | null {
   const { citegeistFields } = parseExtra(item);
   return citegeistFields.get(`${PREFIX}openAlexId`) || null;
 }
 
-export function getCachedData(
-  item: _ZoteroTypes.Item,
-): CachedData | null {
+export function getCachedData(item: _ZoteroTypes.Item): CachedData | null {
   const { citegeistFields } = parseExtra(item);
   const openAlexId = citegeistFields.get(`${PREFIX}openAlexId`);
   if (!openAlexId) return null;
@@ -231,8 +236,10 @@ function isLastFetchedStale(citegeistFields: Map<string, string>): boolean {
   if (!lastFetched) return true;
 
   const rawLifetime = Zotero.Prefs.get("extensions.zotero.citegeist.cacheLifetimeDays");
-  const lifetimeDays = (typeof rawLifetime === "number" && Number.isFinite(rawLifetime) && rawLifetime > 0)
-    ? rawLifetime : 7;
+  const lifetimeDays =
+    typeof rawLifetime === "number" && Number.isFinite(rawLifetime) && rawLifetime > 0
+      ? rawLifetime
+      : 7;
   const fetchedTime = new Date(lastFetched).getTime();
   if (Number.isNaN(fetchedTime)) return true; // corrupted date → treat as stale
   const ageMs = Date.now() - fetchedTime;

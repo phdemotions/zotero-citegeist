@@ -8,13 +8,13 @@ This document explains the key architectural decisions behind Citegeist and the 
 
 Citegeist needed a citation data source that met three constraints: free to use, open to anyone, and requires no authentication. Several options exist:
 
-| Source | Free | No Auth | Field-Normalized Metrics | Open Data |
-|--------|------|---------|--------------------------|-----------|
-| **OpenAlex** | Yes | Yes | FWCI + percentile | Yes (CC0) |
-| Crossref | Yes | Yes | No | Yes |
-| Semantic Scholar | Yes | API key recommended | No | Partial |
-| Scopus / Web of Science | No | No | Yes | No |
-| Google Scholar | Free to browse | No API | No | No |
+| Source                  | Free           | No Auth             | Field-Normalized Metrics | Open Data |
+| ----------------------- | -------------- | ------------------- | ------------------------ | --------- |
+| **OpenAlex**            | Yes            | Yes                 | FWCI + percentile        | Yes (CC0) |
+| Crossref                | Yes            | Yes                 | No                       | Yes       |
+| Semantic Scholar        | Yes            | API key recommended | No                       | Partial   |
+| Scopus / Web of Science | No             | No                  | Yes                      | No        |
+| Google Scholar          | Free to browse | No API              | No                       | No        |
 
 OpenAlex is the only source that provides field-weighted citation impact (FWCI) and percentile rankings through a free, unauthenticated API. It indexes over 250 million works, covers journal-level metadata (2-year mean citedness, h-index, ISSNs), and is licensed CC0.
 

@@ -11,9 +11,10 @@ import {
   getSourceName,
   type OpenAlexWork,
 } from "../openalex";
-import { escapeHTML, safeInnerHTML } from "../utils";
+import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../utils";
 import { MAX_RENDERED_RESULTS, type NetworkState } from "./types";
 import { getDefaultCollectionName } from "./actions";
+import { DEFAULT_NETWORK_PAGE_SIZE } from "../../constants";
 
 // ────────────────────────────────────────────────────────
 // Loading & rendering
@@ -35,12 +36,18 @@ export async function loadResults(state: NetworkState, append = false): Promise<
   }
 
   try {
-    const perPage = (Zotero.Prefs.get("extensions.zotero.citegeist.networkPageSize") as number) || 25;
-    const response = state.mode === "citing"
-      ? await getCitingWorks(state.work.id, state.cursor, perPage)
-      : await getReferencedWorks(state.work.id, state.cursor, perPage);
+    const perPage =
+      (Zotero.Prefs.get("extensions.zotero.citegeist.networkPageSize") as number) ||
+      DEFAULT_NETWORK_PAGE_SIZE;
+    const response =
+      state.mode === "citing"
+        ? await getCitingWorks(state.work.id, state.cursor, perPage)
+        : await getReferencedWorks(state.work.id, state.cursor, perPage);
 
-    if (gen !== state.generation) { state.loading = false; return; }
+    if (gen !== state.generation || state.phase === "closed") {
+      state.loading = false;
+      return;
+    }
 
     if (append) {
       state.results.push(...response.results);
@@ -57,9 +64,19 @@ export async function loadResults(state: NetworkState, append = false): Promise<
     const searchInput = state.dialog.querySelector(".cg-search-input") as HTMLInputElement;
     renderResults(state, searchInput?.value || "");
   } catch (e) {
-    if (gen !== state.generation) { state.loading = false; return; }
-    Zotero.debug(`[Citegeist] Error loading results: ${e}`);
-    safeInnerHTML(body, `<div class="cg-empty">Error loading results. Please try again.</div>`);
+    if (gen !== state.generation || state.phase === "closed") {
+      state.loading = false;
+      return;
+    }
+    logError("loadResults", e);
+    const msg =
+      e instanceof OpenAlexNetworkError
+        ? `<div class="cg-empty">
+          <div class="cg-empty-title">OpenAlex is unavailable</div>
+          Try again in a few minutes.
+        </div>`
+        : `<div class="cg-empty">Error loading results. Please try again.</div>`;
+    safeInnerHTML(body, msg);
   }
 
   state.loading = false;
@@ -73,18 +90,22 @@ export function renderResults(state: NetworkState, filter = ""): void {
 
   if (filter) {
     const lower = filter.toLowerCase();
-    results = results.filter((w) =>
-      w.display_name?.toLowerCase().includes(lower) ||
-      w.title?.toLowerCase().includes(lower) ||
-      w.authorships?.some((a) => a.author.display_name.toLowerCase().includes(lower)),
+    results = results.filter(
+      (w) =>
+        w.display_name?.toLowerCase().includes(lower) ||
+        w.title?.toLowerCase().includes(lower) ||
+        w.authorships?.some((a) => a.author.display_name.toLowerCase().includes(lower)),
     );
   }
 
   results = [...results].sort((a, b) => {
     switch (state.sortBy) {
-      case "year-desc": return (b.publication_year || 0) - (a.publication_year || 0);
-      case "year-asc": return (a.publication_year || 0) - (b.publication_year || 0);
-      default: return (b.cited_by_count || 0) - (a.cited_by_count || 0);
+      case "year-desc":
+        return (b.publication_year || 0) - (a.publication_year || 0);
+      case "year-asc":
+        return (a.publication_year || 0) - (b.publication_year || 0);
+      default:
+        return (b.cited_by_count || 0) - (a.cited_by_count || 0);
     }
   });
 
@@ -113,7 +134,8 @@ export function renderResults(state: NetworkState, filter = ""): void {
     const titleText = work.display_name || work.title || "Untitled";
     const yearStr = work.publication_year ? String(work.publication_year) : "n.d.";
     const count = work.cited_by_count || 0;
-    const countClass = count >= 1000 ? "cg-count-high" : count >= 50 ? "cg-count-medium" : "cg-count-low";
+    const countClass =
+      count >= 1000 ? "cg-count-high" : count >= 50 ? "cg-count-medium" : "cg-count-low";
 
     // Determine button state
     const isUndo = state.undoTimers.has(workId);
@@ -150,9 +172,12 @@ export function renderResults(state: NetworkState, filter = ""): void {
     // Badges
     let badges = "";
     if (!cleanDOI) badges += `<span class="cg-result-badge cg-badge-no-doi">No DOI</span>`;
-    if (work.open_access?.is_oa) badges += `<span class="cg-result-badge cg-badge-oa">Open Access</span>`;
-    if (work.is_retracted) badges += `<span class="cg-result-badge cg-badge-retracted">Retracted</span>`;
-    if (showAsInLibrary) badges += `<span class="cg-result-badge cg-badge-in-library">In Library</span>`;
+    if (work.open_access?.is_oa)
+      badges += `<span class="cg-result-badge cg-badge-oa">Open Access</span>`;
+    if (work.is_retracted)
+      badges += `<span class="cg-result-badge cg-badge-retracted">Retracted</span>`;
+    if (showAsInLibrary)
+      badges += `<span class="cg-result-badge cg-badge-in-library">In Library</span>`;
 
     const expandLabel = isExpanded ? "Hide abstract" : "Abstract";
     const expandChevron = isExpanded ? "\u25BE" : "\u25B8";
@@ -162,10 +187,12 @@ export function renderResults(state: NetworkState, filter = ""): void {
           tabindex="0" aria-expanded="${isExpanded}">
         <div class="cg-result-content">
           <div class="cg-result-title">
-            ${cleanDOI
-              ? `<a href="https://doi.org/${escapeHTML(cleanDOI)}" title="Open article in browser"
+            ${
+              cleanDOI
+                ? `<a href="https://doi.org/${escapeHTML(cleanDOI)}" title="Open article in browser"
                     aria-label="Open ${escapeHTML(titleText)} in browser">${escapeHTML(titleText)}</a>`
-              : `<span class="cg-no-link" title="No DOI available — cannot link to article">${escapeHTML(titleText)}</span>`}
+                : `<span class="cg-no-link" title="No DOI available — cannot link to article">${escapeHTML(titleText)}</span>`
+            }
           </div>
           <div class="cg-result-meta">
             <div class="cg-result-meta-authors">${escapeHTML(authors)}</div>
@@ -196,7 +223,11 @@ export function renderResults(state: NetworkState, filter = ""): void {
   safeInnerHTML(body, html);
 }
 
-export function buildExpandedHTML(state: NetworkState, workId: string, _work: OpenAlexWork): string {
+export function buildExpandedHTML(
+  state: NetworkState,
+  workId: string,
+  _work: OpenAlexWork,
+): string {
   const cached = state.abstractCache.get(workId);
   const hasCached = state.abstractCache.has(workId);
 

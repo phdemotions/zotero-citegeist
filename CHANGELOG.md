@@ -5,6 +5,34 @@ All notable changes to Citegeist will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] — 2026-04-07
+
+### Added
+
+- Graceful network-error handling: UI now distinguishes "OpenAlex is currently unavailable" from "work not found on OpenAlex", so transient outages no longer look like permanent missing data
+- `src/constants.ts` — every tunable (rate limit, cache lifetimes, timeouts, page sizes, abstract safety caps) is now declared in one place
+- ESLint + Prettier configuration with `lint`, `lint:fix`, `format`, and `format:check` scripts
+- Dependabot config for weekly npm and monthly GitHub Actions updates
+- GitHub issue forms (bug report, feature request) and a pull-request template
+- Node 22 added to the CI matrix (in addition to Node 20)
+- `BACKLOG.md` — curated roadmap of planned enhancements
+- Expanded test coverage: `normalizeError`, `normalizeDOI`, hardened `reconstructAbstract` (malformed input, absurd positions, length cap), and the `safeHTML` tagged template
+
+### Changed
+
+- Citation pane buttons are now real `<button>` elements with `:focus-visible` outlines, replacing div-based click targets
+- `reconstructAbstract` validates the OpenAlex inverted index more strictly: skips empty keys, non-array positions, non-integer and out-of-range offsets, and caps final abstract length
+- `normalizeDOI` now handles `http://`, `https://`, `dx.doi.org`, `doi:` scheme, `%2F` encoding, and trailing slashes
+- `citationNetwork` dialog uses an explicit phase state machine (`loading-skeleton` → `loading-data` → `ready` → `closed`) to eliminate races when the user closes the dialog mid-fetch
+- All caught errors now flow through `normalizeError()` / `logError()` so stack traces survive in Zotero's debug output
+- README intro rewritten in plain researcher language
+- CONTRIBUTING.md expanded with dev-install instructions, full command reference, pre-PR checklist, and architecture overview
+
+### Fixed
+
+- `normalizeError(undefined)` previously returned `undefined` despite its `string` return type — now returns `"undefined"`
+- OpenAlex 5xx responses are now retried instead of surfacing immediately as hard errors
+
 ## [1.0.0] — 2026-04-05
 
 ### Added
@@ -29,4 +57,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[1.0.1]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.1
 [1.0.0]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.0

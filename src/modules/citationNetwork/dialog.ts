@@ -15,7 +15,8 @@
  */
 
 import { getWorkByDOI } from "../openalex";
-import { escapeHTML, safeInnerHTML } from "../utils";
+import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../utils";
+import { SEARCH_DEBOUNCE_MS, INFINITE_SCROLL_THRESHOLD_PX } from "../../constants";
 import type { NetworkMode, NetworkState } from "./types";
 import { getDialogCSS } from "./styles";
 import { loadResults, renderResults, toggleExpanded } from "./results";
@@ -42,12 +43,20 @@ export async function showCitationNetwork(
 
   const doi = item.getField("DOI");
   if (!doi || !doi.trim()) {
-    Services.prompt.alert(null, "Citegeist", "This item has no DOI. Citation network requires a DOI.");
+    Services.prompt.alert(
+      null,
+      "Citegeist",
+      "This item has no DOI. Citation network requires a DOI.",
+    );
     return;
   }
 
   if (activeDialog) {
-    try { activeDialog.remove(); } catch { /* already gone */ }
+    try {
+      activeDialog.remove();
+    } catch {
+      /* already gone */
+    }
     activeDialog = null;
   }
 
@@ -111,36 +120,72 @@ export async function showCitationNetwork(
   // Close on Escape/backdrop while loading
   const earlyClose = (e: Event) => {
     if ((e as KeyboardEvent).key === "Escape" || e.target === overlay) {
-      try { overlay.remove(); } catch { /* gone */ }
+      try {
+        overlay.remove();
+      } catch {
+        /* gone */
+      }
       if (activeDialog === overlay) activeDialog = null;
     }
   };
   overlay.addEventListener("keydown", earlyClose);
   overlay.addEventListener("click", earlyClose);
 
+  // Dialog lifecycle is tracked via an external phase variable until the
+  // full state object exists. Guards below early-return when phase flips to
+  // "closed" mid-await.
+  let phase: "loading-skeleton" | "loading-data" | "ready" | "closed" = "loading-skeleton";
+  const markClosed = () => {
+    phase = "closed";
+  };
+  const closedBeforeReady = () => phase === "closed" || activeDialog !== overlay;
+
   // Fetch work + existing DOIs in parallel (user sees skeleton)
+  phase = "loading-data";
   const allCollections = buildCollectionTree();
   const defaultCollectionIds = new Set<number>();
   try {
     const zp = Zotero.getActiveZoteroPane();
     const currentCol = zp?.getSelectedCollection?.();
     if (currentCol) defaultCollectionIds.add(currentCol.id);
-  } catch { /* library root */ }
+  } catch {
+    /* library root */
+  }
 
-  const [work, existingDOIs] = await Promise.all([
-    getWorkByDOI(doi),
-    getExistingDOIs(),
-  ]);
+  let work;
+  let existingDOIs;
+  try {
+    [work, existingDOIs] = await Promise.all([getWorkByDOI(doi), getExistingDOIs()]);
+  } catch (e) {
+    if (closedBeforeReady()) return;
+    logError("showCitationNetwork load", e);
+    if (body) {
+      const msg =
+        e instanceof OpenAlexNetworkError
+          ? `<div class="cg-empty">
+            <div class="cg-empty-title">OpenAlex is unavailable</div>
+            Could not reach the citation service. Try again in a few minutes.
+          </div>`
+          : `<div class="cg-empty">
+            <div class="cg-empty-title">Something went wrong</div>
+            An unexpected error occurred while loading citations.
+          </div>`;
+      safeInnerHTML(body, msg);
+    }
+    return;
+  }
 
-  // Check if dialog was closed during loading
-  if (activeDialog !== overlay) return;
+  if (closedBeforeReady()) return;
 
   if (!work) {
     if (body) {
-      safeInnerHTML(body, `<div class="cg-empty">
+      safeInnerHTML(
+        body,
+        `<div class="cg-empty">
         <div class="cg-empty-title">Not found on OpenAlex</div>
         This work could not be found. It may not be indexed yet.
-      </div>`);
+      </div>`,
+      );
     }
     return;
   }
@@ -148,9 +193,18 @@ export async function showCitationNetwork(
   // Remove early close handlers, bind full event set
   overlay.removeEventListener("keydown", earlyClose);
   overlay.removeEventListener("click", earlyClose);
+  // Ensure close handlers update the phase variable the closures above use.
+  overlay.addEventListener("citegeist:dialog-closed", markClosed as EventListener);
+
+  phase = "ready";
 
   const state: NetworkState = {
-    overlay, dialog, win, work, mode,
+    phase: "ready",
+    overlay,
+    dialog,
+    win,
+    work,
+    mode,
     results: [],
     cursor: "*",
     hasMore: true,
@@ -242,11 +296,21 @@ export function buildDialogHTML(title: string): string {
 // ────────────────────────────────────────────────────────
 
 export function closeDialog(state: NetworkState): void {
+  state.phase = "closed";
   if (state.searchTimeout) clearTimeout(state.searchTimeout);
   // Clear all undo timers
   for (const timer of state.undoTimers.values()) clearTimeout(timer);
   state.undoTimers.clear();
-  try { state.overlay.remove(); } catch { /* already gone */ }
+  try {
+    state.overlay.dispatchEvent(new Event("citegeist:dialog-closed"));
+  } catch {
+    // Event dispatch can throw in rare XUL contexts — safe to ignore.
+  }
+  try {
+    state.overlay.remove();
+  } catch {
+    /* already gone */
+  }
   if (activeDialog === state.overlay) activeDialog = null;
 }
 
@@ -316,7 +380,7 @@ export function bindDialogEvents(state: NetworkState): void {
     state.searchTimeout = setTimeout(() => {
       state.searchTimeout = null;
       renderResults(state, searchInput.value);
-    }, 200);
+    }, SEARCH_DEBOUNCE_MS);
   });
 
   // Sort
@@ -336,8 +400,14 @@ export function bindDialogEvents(state: NetworkState): void {
     closeOpenPickers(state, target);
 
     // Title link -> open article (use localName for XUL compat -- tagName case varies)
-    const link = target.closest(".cg-result-title") ? target.closest("[href]") as HTMLAnchorElement : null;
-    if (!link && (target.localName === "a" || target.tagName === "A") && target.closest(".cg-result-title")) {
+    const link = target.closest(".cg-result-title")
+      ? (target.closest("[href]") as HTMLAnchorElement)
+      : null;
+    if (
+      !link &&
+      (target.localName === "a" || target.tagName === "A") &&
+      target.closest(".cg-result-title")
+    ) {
       // Direct click on <a> -- also handle in case closest("[href]") fails in XUL
       e.preventDefault();
       e.stopPropagation();
@@ -397,7 +467,10 @@ export function bindDialogEvents(state: NetworkState): void {
 
     // Button activation
     if (ke.key === "Enter" || ke.key === " ") {
-      if (target.classList.contains("cg-split-main") || target.classList.contains("cg-split-arrow")) {
+      if (
+        target.classList.contains("cg-split-main") ||
+        target.classList.contains("cg-split-arrow")
+      ) {
         ke.preventDefault();
         target.click();
         return;
@@ -413,11 +486,12 @@ export function bindDialogEvents(state: NetworkState): void {
         if (items.length === 0) return;
         let idx = -1;
         if (row) {
-          items.forEach((el, i) => { if (el === row) idx = i; });
+          items.forEach((el, i) => {
+            if (el === row) idx = i;
+          });
         }
-        const next = ke.key === "ArrowDown"
-          ? Math.min(idx + 1, items.length - 1)
-          : Math.max(idx - 1, 0);
+        const next =
+          ke.key === "ArrowDown" ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0);
         (items[next] as HTMLElement).focus();
         return;
       }
@@ -433,9 +507,9 @@ export function bindDialogEvents(state: NetworkState): void {
 
   // Infinite scroll
   body?.addEventListener("scroll", async () => {
-    if (state.loading || !state.hasMore) return;
+    if (state.loading || !state.hasMore || state.phase === "closed") return;
     const scrollBottom = body.scrollHeight - body.scrollTop - body.clientHeight;
-    if (scrollBottom < 100) await loadResults(state, true);
+    if (scrollBottom < INFINITE_SCROLL_THRESHOLD_PX) await loadResults(state, true);
   });
 
   // Focus trap -- keep Tab within dialog
@@ -448,7 +522,12 @@ export function bindDialogEvents(state: NetworkState): void {
     if (focusable.length === 0) return;
     const first = focusable[0] as HTMLElement;
     const last = focusable[focusable.length - 1] as HTMLElement;
-    if (ke.shiftKey && (dialog.ownerDocument.activeElement === first || dialog.contains(dialog.ownerDocument.activeElement) && dialog.ownerDocument.activeElement === first)) {
+    if (
+      ke.shiftKey &&
+      (dialog.ownerDocument.activeElement === first ||
+        (dialog.contains(dialog.ownerDocument.activeElement) &&
+          dialog.ownerDocument.activeElement === first))
+    ) {
       ke.preventDefault();
       last.focus();
     } else if (!ke.shiftKey && dialog.ownerDocument.activeElement === last) {

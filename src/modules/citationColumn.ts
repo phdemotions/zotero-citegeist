@@ -15,6 +15,14 @@ import { getCachedMetrics, type AllMetrics } from "./cache";
 import { fetchAndCacheItem } from "./citationService";
 import { lookupRanking, RANKING_VERSIONS, type JournalRanking } from "../data/journalRankings";
 import { getCachedSourceISSNs } from "./openalex";
+import { logError } from "./utils";
+import {
+  AUTO_FETCH_PREF_TTL_MS,
+  FETCH_BATCH_DELAY_MS,
+  FETCH_BATCH_SIZE,
+  FETCH_QUEUE_DEBOUNCE_MS,
+  MAX_ATTEMPTED_FETCH_CACHE,
+} from "../constants";
 
 // Column data keys
 const COL_CITATIONS = "citegeist-citation-count";
@@ -28,12 +36,16 @@ const COL_ABDC = "citegeist-abdc";
 const COL_AJG = "citegeist-ajg";
 
 const ALL_COLUMNS = [
-  COL_CITATIONS, COL_FWCI, COL_PERCENTILE,
-  COL_CITEDNESS, COL_HINDEX,
-  COL_UTD24, COL_FT50, COL_ABDC, COL_AJG,
+  COL_CITATIONS,
+  COL_FWCI,
+  COL_PERCENTILE,
+  COL_CITEDNESS,
+  COL_HINDEX,
+  COL_UTD24,
+  COL_FT50,
+  COL_ABDC,
+  COL_AJG,
 ];
-
-const MAX_ATTEMPTED_CACHE = 10000;
 
 let registered = false;
 let fetchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -45,23 +57,21 @@ const fetchAttempted = new Set<number>();
  * Per-item metrics cache to avoid re-parsing the Extra field N times
  * (once per column) during a single render cycle.
  */
-let metricsCache = new Map<number, AllMetrics | null>();
+const metricsCache = new Map<number, AllMetrics | null>();
 
 /**
  * Per-item ranking cache. Resolved from ISSN on the Zotero item
  * against the bundled ranking table. No API calls.
  */
-let rankingCache = new Map<number, JournalRanking | null | undefined>();
+const rankingCache = new Map<number, JournalRanking | null | undefined>();
 
 let autoFetchCached: boolean | null = null;
 let autoFetchCacheTime = 0;
 
 function getAutoFetch(): boolean {
   const now = Date.now();
-  if (autoFetchCached === null || now - autoFetchCacheTime > 5000) {
-    autoFetchCached = Zotero.Prefs.get(
-      "extensions.zotero.citegeist.autoFetch",
-    ) as boolean;
+  if (autoFetchCached === null || now - autoFetchCacheTime > AUTO_FETCH_PREF_TTL_MS) {
+    autoFetchCached = Zotero.Prefs.get("extensions.zotero.citegeist.autoFetch") as boolean;
     autoFetchCacheTime = now;
   }
   return autoFetchCached;
@@ -84,7 +94,11 @@ function getMetricsAndMaybeQueue(item: _ZoteroTypes.Item): AllMetrics | null {
   const metrics = getCachedMetrics(item);
   metricsCache.set(item.id, metrics);
 
-  if (getAutoFetch() && (metrics.count === null || metrics.isStale) && !fetchAttempted.has(item.id)) {
+  if (
+    getAutoFetch() &&
+    (metrics.count === null || metrics.isStale) &&
+    !fetchAttempted.has(item.id)
+  ) {
     queueFetch(item.id);
   }
 
@@ -324,7 +338,7 @@ export function unregisterCitationColumn(): void {
 function queueFetch(itemId: number): void {
   fetchQueue.add(itemId);
   if (!fetchTimer) {
-    fetchTimer = setTimeout(processFetchQueue, 500);
+    fetchTimer = setTimeout(processFetchQueue, FETCH_QUEUE_DEBOUNCE_MS);
   }
 }
 
@@ -336,17 +350,14 @@ async function processFetchQueue(): Promise<void> {
   const ids = Array.from(fetchQueue);
   fetchQueue.clear();
 
-  if (fetchAttempted.size > MAX_ATTEMPTED_CACHE) {
+  if (fetchAttempted.size > MAX_ATTEMPTED_FETCH_CACHE) {
     fetchAttempted.clear();
   }
 
-  const BATCH_SIZE = 2;
-  const BATCH_DELAY = 500;
-
-  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+  for (let i = 0; i < ids.length; i += FETCH_BATCH_SIZE) {
     if (!registered) break;
 
-    const batch = ids.slice(i, i + BATCH_SIZE);
+    const batch = ids.slice(i, i + FETCH_BATCH_SIZE);
     await Promise.all(
       batch.map(async (id) => {
         fetchAttempted.add(id);
@@ -356,13 +367,13 @@ async function processFetchQueue(): Promise<void> {
             await fetchAndCacheItem(item as _ZoteroTypes.Item);
           }
         } catch (e) {
-          Zotero.debug(`[Citegeist] Failed to fetch for item ${id}: ${e}`);
+          logError(`processFetchQueue item ${id}`, e);
         }
       }),
     );
 
-    if (i + BATCH_SIZE < ids.length) {
-      await new Promise((r) => setTimeout(r, BATCH_DELAY));
+    if (i + FETCH_BATCH_SIZE < ids.length) {
+      await new Promise((r) => setTimeout(r, FETCH_BATCH_DELAY_MS));
     }
   }
 
@@ -379,6 +390,6 @@ async function processFetchQueue(): Promise<void> {
   }
 
   if (fetchQueue.size > 0 && !fetchTimer && registered) {
-    fetchTimer = setTimeout(processFetchQueue, 500);
+    fetchTimer = setTimeout(processFetchQueue, FETCH_QUEUE_DEBOUNCE_MS);
   }
 }
