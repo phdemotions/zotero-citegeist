@@ -1,7 +1,7 @@
 # Citegeist — Status
 
 > **Last Updated:** 2026-04-08
-> **Phase:** Post-v1.0.0 — Quality & JOSS Preparation
+> **Phase:** Post-v1.0.1 — Design & Feature Polish
 > **Build:** Clean
 
 ---
@@ -10,9 +10,9 @@
 
 | Attribute | Value |
 |-----------|-------|
-| **Version** | 1.0.1 |
-| **Build Status** | Clean (113 tests passing, typecheck clean, XPI 25.5 KB) |
-| **Open Issues** | P0: 0, P1: 0, P2: 3, P3: 4 |
+| **Version** | 1.0.2 |
+| **Build Status** | Clean (113 tests passing, typecheck clean, XPI 25.8 KB) |
+| **Open Issues** | P0: 0, P1: 0, P2: 3, P3: 3 |
 | **Stack** | TypeScript, esbuild, vitest, Zotero 7/8 bootstrap API |
 | **Data Source** | OpenAlex (free, unauthenticated, CC0) |
 | **Distribution** | GitHub Releases → auto-update via `release` floating tag |
@@ -22,6 +22,26 @@
 ## In Progress
 
 *None currently.*
+
+---
+
+## What's Done (v1.0.2 — 2026-04-08)
+
+### Design polish + FWCI/percentile sort
+
+Applied Opus Vita family design language (sage accent, ink-ramp neutrals, Slate dark palette) across the citation pane and network dialog. Added FWCI and percentile sort to the network browser.
+
+**Design (`styles.ts`, `citationPane.ts`):**
+- Sage accent (`#8FAD9F`) replaces blue throughout; ink-ramp neutrals replace macOS grey system colours
+- Dialog background is now `#141D18` (family Slate palette), distinct from Zotero's chrome
+- Citation pane buttons redesigned as equal-width ghost/outline buttons with sage accent
+- All button hover/badge colours hardcoded to defeat Zotero CSS variable overrides (`--accent-blue` etc.)
+- Open Access badge contrast bumped to WCAG AA; tab hit targets meet WCAG 2.5.8
+
+**Features (`openalex.ts`, `dialog.ts`, `results.ts`):**
+- `fwci` and `citation_normalized_percentile` added to `LIST_SELECT`
+- Sort dropdown: "Highest FWCI" and "Top percentile" options added
+- Nulls sort last in both new sort modes
 
 ---
 
@@ -80,7 +100,6 @@ Initial public release. See `CHANGELOG.md` for full feature list.
 | AJG rankings → 2024 edition | P2 | 2021 edition currently bundled; 2024 available |
 | ABDC rankings → 2025/2026 edition | P2 | Monitor ABDC for release |
 | Non-DOI identifiers (PMID, arXiv) | P3 | OpenAlex supports `works/pmid:` and `works/arxiv:` |
-| Sort citation network by FWCI | P3 | Data already in response, needs UI wire-up |
 | Export citation metrics (CSV) | P3 | Right-click collection → export for tenure packets |
 | Collection-level analytics | P3 | Aggregate FWCI/percentile for a folder |
 
@@ -92,5 +111,6 @@ See `BACKLOG.md` for full details.
 
 | Version | Date | Summary |
 |---------|------|---------|
+| 1.0.2 | 2026-04-08 | Family design language, FWCI/percentile sort |
 | 1.0.1 | 2026-04-08 | Quality pass: error handling, tooling, tests, docs |
 | 1.0.0 | 2026-04-05 | Initial public release |

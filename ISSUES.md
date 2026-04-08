@@ -1,6 +1,6 @@
 # Citegeist — Open Issues
 
-> **Last Updated:** 2026-04-08
+> **Last Updated:** 2026-04-08 (v1.0.2)
 
 ---
 
@@ -11,7 +11,7 @@
 | P0 (Blocker) | 0 |
 | P1 (High) | 0 |
 | P2 (Medium) | 3 |
-| P3 (Low) | 4 |
+| P3 (Low) | 3 |
 
 ---
 
@@ -53,11 +53,6 @@
 **Fix:** Fall back to `works/pmid:` and `works/arxiv:` identifiers when no DOI present
 **Effort:** Low — OpenAlex supports both endpoints
 
-### FEAT-002: Sort citation network results by FWCI
-**Impact:** Users can only sort by citation count, year, title — not field-normalized impact
-**Fix:** Wire FWCI into the sort controls in `citationNetwork/results.ts`
-**Effort:** Low — data already in OpenAlex response
-
 ### FEAT-003: Export citation metrics (CSV) for tenure packets
 **Impact:** Researchers manually copy numbers from Citegeist into spreadsheets
 **Fix:** Right-click collection → "Export Citation Report (Citegeist)" → CSV
@@ -78,3 +73,4 @@
 | CODE-001 | Inner function declaration in `collectionPicker.ts` (ESLint error) | Converted to arrow function const | 2026-04-08 |
 | CODE-002 | `normalizeError(undefined)` returned `undefined` despite `: string` return type | Added explicit null/undefined guards | 2026-04-08 |
 | TOOL-001 | No ESLint/Prettier config | Added `.eslintrc.json`, `.prettierrc.json` | 2026-04-08 |
+| FEAT-002 | Sort citation network by FWCI | Added FWCI + percentile sort; `fwci`/`citation_normalized_percentile` added to `LIST_SELECT` | 2026-04-08 |
