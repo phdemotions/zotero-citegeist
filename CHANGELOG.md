@@ -7,16 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-04-08
+
+### Added
+
+- Citation network dialog now supports sorting by **Highest FWCI** and **Top percentile**, in addition to Most cited, Newest, and Oldest
+- `fwci` and `citation_normalized_percentile` fields added to the OpenAlex list select, making them available for all works in the network browser
+
 ### Changed
 
-- ESLint upgraded from v8 (legacy `.eslintrc.json`) to v9 (flat config `eslint.config.mjs`)
-- `eslint-config-prettier` upgraded to v10
-- `globals` package added for ESLint flat config environment definitions
-- `actions/setup-node` bumped from v4 → v6 in CI and release workflows
-- Release workflow now builds on Node 22 (was 20); CI matrix tests 20 + 22
-- `engines.node` bumped to `>=22.0.0` (Node 20 reaches EOL 2026-04-30)
-- `moduleDetection: "force"` added to `tsconfig.json`
-- `STATUS.md`, `ISSUES.md`, and `CLAUDE.md` created for the project
+- Opus Vita family design language applied throughout: sage accent (`#8FAD9F`) replaces blue, ink-ramp neutrals replace macOS grey system colours, Inter added to font stack
+- Dialog background now uses the family's Slate palette (`#141D18`) — green-undertoned dark distinct from Zotero's chrome
+- Citation pane buttons redesigned as equal-width ghost/outline buttons with sage accent; hover states now scoped to `#citegeist-pane-root` to prevent Zotero variable overrides
+- `Top 10%` and `Top 1%` pane badges now use hardcoded sage/amber colours (previously overridden by Zotero's `--accent-blue` CSS variable)
+- Open Access badge text bumped to sage-400 for WCAG AA contrast compliance
+- Tab hit targets increased to meet WCAG 2.5.8 24px minimum
+- Unreleased tooling changes from [Unreleased]: ESLint v9 flat config, `eslint-config-prettier` v10, `actions/setup-node` v6, Node 22 CI/release, `moduleDetection: "force"` in tsconfig
 
 ## [1.0.1] — 2026-04-07
 
@@ -70,5 +76,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[1.0.2]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.2
 [1.0.1]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.1
 [1.0.0]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.0

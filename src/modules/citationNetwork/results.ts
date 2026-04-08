@@ -100,6 +100,13 @@ export function renderResults(state: NetworkState, filter = ""): void {
 
   results = [...results].sort((a, b) => {
     switch (state.sortBy) {
+      case "fwci-desc":
+        return (b.fwci ?? -1) - (a.fwci ?? -1);
+      case "percentile-desc":
+        return (
+          (b.citation_normalized_percentile?.value ?? -1) -
+          (a.citation_normalized_percentile?.value ?? -1)
+        );
       case "year-desc":
         return (b.publication_year || 0) - (a.publication_year || 0);
       case "year-asc":

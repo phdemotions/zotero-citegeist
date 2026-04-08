@@ -203,6 +203,7 @@ const FULL_SELECT =
 /** Lighter select for list results (no abstract, no full references). */
 const LIST_SELECT =
   "id,doi,title,display_name,publication_year,publication_date,cited_by_count," +
+  "fwci,citation_normalized_percentile," +
   "authorships,primary_location,biblio,open_access,type,is_retracted";
 
 /**

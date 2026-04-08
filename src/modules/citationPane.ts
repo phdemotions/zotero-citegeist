@@ -41,7 +41,8 @@ export function registerCitationPane(pluginID: string): void {
       <div id="citegeist-pane-root" xmlns="http://www.w3.org/1999/xhtml">
         <style>
           #citegeist-pane-root {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-feature-settings: 'kern' 1, 'liga' 1;
             padding: 8px 12px 10px;
             font-size: 12px;
             line-height: 1.5;
@@ -58,7 +59,7 @@ export function registerCitationPane(pluginID: string): void {
             content: "";
             width: 12px; height: 12px;
             border: 2px solid var(--fill-quinary, #ddd);
-            border-top-color: var(--accent-blue40, #4a90d9);
+            border-top-color: var(--accent-blue40, #8FAD9F);
             border-radius: 50%;
             animation: cg-spin 0.8s linear infinite;
             flex-shrink: 0;
@@ -119,27 +120,26 @@ export function registerCitationPane(pluginID: string): void {
             vertical-align: middle;
           }
           .cg-badge-top1 {
-            background: var(--accent-yellow5, rgba(255,214,10,0.12));
-            color: var(--accent-yellow, #ffd60a);
+            background: rgba(168,101,26,0.15);
+            color: #C77E2A;
           }
           .cg-badge-top10 {
-            background: var(--accent-blue5, rgba(90,156,255,0.12));
-            color: var(--accent-blue, #5a9cff);
+            background: rgba(143,173,159,0.14);
+            color: #8FAD9F;
           }
 
-          .cg-actions {
+          #citegeist-pane-root .cg-actions {
             display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            margin-bottom: 10px;
+            gap: 8px;
+            margin-bottom: 12px;
           }
-          .cg-action-btn {
-            display: inline-block;
-            padding: 6px 14px;
-            border: 1px solid var(--fill-quinary, rgba(255,255,255,0.1));
-            border-radius: 7px;
-            background: var(--material-background, rgba(255,255,255,0.05));
-            color: var(--fill-primary, #e8e8ed);
+          #citegeist-pane-root .cg-action-btn {
+            flex: 1;
+            padding: 10px 12px;
+            border: 1px solid rgba(143,173,159,0.25);
+            border-radius: 8px;
+            background: rgba(56,104,87,0.08);
+            color: #9CAAA3;
             font-size: 12px;
             font-weight: 500;
             font-family: inherit;
@@ -148,22 +148,28 @@ export function registerCitationPane(pluginID: string): void {
             text-decoration: none;
             -moz-user-select: none;
             user-select: none;
+            line-height: 1.4;
+            transition: background 0.12s, border-color 0.12s, color 0.12s;
           }
-          .cg-action-btn:focus-visible {
-            outline: 2px solid var(--accent-blue40, #5a9cff);
+          #citegeist-pane-root .cg-action-btn:focus-visible {
+            outline: 2px solid #8FAD9F;
             outline-offset: 2px;
           }
-          .cg-action-btn:hover {
-            background: var(--fill-quinary, rgba(255,255,255,0.1));
+          #citegeist-pane-root .cg-action-btn:hover {
+            background: rgba(143,173,159,0.12);
+            border-color: rgba(143,173,159,0.50);
+            color: #E7EEE9;
           }
-          .cg-action-btn-primary {
-            background: var(--accent-blue40, #5a9cff);
-            color: #fff;
-            border-color: transparent;
+          #citegeist-pane-root .cg-action-btn-primary {
+            background: rgba(56,104,87,0.22);
+            border-color: rgba(143,173,159,0.50);
+            color: #8FAD9F;
             font-weight: 600;
           }
-          .cg-action-btn-primary:hover {
-            background: var(--accent-blue50, #4a8cf0);
+          #citegeist-pane-root .cg-action-btn-primary:hover {
+            background: rgba(143,173,159,0.16);
+            border-color: #8FAD9F;
+            color: #E7EEE9;
           }
 
           .cg-trend {

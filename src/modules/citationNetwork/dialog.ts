@@ -263,6 +263,8 @@ export function buildDialogHTML(title: string): string {
       </div>
       <select class="cg-sort-select" aria-label="Sort results by">
         <option value="citations">Most cited</option>
+        <option value="fwci-desc">Highest FWCI</option>
+        <option value="percentile-desc">Top percentile</option>
         <option value="year-desc">Newest</option>
         <option value="year-asc">Oldest</option>
       </select>
