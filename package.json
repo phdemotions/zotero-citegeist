@@ -31,7 +31,7 @@
     "bumpp": "^9.9.0",
     "esbuild": "^0.24.0",
     "eslint": "^8.57.0",
-    "eslint-config-prettier": "^9.1.0",
+    "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.3.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.2"
