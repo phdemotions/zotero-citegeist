@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-04-08
+
+### Fixed
+
+- Citation pane action buttons now use `display: flex; align-items: center; justify-content: center;` so text is correctly centered in Zotero's XUL pane context (previously `text-align: center` was silently ignored)
+- Increased button vertical padding from 12px to 14px for better visual weight
+
 ## [1.0.2] — 2026-04-08
 
 ### Added
@@ -76,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[1.0.3]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.3
 [1.0.2]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.2
 [1.0.1]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.1
 [1.0.0]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.0
