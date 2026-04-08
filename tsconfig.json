@@ -15,6 +15,7 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noImplicitReturns": true,
+    "moduleDetection": "force",
     "paths": {
       "@/*": ["./src/*"]
     }

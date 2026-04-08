@@ -5,6 +5,19 @@ All notable changes to Citegeist will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- ESLint upgraded from v8 (legacy `.eslintrc.json`) to v9 (flat config `eslint.config.mjs`)
+- `eslint-config-prettier` upgraded to v10
+- `globals` package added for ESLint flat config environment definitions
+- `actions/setup-node` bumped from v4 → v6 in CI and release workflows
+- Release workflow now builds on Node 22 (was 20); CI matrix tests 20 + 22
+- `engines.node` bumped to `>=22.0.0` (Node 20 reaches EOL 2026-04-30)
+- `moduleDetection: "force"` added to `tsconfig.json`
+- `STATUS.md`, `ISSUES.md`, and `CLAUDE.md` created for the project
+
 ## [1.0.1] — 2026-04-07
 
 ### Added
