@@ -9,6 +9,8 @@ declare namespace _ZoteroTypes {
     libraryID: number;
     key: string;
     itemTypeID: number;
+    /** String name of the item type, e.g. "journalArticle", "book", "bookSection". */
+    itemType: string;
     isRegularItem(): boolean;
     isAttachment(): boolean;
     isNote(): boolean;

@@ -5,7 +5,7 @@
 <h1 align="center">Citegeist</h1>
 
 <p align="center">
-  A free Zotero 7 & 8 plugin that shows citation counts, field-weighted impact, and journal rankings alongside the items in your library — and lets you follow citations forward and backward without leaving Zotero.
+  A free Zotero 7 & 8 plugin that shows citation counts, field-weighted impact, and journal rankings alongside the items in your library — and lets you follow citations forward and backward without leaving Zotero. Works with DOIs, PubMed IDs, arXiv IDs, and ISBNs.
 </p>
 
 <p align="center">
@@ -23,7 +23,7 @@ Citegeist is a free plugin for [Zotero 7+](https://www.zotero.org/downloads/) th
 For each item in your library, Citegeist adds:
 
 - **Citation count, FWCI, and percentile** as sortable columns, so you can rank papers by field-normalized impact rather than raw counts
-- **Journal-level metrics** (2-year mean citedness, h-index) and membership flags for the UTD24, FT50, ABDC 2022, and AJG 2021 lists
+- **Journal-level metrics** (2-year mean citedness, h-index) and membership flags for the UTD24, FT50, ABDC 2025, and AJG 2024 lists (3,177 journals covered)
 - **Year-over-year citation trend** so you can see whether a paper is still being cited
 - A **citation-network browser** for forward (citing works) and backward (references) snowballing, with one-click "Add to Zotero" for any result
 - Automatic **retraction flags** from OpenAlex
@@ -86,12 +86,12 @@ Citegeist adds nine new columns to your item list.
 | ------------ | ----------------------------------------------------------------- |
 | **UTD24**    | Checkmark if the journal is on the UT Dallas 24 list (2024)       |
 | **FT50**     | Checkmark if the journal is on the Financial Times 50 list (2024) |
-| **ABDC '22** | ABDC 2022 tier: A\*, A, B, or C                                   |
-| **AJG '21**  | ABS Academic Journal Guide 2021 tier: 4\*, 4, 3, 2, or 1          |
+| **ABDC '25** | ABDC 2025 tier: A\*, A, B, or C                                   |
+| **AJG '24**  | ABS Academic Journal Guide 2024 tier: 4\*, 4, 3, 2, or 1          |
 
 **To enable columns:** Right-click any column header (e.g., "Title", "Creator") and check the columns you want. You can drag columns to reorder them, or click any header to sort.
 
-Data is fetched automatically in the background. Papers without a DOI will show blank cells. A dash (**&mdash;**) means the metric isn't available for that paper.
+Data is fetched automatically in the background. Citegeist uses the best available identifier — DOI, then PubMed ID, then arXiv ID, then ISBN — so most items populate automatically. A dash (**&mdash;**) means the metric isn't available for that paper; blank means no recognized identifier was found.
 
 **Tip:** Sort by **FWCI** to find the most impactful papers relative to their field, rather than papers that simply happen to be in high-citation disciplines.
 
@@ -189,7 +189,14 @@ Open Zotero's settings (**Zotero &rarr; Settings** on macOS, **Edit &rarr; Prefe
 <details>
 <summary><strong>What if a paper doesn't have a DOI?</strong></summary>
 
-Most journal articles and conference papers have a DOI. Some older papers, working papers, or dissertations may not. Citegeist will show "No DOI available" for these items. You can often find the DOI on the publisher's website and add it manually to the item's DOI field in Zotero.
+Citegeist tries multiple identifiers in order:
+
+1. **DOI** — works for most journal articles and conference papers
+2. **PubMed ID (PMID)** — for biomedical literature; add `PMID: 12345678` to the item's Extra field if it isn't populated automatically
+3. **arXiv ID** — detected from the Extra field (`arXiv: 2205.01833`), the Archive ID field, or an arxiv.org URL
+4. **ISBN** — for books and book chapters; citation coverage for books is limited in OpenAlex, so citation counts may be zero or absent
+
+If none of these are present, the item will show blank cells. You can often find the DOI or PMID on the publisher's website or PubMed and add it manually.
 
 </details>
 
@@ -220,10 +227,10 @@ Citegeist includes four ranking lists commonly used in business, management, eco
 
 - **UTD24** &mdash; UT Dallas 24 (2024): 24 premier research journals
 - **FT50** &mdash; Financial Times 50 (2024): 50 journals used in business school research rankings
-- **ABDC** &mdash; Australian Business Deans Council Quality List (2022): tiered A\*, A, B, C
-- **AJG** &mdash; Chartered ABS Academic Journal Guide (2021): tiered 4\*, 4, 3, 2, 1
+- **ABDC** &mdash; Australian Business Deans Council Quality List (2025): tiered A\*, A, B, C
+- **AJG** &mdash; Chartered ABS Academic Journal Guide (2024): tiered 4\*, 4, 3, 2, 1
 
-~180 journals are covered. If a journal you use is missing, [let us know](https://github.com/phdemotions/zotero-citegeist/issues).
+3,177 journals are covered across all four lists. Lookup works with either print or electronic ISSN. If a journal you use is missing, [let us know](https://github.com/phdemotions/zotero-citegeist/issues).
 
 </details>
 
@@ -265,7 +272,10 @@ No. Citegeist requires Zotero 7 or later (including Zotero 8). You can [upgrade 
 - **Library** &mdash; Your collection of saved papers, articles, and books
 - **Item** &mdash; A single entry in your library (a paper, book chapter, etc.)
 - **Collection** &mdash; A folder you create to organize items by topic or project
-- **DOI** &mdash; A Digital Object Identifier, a unique code assigned to most published papers (e.g., `10.1038/nature12373`). Citegeist uses the DOI to look up citation data.
+- **DOI** &mdash; A Digital Object Identifier, a unique code assigned to most published papers (e.g., `10.1038/nature12373`). Citegeist prefers the DOI when available.
+- **PMID** &mdash; PubMed ID, used for biomedical literature indexed on PubMed. Add `PMID: 12345678` to an item's Extra field if needed.
+- **arXiv ID** &mdash; Identifier for preprints on arxiv.org (e.g., `2205.01833`). Detected automatically from the Extra field or URL.
+- **ISBN** &mdash; International Standard Book Number, used for books and book chapters.
 </details>
 
 ---
@@ -275,12 +285,13 @@ No. Citegeist requires Zotero 7 or later (including Zotero 8). You can [upgrade 
 <details>
 <summary><strong>My columns are empty / stuck on "…"</strong></summary>
 
-Citegeist only fetches for items with a DOI. If a column stays blank:
+Citegeist needs at least one recognized identifier per item — DOI, PubMed ID, arXiv ID, or ISBN. If a column stays blank:
 
-1. Confirm the item has a value in Zotero's **DOI** field.
+1. Confirm the item has a **DOI**, or a `PMID:` / `arXiv:` line in its **Extra** field, or an **ISBN** (for books).
 2. Check **Settings → Citegeist → Auto-fetch** is enabled (or right-click the item and choose **Fetch Citation Counts**).
 3. Give it a few seconds — requests are rate-limited to 8/second to stay inside OpenAlex's polite pool.
 4. If many items show "—", the metric may simply not be available on OpenAlex for those works.
+5. Books show blank citation cells when OpenAlex reports zero citations — this is expected, as book coverage in OpenAlex is incomplete.
 </details>
 
 <details>

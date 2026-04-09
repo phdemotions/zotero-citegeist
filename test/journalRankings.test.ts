@@ -3,8 +3,8 @@ import { lookupRanking, RANKING_VERSIONS } from "../src/data/journalRankings";
 
 describe("lookupRanking", () => {
   it("finds a UTD24 + FT50 journal by ISSN-L", () => {
-    // Academy of Management Journal
-    const r = lookupRanking(["0001-4273"]);
+    // The Journal of Finance
+    const r = lookupRanking(["0022-1082"]);
     expect(r).not.toBeNull();
     expect(r!.utd24).toBe(true);
     expect(r!.ft50).toBe(true);
@@ -36,7 +36,8 @@ describe("lookupRanking", () => {
   });
 
   it("trims whitespace from ISSNs", () => {
-    const r = lookupRanking(["  0001-4273  "]);
+    // MIS Quarterly
+    const r = lookupRanking(["  0276-7783  "]);
     expect(r).not.toBeNull();
     expect(r!.utd24).toBe(true);
   });
@@ -52,21 +53,21 @@ describe("lookupRanking", () => {
   });
 
   it("finds ABDC-only journal", () => {
-    // Academy of Management Perspectives: ABDC A, AJG 3, not UTD/FT
+    // Academy of Management Perspectives: ABDC A, AJG 4 (upgraded in 2024), not UTD/FT
     const r = lookupRanking(["1558-9080"]);
     expect(r).not.toBeNull();
     expect(r!.abdc).toBe("A");
-    expect(r!.ajg).toBe("3");
+    expect(r!.ajg).toBe("4");
     expect(r!.utd24).toBeUndefined();
     expect(r!.ft50).toBeUndefined();
   });
 
   it("returns first match when multiple ISSNs match", () => {
-    // Both should match, returns the first one found
-    const r = lookupRanking(["0001-4273", "0363-7425"]);
+    // Journal of Finance and MIS Quarterly both have utd24; first wins
+    const r = lookupRanking(["0022-1082", "0276-7783"]);
     expect(r).not.toBeNull();
-    // AMJ (first ISSN) should win
     expect(r!.utd24).toBe(true);
+    expect(r!.abdc).toBe("A*");
   });
 });
 
@@ -74,7 +75,7 @@ describe("RANKING_VERSIONS", () => {
   it("has version strings for all four lists", () => {
     expect(RANKING_VERSIONS.utd24).toBe("2024");
     expect(RANKING_VERSIONS.ft50).toBe("2024");
-    expect(RANKING_VERSIONS.abdc).toBe("2022");
-    expect(RANKING_VERSIONS.ajg).toBe("2021");
+    expect(RANKING_VERSIONS.abdc).toBe("2025");
+    expect(RANKING_VERSIONS.ajg).toBe("2024");
   });
 });

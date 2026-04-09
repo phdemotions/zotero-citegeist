@@ -193,6 +193,60 @@ export function normalizeDOI(doi: string): string {
     .replace(/\/+$/, "");
 }
 
+/**
+ * Normalize a PubMed ID for use in an OpenAlex path segment.
+ * Strips any `pmid:` scheme prefix and non-digit characters.
+ * Returns an empty string if nothing remains.
+ */
+export function normalizePMID(id: string): string {
+  return id
+    .trim()
+    .replace(/^pmid:\s*/i, "")
+    .replace(/\D/g, "");
+}
+
+/**
+ * Normalize an ISBN for use in an OpenAlex path segment.
+ *
+ * Accepts ISBN-10 or ISBN-13 in any hyphenated or unhyphenated form.
+ * Returns the bare digit string (plus uppercase X for ISBN-10 check digit),
+ * or an empty string if the input doesn't match a valid ISBN pattern.
+ *
+ * OpenAlex accepts both ISBN-10 and ISBN-13 on the `/works/isbn:` path.
+ */
+export function normalizeISBN(id: string): string {
+  const cleaned = id
+    .trim()
+    .replace(/^isbn:\s*/i, "")
+    .replace(/[\s-]/g, "")
+    .toUpperCase();
+  // Valid: ISBN-10 (9 digits + digit or X) or ISBN-13 (13 digits)
+  if (/^\d{9}[\dX]$/.test(cleaned) || /^\d{13}$/.test(cleaned)) {
+    return cleaned;
+  }
+  return "";
+}
+
+/**
+ * Normalize an arXiv ID for use in an OpenAlex path segment.
+ *
+ * Handles:
+ * - URL forms:       `https://arxiv.org/abs/2205.01833v2`
+ * - Scheme prefix:   `arxiv:2205.01833`
+ * - Version suffix:  `2205.01833v2` → `2205.01833`
+ * - Old-format IDs:  `hep-ph/0101142` (returned as-is after prefix strip)
+ * - `.pdf` suffixes from direct-download URLs
+ */
+export function normalizeArxivId(id: string): string {
+  return id
+    .trim()
+    .replace(/^(?:https?:\/\/)?(?:www\.)?arxiv\.org\/(?:abs|pdf)\//i, "")
+    .replace(/^arxiv:\s*/i, "")
+    .replace(/\.pdf$/i, "")
+    .replace(/v\d+$/i, "")
+    .trim();
+}
+
 /** Full select fields for single-work lookups. */
 const FULL_SELECT =
   "id,doi,title,display_name,publication_year,publication_date,cited_by_count," +
@@ -231,6 +285,85 @@ export async function getWorkByDOI(doi: string): Promise<OpenAlexWork | null> {
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return null;
     // Surface network errors so UI can render a distinct message.
+    throw e;
+  }
+}
+
+/**
+ * Look up a work by its PubMed ID.
+ *
+ * @param pmid Raw PMID — digits only, or with a `pmid:` scheme prefix.
+ * @returns The OpenAlex work, or `null` if blank or not indexed (404).
+ * @throws {@link OpenAlexNetworkError} when the service is unreachable.
+ */
+export async function getWorkByPMID(pmid: string): Promise<OpenAlexWork | null> {
+  const clean = normalizePMID(pmid);
+  if (!clean) return null;
+
+  const url = buildUrl(`/works/pmid:${encodeURIComponent(clean)}`, {
+    select: FULL_SELECT,
+  });
+
+  try {
+    const work = await rateLimitedFetch<OpenAlexWork>(url, `work pmid:${clean}`);
+    return normalizeWork(work);
+  } catch (e) {
+    if (e instanceof OpenAlexNotFoundError) return null;
+    throw e;
+  }
+}
+
+/**
+ * Look up a work by its arXiv ID.
+ *
+ * Accepts new-style (`2205.01833`), old-style (`hep-ph/0101142`),
+ * URL forms, and version suffixes — see {@link normalizeArxivId}.
+ *
+ * @returns The OpenAlex work, or `null` if blank or not indexed (404).
+ * @throws {@link OpenAlexNetworkError} when the service is unreachable.
+ */
+export async function getWorkByArxivId(id: string): Promise<OpenAlexWork | null> {
+  const clean = normalizeArxivId(id);
+  if (!clean) return null;
+
+  const url = buildUrl(`/works/arxiv:${encodeURIComponent(clean)}`, {
+    select: FULL_SELECT,
+  });
+
+  try {
+    const work = await rateLimitedFetch<OpenAlexWork>(url, `work arxiv:${clean}`);
+    return normalizeWork(work);
+  } catch (e) {
+    if (e instanceof OpenAlexNotFoundError) return null;
+    throw e;
+  }
+}
+
+/**
+ * Look up a work by ISBN (ISBN-10 or ISBN-13).
+ *
+ * Note: OpenAlex citation coverage for books is lower than for journal
+ * articles. A zero citation count should be treated as likely incomplete,
+ * not as definitive. Callers may choose to suppress zero counts for books.
+ *
+ * @param isbn Raw ISBN in any hyphenated or unhyphenated form — see
+ *             {@link normalizeISBN} for accepted forms.
+ * @returns The OpenAlex work, or `null` if blank or not indexed (404).
+ * @throws {@link OpenAlexNetworkError} when the service is unreachable.
+ */
+export async function getWorkByISBN(isbn: string): Promise<OpenAlexWork | null> {
+  const clean = normalizeISBN(isbn);
+  if (!clean) return null;
+
+  const url = buildUrl(`/works/isbn:${encodeURIComponent(clean)}`, {
+    select: FULL_SELECT,
+  });
+
+  try {
+    const work = await rateLimitedFetch<OpenAlexWork>(url, `work isbn:${clean}`);
+    return normalizeWork(work);
+  } catch (e) {
+    if (e instanceof OpenAlexNotFoundError) return null;
     throw e;
   }
 }

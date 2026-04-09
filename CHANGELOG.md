@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-04-09
+
+### Added
+
+- **Non-DOI identifier support** — Citegeist now resolves citation data via PubMed ID (PMID), arXiv ID, and ISBN in addition to DOI. Priority order: DOI → PMID (Extra field) → arXiv (Extra field, Archive ID field, or arxiv.org URL) → ISBN. `extractIdentifier()` is the single shared resolver across the service, columns, and pane layers.
+- `normalizePMID`, `normalizeArxivId`, `normalizeISBN` normalization functions alongside existing `normalizeDOI`
+- `getWorkByPMID`, `getWorkByArxivId`, `getWorkByISBN` — three new OpenAlex lookup functions using `works/pmid:`, `works/arxiv:`, and `works/isbn:` endpoints
+- **Book and book section support** — ISBN resolves to OpenAlex data; zero citation counts for books are suppressed in columns and the pane (replaced by "Citation tracking for books is limited in OpenAlex.")
+
+### Changed
+
+- `FetchError` value `"no-doi"` renamed to `"no-identifier"` — all UI layers updated
+- Journal rankings rebuilt from comprehensive master list: **3,177 journals** (up from ~70 hand-curated entries), with an e-ISSN alias table so lookup works with either print or electronic ISSN
+- **ABDC Quality List updated to 2025 edition** (2,684 journals); column label changed to "ABDC '25"
+- **AJG Academic Journal Guide updated to 2024 edition** (1,885 journals); column label changed to "AJG '24"
+- README "no DOI" FAQ rewritten to document the full identifier fallback chain
+- JOSS paper updated: identifier chain, 3,177-journal coverage, ABDC 2025 / AJG 2024, comparison table row added for non-DOI identifiers
+
 ## [1.0.3] — 2026-04-08
 
 ### Fixed
@@ -83,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[1.1.0]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.1.0
 [1.0.3]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.3
 [1.0.2]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.2
 [1.0.1]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.1

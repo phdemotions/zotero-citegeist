@@ -12,7 +12,12 @@
  */
 
 import { getCachedMetrics, type AllMetrics } from "./cache";
-import { fetchAndCacheItem } from "./citationService";
+import { fetchAndCacheItem, extractIdentifier } from "./citationService";
+
+/** True for Zotero item types where a zero citation count likely reflects coverage gaps, not reality. */
+function isBookType(item: _ZoteroTypes.Item): boolean {
+  return item.itemType === "book" || item.itemType === "bookSection";
+}
 import { lookupRanking, RANKING_VERSIONS, type JournalRanking } from "../data/journalRankings";
 import { getCachedSourceISSNs } from "./openalex";
 import { logError } from "./utils";
@@ -84,18 +89,21 @@ function getAutoFetch(): boolean {
 function getMetricsAndMaybeQueue(item: _ZoteroTypes.Item): AllMetrics | null {
   if (!item.isRegularItem()) return null;
 
-  const doi = item.getField("DOI");
-  if (!doi || !doi.trim()) return null;
-
   if (metricsCache.has(item.id)) {
     return metricsCache.get(item.id)!;
   }
 
   const metrics = getCachedMetrics(item);
+  const hasFetchable = extractIdentifier(item) !== null;
+
+  // Nothing to show and nothing to fetch — skip entirely
+  if (!hasFetchable && metrics.count === null) return null;
+
   metricsCache.set(item.id, metrics);
 
   if (
     getAutoFetch() &&
+    hasFetchable &&
     (metrics.count === null || metrics.isStale) &&
     !fetchAttempted.has(item.id)
   ) {
@@ -169,7 +177,12 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
       const metrics = getMetricsAndMaybeQueue(item);
       if (!metrics) return "";
-      if (metrics.count !== null) return String(metrics.count);
+      if (metrics.count !== null) {
+        // Suppress zero for books — OpenAlex coverage is incomplete for books,
+        // so 0 almost always means "not tracked" rather than genuinely uncited.
+        if (metrics.count === 0 && isBookType(item)) return "";
+        return String(metrics.count);
+      }
       return getAutoFetch() ? "…" : "";
     },
   });
@@ -184,7 +197,11 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
       const metrics = getMetricsAndMaybeQueue(item);
       if (!metrics) return "";
       if (metrics.fwci !== null) return metrics.fwci.toFixed(2);
-      if (metrics.count !== null) return "—";
+      if (metrics.count !== null) {
+        // Suppress the "—" placeholder for 0-count books (same coverage rationale)
+        if (metrics.count === 0 && isBookType(item)) return "";
+        return "—";
+      }
       return getAutoFetch() ? "…" : "";
     },
   });
@@ -199,7 +216,10 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
       const metrics = getMetricsAndMaybeQueue(item);
       if (!metrics) return "";
       if (metrics.percentile !== null) return metrics.percentile.toFixed(1);
-      if (metrics.count !== null) return "—";
+      if (metrics.count !== null) {
+        if (metrics.count === 0 && isBookType(item)) return "";
+        return "—";
+      }
       return getAutoFetch() ? "…" : "";
     },
   });

@@ -4,6 +4,9 @@ import {
   getSourceName,
   reconstructAbstract,
   normalizeDOI,
+  normalizePMID,
+  normalizeArxivId,
+  normalizeISBN,
   type OpenAlexWork,
 } from "../src/modules/openalex";
 
@@ -218,6 +221,130 @@ describe("normalizeDOI", () => {
   it("returns empty string for empty input", () => {
     expect(normalizeDOI("")).toBe("");
     expect(normalizeDOI("   ")).toBe("");
+  });
+});
+
+describe("normalizePMID", () => {
+  it("returns a bare PMID unchanged", () => {
+    expect(normalizePMID("12345678")).toBe("12345678");
+  });
+
+  it("strips pmid: prefix (case-insensitive)", () => {
+    expect(normalizePMID("pmid:12345678")).toBe("12345678");
+    expect(normalizePMID("PMID:12345678")).toBe("12345678");
+    expect(normalizePMID("pmid: 12345678")).toBe("12345678");
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(normalizePMID("  12345678  ")).toBe("12345678");
+  });
+
+  it("strips non-digit characters", () => {
+    expect(normalizePMID("pmid:123-456")).toBe("123456");
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(normalizePMID("")).toBe("");
+    expect(normalizePMID("   ")).toBe("");
+  });
+
+  it("returns empty string for non-numeric input", () => {
+    expect(normalizePMID("not-a-pmid")).toBe("");
+  });
+});
+
+describe("normalizeArxivId", () => {
+  it("returns a bare new-format ID unchanged", () => {
+    expect(normalizeArxivId("2205.01833")).toBe("2205.01833");
+  });
+
+  it("strips version suffix", () => {
+    expect(normalizeArxivId("2205.01833v2")).toBe("2205.01833");
+    expect(normalizeArxivId("2205.01833v10")).toBe("2205.01833");
+  });
+
+  it("strips arxiv: scheme prefix (case-insensitive)", () => {
+    expect(normalizeArxivId("arxiv:2205.01833")).toBe("2205.01833");
+    expect(normalizeArxivId("arXiv:2205.01833")).toBe("2205.01833");
+    expect(normalizeArxivId("arxiv: 2205.01833")).toBe("2205.01833");
+  });
+
+  it("strips https://arxiv.org/abs/ URL prefix", () => {
+    expect(normalizeArxivId("https://arxiv.org/abs/2205.01833")).toBe("2205.01833");
+    expect(normalizeArxivId("http://arxiv.org/abs/2205.01833v1")).toBe("2205.01833");
+  });
+
+  it("strips https://arxiv.org/pdf/ URL prefix and .pdf suffix", () => {
+    expect(normalizeArxivId("https://arxiv.org/pdf/2205.01833.pdf")).toBe("2205.01833");
+    expect(normalizeArxivId("https://arxiv.org/pdf/2205.01833v2.pdf")).toBe("2205.01833");
+  });
+
+  it("handles old-format IDs (category/number)", () => {
+    expect(normalizeArxivId("hep-ph/0101142")).toBe("hep-ph/0101142");
+    expect(normalizeArxivId("math/0501234")).toBe("math/0501234");
+  });
+
+  it("strips version from old-format IDs", () => {
+    expect(normalizeArxivId("hep-ph/0101142v3")).toBe("hep-ph/0101142");
+  });
+
+  it("handles www.arxiv.org URL variant", () => {
+    expect(normalizeArxivId("https://www.arxiv.org/abs/2205.01833")).toBe("2205.01833");
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(normalizeArxivId("  2205.01833  ")).toBe("2205.01833");
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(normalizeArxivId("")).toBe("");
+    expect(normalizeArxivId("   ")).toBe("");
+  });
+});
+
+describe("normalizeISBN", () => {
+  it("returns a bare ISBN-13 unchanged", () => {
+    expect(normalizeISBN("9780262046305")).toBe("9780262046305");
+  });
+
+  it("returns a bare ISBN-10 unchanged", () => {
+    expect(normalizeISBN("026204630X")).toBe("026204630X");
+    expect(normalizeISBN("026204630x")).toBe("026204630X");
+  });
+
+  it("strips hyphens from ISBN-13", () => {
+    expect(normalizeISBN("978-0-262-04630-9")).toBe("9780262046309");
+  });
+
+  it("strips hyphens from ISBN-10", () => {
+    expect(normalizeISBN("0-262-04630-5")).toBe("0262046305");
+  });
+
+  it("strips spaces", () => {
+    expect(normalizeISBN("978 0 262 04630 9")).toBe("9780262046309");
+  });
+
+  it("strips isbn: prefix (case-insensitive)", () => {
+    expect(normalizeISBN("isbn:9780262046309")).toBe("9780262046309");
+    expect(normalizeISBN("ISBN: 9780262046309")).toBe("9780262046309");
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(normalizeISBN("  9780262046309  ")).toBe("9780262046309");
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(normalizeISBN("")).toBe("");
+    expect(normalizeISBN("   ")).toBe("");
+  });
+
+  it("returns empty string for invalid length", () => {
+    expect(normalizeISBN("12345")).toBe("");
+    expect(normalizeISBN("123456789012")).toBe(""); // 12 digits — not valid
+  });
+
+  it("returns empty string for non-digit non-X characters", () => {
+    expect(normalizeISBN("not-an-isbn")).toBe("");
   });
 });
 

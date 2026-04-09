@@ -14,7 +14,7 @@
  */
 
 import { getCachedData, clearCache, isCacheStale, type CachedData } from "./cache";
-import { fetchAndCacheItem } from "./citationService";
+import { fetchAndCacheItem, extractIdentifier } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork } from "./citationNetwork";
@@ -24,6 +24,18 @@ import { HEADLINE_COUNT_FONT_SIZE_PX } from "../constants";
 let refreshing = false;
 
 const PANE_ID = "citegeist-citation-details";
+
+/**
+ * Build the text shown in the section's collapse header.
+ * Books with 0 citations show "Found on OpenAlex" rather than "0 citations"
+ * because zero almost always reflects incomplete coverage, not genuine uncitedness.
+ */
+function citationSummary(count: number, item: _ZoteroTypes.Item): string {
+  if (count === 0 && (item.itemType === "book" || item.itemType === "bookSection")) {
+    return "Found on OpenAlex";
+  }
+  return `${count.toLocaleString()} citations`;
+}
 
 export function registerCitationPane(pluginID: string): void {
   Zotero.ItemPaneManager.registerSection({
@@ -193,17 +205,16 @@ export function registerCitationPane(pluginID: string): void {
       const container = body.querySelector("#citegeist-content") as HTMLElement;
       if (!container) return;
 
-      const doi = item.getField("DOI");
-      if (!doi || !doi.trim()) {
-        container.innerHTML = `<div class="cg-no-doi">No DOI available for this item.</div>`;
-        setSectionSummary("No DOI");
+      if (!extractIdentifier(item)) {
+        container.innerHTML = `<div class="cg-no-doi">No DOI, PubMed ID, or arXiv ID found for this item.</div>`;
+        setSectionSummary("No identifier");
         return;
       }
 
       const cached = getCachedData(item);
       if (cached) {
         renderPane(container, cached, item);
-        setSectionSummary(`${cached.citedByCount.toLocaleString()} citations`);
+        setSectionSummary(citationSummary(cached.citedByCount, item));
       } else {
         container.innerHTML = `<div class="cg-loading">Fetching citation data…</div>`;
         setSectionSummary("Loading…");
@@ -213,8 +224,7 @@ export function registerCitationPane(pluginID: string): void {
       const container = body.querySelector("#citegeist-content") as HTMLElement;
       if (!container) return;
 
-      const doi = item.getField("DOI");
-      if (!doi || !doi.trim()) return;
+      if (!extractIdentifier(item)) return;
 
       // If we already rendered cached data in onRender, skip the network call
       // unless the cache is stale. This avoids redundant re-renders.
@@ -226,7 +236,7 @@ export function registerCitationPane(pluginID: string): void {
         const freshData = getCachedData(item);
         if (freshData) {
           renderPane(container, freshData, item, result.work);
-          setSectionSummary(`${freshData.citedByCount.toLocaleString()} citations`);
+          setSectionSummary(citationSummary(freshData.citedByCount, item));
           // Notify columns to refresh so citation data appears immediately
           invalidateColumnCache(item.id);
         }
@@ -259,7 +269,7 @@ export function registerCitationPane(pluginID: string): void {
             if (container) {
               if (cached) {
                 renderPane(container, cached, item, result.work ?? undefined);
-                setSectionSummary(`${cached.citedByCount.toLocaleString()} citations`);
+                setSectionSummary(citationSummary(cached.citedByCount, item));
                 invalidateColumnCache(item.id);
               } else if (result.error === "network") {
                 container.innerHTML = `<div class="cg-no-doi">OpenAlex is currently unavailable. Try again in a few minutes.</div>`;
@@ -308,29 +318,39 @@ function renderPane(
   }
 
   // ── Headline stat line ──
-  const headline = doc.createElement("div");
-  headline.className = "cg-headline";
+  const isBook = item.itemType === "book" || item.itemType === "bookSection";
+  const suppressCount = isBook && data.citedByCount === 0;
 
-  let headlineHTML = "";
-  headlineHTML += `<span class="cg-headline-count">${escapeHTML(data.citedByCount.toLocaleString())}</span>`;
-  headlineHTML += `<span class="cg-headline-label">citations</span>`;
+  if (!suppressCount) {
+    const headline = doc.createElement("div");
+    headline.className = "cg-headline";
 
-  if (data.fwci !== null) {
-    headlineHTML += `<span class="cg-headline-sep">\u00B7</span>`;
-    headlineHTML += `<span class="cg-headline-detail">FWCI <strong>${escapeHTML(data.fwci.toFixed(2))}</strong></span>`;
-  }
-  if (data.percentile !== null) {
-    headlineHTML += `<span class="cg-headline-sep">\u00B7</span>`;
-    headlineHTML += `<span class="cg-headline-detail"><strong>${escapeHTML(data.percentile.toFixed(0))}th</strong> %ile</span>`;
-  }
-  if (data.isTop1Percent) {
-    headlineHTML += `<span class="cg-badge cg-badge-top1">Top 1%</span>`;
-  } else if (data.isTop10Percent) {
-    headlineHTML += `<span class="cg-badge cg-badge-top10">Top 10%</span>`;
-  }
+    let headlineHTML = "";
+    headlineHTML += `<span class="cg-headline-count">${escapeHTML(data.citedByCount.toLocaleString())}</span>`;
+    headlineHTML += `<span class="cg-headline-label">citations</span>`;
 
-  headline.innerHTML = headlineHTML;
-  container.appendChild(headline);
+    if (data.fwci !== null) {
+      headlineHTML += `<span class="cg-headline-sep">\u00B7</span>`;
+      headlineHTML += `<span class="cg-headline-detail">FWCI <strong>${escapeHTML(data.fwci.toFixed(2))}</strong></span>`;
+    }
+    if (data.percentile !== null) {
+      headlineHTML += `<span class="cg-headline-sep">\u00B7</span>`;
+      headlineHTML += `<span class="cg-headline-detail"><strong>${escapeHTML(data.percentile.toFixed(0))}th</strong> %ile</span>`;
+    }
+    if (data.isTop1Percent) {
+      headlineHTML += `<span class="cg-badge cg-badge-top1">Top 1%</span>`;
+    } else if (data.isTop10Percent) {
+      headlineHTML += `<span class="cg-badge cg-badge-top10">Top 10%</span>`;
+    }
+
+    headline.innerHTML = headlineHTML;
+    container.appendChild(headline);
+  } else {
+    const note = doc.createElement("div");
+    note.className = "cg-no-doi";
+    note.textContent = "Citation tracking for books is limited in OpenAlex.";
+    container.appendChild(note);
+  }
 
   // ── Action buttons — real <button> elements for keyboard + screen reader support ──
   const actions = doc.createElement("div");
