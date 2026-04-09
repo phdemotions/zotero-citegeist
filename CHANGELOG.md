@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] — 2026-04-09
+
+### Added
+
+- Settings pane now shows the installed version and a **Check for Updates** button — fetches `update.json` from GitHub and reports whether you're up to date, an update is available, or the check failed
+
 ## [1.1.1] — 2026-04-09
 
 ### Fixed
@@ -116,6 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[1.1.2]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.1.2
 [1.1.1]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.1.1
 [1.1.0]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.1.0
 [1.0.3]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.3

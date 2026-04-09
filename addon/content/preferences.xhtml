@@ -38,4 +38,75 @@
         min="10" max="200" step="5" style="width: 60px; margin-left: 8px;" />
     </hbox>
   </groupbox>
+
+  <groupbox>
+    <label><html:h2>About</html:h2></label>
+
+    <hbox align="center">
+      <label value="Installed version:" />
+      <label id="citegeist-version-label" value="__buildVersion__"
+        style="margin-left: 6px; font-weight: bold;" />
+      <spacer flex="1" />
+      <html:button id="citegeist-check-updates-btn">Check for Updates</html:button>
+    </hbox>
+    <description id="citegeist-update-status"
+      style="font-size: 11px; margin-top: 6px; display: none;" />
+  </groupbox>
+
+  <html:script><![CDATA[
+    (function () {
+      const ADDON_ID = "__addonID__";
+      const CURRENT_VERSION = "__buildVersion__";
+      const UPDATE_JSON_URL =
+        "https://github.com/phdemotions/zotero-citegeist/releases/download/release/update.json";
+
+      const btn = document.getElementById("citegeist-check-updates-btn");
+      const status = document.getElementById("citegeist-update-status");
+
+      function showStatus(msg, color) {
+        status.textContent = msg;
+        status.style.color = color || "";
+        status.style.display = "";
+      }
+
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        showStatus("Checking\u2026", "");
+
+        try {
+          const resp = await Zotero.HTTP.request("GET", UPDATE_JSON_URL, {
+            responseType: "json",
+            timeout: 10000,
+          });
+          const updates =
+            resp.response?.addons?.[ADDON_ID]?.updates ?? [];
+          const latest = updates[0]?.version ?? null;
+
+          if (!latest) {
+            showStatus("Could not read update information.", "#c0392b");
+          } else if (latest === CURRENT_VERSION) {
+            showStatus(
+              "You\u2019re up to date \u2014 v" + CURRENT_VERSION + " is the latest release.",
+              "#27ae60",
+            );
+          } else {
+            showStatus(
+              "Update available: v" +
+                latest +
+                ". Go to Tools \u2192 Add-ons to install.",
+              "#e67e22",
+            );
+          }
+        } catch {
+          showStatus(
+            "Could not reach GitHub to check for updates. Check your connection.",
+            "#c0392b",
+          );
+        }
+
+        btn.disabled = false;
+      });
+    })();
+  ]]></html:script>
+
 </vbox>

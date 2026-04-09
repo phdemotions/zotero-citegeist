@@ -1,6 +1,6 @@
 {
   "name": "zotero-citegeist",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Citation intelligence for Zotero — powered by OpenAlex. See citation counts, explore citation networks, and add citing/cited works to your library.",
   "homepage": "https://github.com/phdemotions/zotero-citegeist",
   "author": "Josh Gonzales",
