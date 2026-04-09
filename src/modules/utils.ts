@@ -87,6 +87,15 @@ export function logError(context: string, e: unknown): void {
 }
 
 /**
+ * True for Zotero item types where zero citation counts likely reflect
+ * incomplete OpenAlex coverage rather than genuine uncitedness.
+ * Centralised here so citationColumn and citationPane stay in sync.
+ */
+export function isBookType(item: _ZoteroTypes.Item): boolean {
+  return item.itemType === "book" || item.itemType === "bookSection";
+}
+
+/**
  * Distinguishes "OpenAlex unreachable" from "work not found" so UI layers
  * can render a helpful message instead of a flat "not found" dead end.
  */

@@ -13,14 +13,9 @@
 
 import { getCachedMetrics, type AllMetrics } from "./cache";
 import { fetchAndCacheItem, extractIdentifier } from "./citationService";
-
-/** True for Zotero item types where a zero citation count likely reflects coverage gaps, not reality. */
-function isBookType(item: _ZoteroTypes.Item): boolean {
-  return item.itemType === "book" || item.itemType === "bookSection";
-}
 import { lookupRanking, RANKING_VERSIONS, type JournalRanking } from "../data/journalRankings";
 import { getCachedSourceISSNs } from "./openalex";
-import { logError } from "./utils";
+import { logError, isBookType } from "./utils";
 import {
   AUTO_FETCH_PREF_TTL_MS,
   FETCH_BATCH_DELAY_MS,

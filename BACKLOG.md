@@ -6,37 +6,25 @@ Items are grouped loosely by theme, not priority. See [CONTRIBUTING.md](CONTRIBU
 
 ---
 
-## Update ABDC rankings when 2025/2026 edition is released
+## Metadata-based matching for items without a recognized identifier
 
-**Labels:** `enhancement`, `rankings`
+**Labels:** `enhancement`, `high-impact`
 
-The ABDC (Australian Business Deans Council) is currently revising their Quality Journal List. The next edition (expected 2025 or 2026) will replace the 2022 list currently bundled with Citegeist.
+When no DOI, PMID, arXiv ID, or ISBN is present — or when the identifier returns "not found" on OpenAlex — Citegeist currently shows blank cells with no explanation. Many items in a typical Zotero library fall into this category: older conference papers, working papers, grey literature, items imported from imperfect bibliographic databases.
 
-**What needs to happen:**
+**Proposed feature (fully specced in [DESIGN.md](DESIGN.md)):**
 
-- Monitor ABDC for the official release of the new list
-- Update `src/data/journalRankings.ts` with new tiers — journals may move between A\*, A, B, C or be added/removed
-- Update column header label from "ABDC '22" to the new year
-- Update README and JOSS paper references
+- Fall back to a title + year OpenAlex search when direct lookup fails
+- Score the top candidate by word-level Dice similarity (title), year proximity, and author last-name overlap
+- Two confidence tiers: high (≥ 0.92, data shown with `~` prefix) and medium (0.72–0.92, suggestion card in pane)
+- Explicit Confirm / Not this paper controls — never auto-apply without researcher sign-off
+- On confirm: store `Citegeist.openAlexId` so future refreshes go direct, bypassing title search
+- Bonus: if the matched work has a DOI and the item doesn't, offer to add it with one click — permanently graduating the item out of the title-search pipeline
 
-If you have early access to the new list or know the expected release date, please comment here.
+**Why this matters for researchers:**
+Citation data for conference proceedings, working papers, and imported items from imperfect sources is currently invisible in Citegeist. Metadata matching closes this gap without requiring researchers to manually hunt for identifiers.
 
----
-
-## Update AJG rankings to 2024 edition
-
-**Labels:** `enhancement`, `rankings`
-
-The Chartered ABS Academic Journal Guide released a 2024 edition. Citegeist currently bundles the 2021 edition.
-
-**What needs to happen:**
-
-- Source the AJG 2024 tier assignments
-- Update `src/data/journalRankings.ts`
-- Update column header label from "AJG '21" to "AJG '24"
-- Note any journals that changed tiers
-
-Contributions welcome — if you have access to the AJG 2024 list, please share the relevant ISSN-to-tier mappings.
+See the full design rationale, confidence thresholds, UI states, and module structure in [DESIGN.md](DESIGN.md).
 
 ---
 
@@ -104,26 +92,6 @@ When doing a literature review or preparing a meta-analysis, researchers often w
   - Top cited papers in the collection
 
 This would help researchers characterize the quality and scope of their literature review at a glance, which is useful for methods sections and reviewer responses.
-
----
-
-## Support non-DOI identifiers (PMID, arXiv ID, ISBN)
-
-**Labels:** `enhancement`
-
-Citegeist currently requires a DOI to fetch citation data. Some items in a typical Zotero library don't have DOIs:
-
-- **Preprints** often have arXiv IDs but no DOI
-- **Older biomedical papers** may only have a PubMed ID (PMID)
-- **Books and chapters** have ISBNs
-- **Working papers and dissertations** may have none of the above
-
-OpenAlex indexes works by multiple identifiers. We could fall back to PMID or arXiv ID when no DOI is present:
-
-- `https://api.openalex.org/works/pmid:12345678`
-- `https://api.openalex.org/works/arxiv:2205.01833`
-
-This would expand coverage beyond journal articles without requiring any new data source.
 
 ---
 

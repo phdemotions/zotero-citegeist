@@ -252,16 +252,16 @@ describe("fetchAndCacheItem", () => {
   it("skips non-regular items (notes, attachments)", async () => {
     const item = mockItem({ isRegular: false, doi: "10.1234/test" });
     const result = await fetchAndCacheItem(item);
-    expect(result.success).toBe(false);
-    expect(result.error).toBe("invalid-item");
+    expect(result.status).toBe("error");
+    if (result.status === "error") expect(result.error).toBe("invalid-item");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
   });
 
   it("returns no-identifier when item has no usable identifier", async () => {
     const item = mockItem({ extra: "Some note" });
     const result = await fetchAndCacheItem(item);
-    expect(result.success).toBe(false);
-    expect(result.error).toBe("no-identifier");
+    expect(result.status).toBe("error");
+    if (result.status === "error") expect(result.error).toBe("no-identifier");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
   });
 
@@ -272,8 +272,7 @@ describe("fetchAndCacheItem", () => {
       extra: `Citegeist.lastFetched: ${recentTimestamp}\nCitegeist.openAlexId: W999`,
     });
     const result = await fetchAndCacheItem(item);
-    expect(result.success).toBe(true);
-    expect(result.work).toBeNull();
+    expect(result.status).toBe("cached");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
   });
 
@@ -283,7 +282,7 @@ describe("fetchAndCacheItem", () => {
     mockedGetWorkByDOI.mockResolvedValue(fakeWork);
 
     const result = await fetchAndCacheItem(item);
-    expect(result.success).toBe(true);
+    expect(result.status).toBe("ok");
     expect(mockedGetWorkByDOI).toHaveBeenCalledWith("10.1234/test");
     expect(mockedGetWorkByPMID).not.toHaveBeenCalled();
     expect(mockedGetWorkByArxivId).not.toHaveBeenCalled();
@@ -295,7 +294,7 @@ describe("fetchAndCacheItem", () => {
     mockedGetWorkByPMID.mockResolvedValue(fakeWork);
 
     const result = await fetchAndCacheItem(item);
-    expect(result.success).toBe(true);
+    expect(result.status).toBe("ok");
     expect(mockedGetWorkByPMID).toHaveBeenCalledWith("12345678");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
     expect(item.saveTx).toHaveBeenCalled();
@@ -307,7 +306,7 @@ describe("fetchAndCacheItem", () => {
     mockedGetWorkByArxivId.mockResolvedValue(fakeWork);
 
     const result = await fetchAndCacheItem(item);
-    expect(result.success).toBe(true);
+    expect(result.status).toBe("ok");
     expect(mockedGetWorkByArxivId).toHaveBeenCalledWith("2205.01833");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
     expect(item.saveTx).toHaveBeenCalled();
@@ -319,7 +318,7 @@ describe("fetchAndCacheItem", () => {
     mockedGetWorkByArxivId.mockResolvedValue(fakeWork);
 
     const result = await fetchAndCacheItem(item);
-    expect(result.success).toBe(true);
+    expect(result.status).toBe("ok");
     expect(mockedGetWorkByArxivId).toHaveBeenCalledWith("2205.01833");
   });
 
@@ -329,7 +328,7 @@ describe("fetchAndCacheItem", () => {
     mockedGetWorkByArxivId.mockResolvedValue(fakeWork);
 
     const result = await fetchAndCacheItem(item);
-    expect(result.success).toBe(true);
+    expect(result.status).toBe("ok");
     expect(mockedGetWorkByArxivId).toHaveBeenCalledWith("2205.01833");
   });
 
@@ -338,8 +337,8 @@ describe("fetchAndCacheItem", () => {
     mockedGetWorkByDOI.mockResolvedValue(null);
 
     const result = await fetchAndCacheItem(item);
-    expect(result.success).toBe(false);
-    expect(result.error).toBe("not-found");
+    expect(result.status).toBe("error");
+    if (result.status === "error") expect(result.error).toBe("not-found");
   });
 
   it("returns not-found when PMID lookup returns null", async () => {
@@ -347,8 +346,8 @@ describe("fetchAndCacheItem", () => {
     mockedGetWorkByPMID.mockResolvedValue(null);
 
     const result = await fetchAndCacheItem(item);
-    expect(result.success).toBe(false);
-    expect(result.error).toBe("not-found");
+    expect(result.status).toBe("error");
+    if (result.status === "error") expect(result.error).toBe("not-found");
   });
 
   it("fetches via ISBN when no other identifier", async () => {
@@ -357,7 +356,7 @@ describe("fetchAndCacheItem", () => {
     mockedGetWorkByISBN.mockResolvedValue(fakeWork);
 
     const result = await fetchAndCacheItem(item);
-    expect(result.success).toBe(true);
+    expect(result.status).toBe("ok");
     expect(mockedGetWorkByISBN).toHaveBeenCalledWith("9780262046309");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
     expect(item.saveTx).toHaveBeenCalled();
@@ -368,7 +367,7 @@ describe("fetchAndCacheItem", () => {
     mockedGetWorkByISBN.mockResolvedValue(null);
 
     const result = await fetchAndCacheItem(item);
-    expect(result.success).toBe(false);
-    expect(result.error).toBe("not-found");
+    expect(result.status).toBe("error");
+    if (result.status === "error") expect(result.error).toBe("not-found");
   });
 });

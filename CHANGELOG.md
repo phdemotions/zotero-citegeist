@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-04-09
+
+### Fixed
+
+- Pane "no identifier" message now lists all four accepted identifiers: DOI, PMID, arXiv ID, and ISBN (previously omitted ISBN)
+- Right-click "View Citing Works" and "View References" now visible for items resolved via PMID, arXiv ID, or ISBN — not just DOI
+- Collection "Fetch All" and item "Fetch Citation Counts" now include items with PMID, arXiv, or ISBN identifiers
+- `isBookType` extracted from `citationColumn` and `citationPane` into `utils.ts` (single source of truth)
+- `FetchResult` converted to a proper TypeScript discriminated union (`status: "ok" | "cached" | "error"`) for correct compiler narrowing
+
+### Changed
+
+- `bumpp` upgraded from `^9.9.0` to `^10.0.0` (clears four high-severity CVEs in transitive `tar` dependency)
+- `esbuild` upgraded from `^0.24.0` to `^0.28.0` (three minor versions, TypeScript 5.x correctness fixes)
+
 ## [1.1.0] — 2026-04-09
 
 ### Added
@@ -101,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[1.1.1]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.1.1
 [1.1.0]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.1.0
 [1.0.3]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.3
 [1.0.2]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.0.2

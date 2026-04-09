@@ -12,7 +12,7 @@
 |-----------|-------|
 | **Version** | 1.0.3 |
 | **Build Status** | Clean (159 tests passing, typecheck clean, XPI 66.9 KB) |
-| **Open Issues** | P0: 0, P1: 0, P2: 1, P3: 2 |
+| **Open Issues** | P0: 0, P1: 3, P2: 4, P3: 2 |
 | **Stack** | TypeScript, esbuild, vitest, Zotero 7/8 bootstrap API |
 | **Data Source** | OpenAlex (free, unauthenticated, CC0) |
 | **Distribution** | GitHub Releases → auto-update via `release` floating tag |
@@ -125,6 +125,11 @@ Initial public release. See `CHANGELOG.md` for full feature list.
 
 | Task | Priority | Notes |
 |------|----------|-------|
+| Fix pane copy + menu.ts DOI guards (DEBT-001, DEBT-002) | P1 | Quick fixes; complete the identifier chain end-to-end |
+| Upgrade bumpp→v10, esbuild→^0.28.0 (DEBT-003) | P1 | 4 high-severity CVEs in bumpp; batch with esbuild update |
+| Extract isBookType to utils.ts (DEBT-004) | P2 | 5-min fix before book type list grows |
+| Migrate FetchResult to discriminated union (DEBT-005) | P2 | Required before v1.2.0 suggestion branch |
+| Metadata-based matching (v1.2.0) | P2 | Title+year search fallback; Confirm/Dismiss UX; DOI population bonus — fully specced in DESIGN.md |
 | JOSS paper submission | P2 | `paper/paper.md` exists; needs journal confirmation |
 | Export citation metrics (CSV) | P3 | Right-click collection → export for tenure packets |
 | Collection-level analytics | P3 | Aggregate FWCI/percentile for a folder |

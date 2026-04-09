@@ -29,12 +29,17 @@ import { BULK_FETCH_DELAY_MS } from "../constants";
 /** Reason a fetch didn't produce a work. */
 export type FetchError = "no-identifier" | "not-found" | "network" | "invalid-item";
 
-export interface FetchResult {
-  success: boolean;
-  work: OpenAlexWork | null;
-  /** Present when `success` is false — lets UI render a targeted message. */
-  error?: FetchError;
-}
+/**
+ * Discriminated union so TypeScript can narrow result properties without
+ * redundant null checks. Three states:
+ *   "ok"     — fresh data fetched; `work` is the OpenAlex record
+ *   "cached" — cache is still fresh; nothing was fetched
+ *   "error"  — fetch failed; `error` describes why
+ */
+export type FetchResult =
+  | { status: "ok"; work: OpenAlexWork }
+  | { status: "cached" }
+  | { status: "error"; error: FetchError };
 
 /** A resolved identifier ready for an OpenAlex lookup. */
 export interface ItemIdentifier {
@@ -105,16 +110,16 @@ export function extractIdentifier(item: _ZoteroTypes.Item): ItemIdentifier | nul
  */
 export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchResult> {
   if (!item.isRegularItem()) {
-    return { success: false, work: null, error: "invalid-item" };
+    return { status: "error", error: "invalid-item" };
   }
 
   const identifier = extractIdentifier(item);
   if (!identifier) {
-    return { success: false, work: null, error: "no-identifier" };
+    return { status: "error", error: "no-identifier" };
   }
 
   // Skip if cache is fresh
-  if (!isCacheStale(item)) return { success: true, work: null };
+  if (!isCacheStale(item)) return { status: "cached" };
 
   let work: OpenAlexWork | null;
   try {
@@ -135,18 +140,18 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
   } catch (e) {
     if (e instanceof OpenAlexNetworkError) {
       logError(`fetchAndCacheItem(${item.id})`, e);
-      return { success: false, work: null, error: "network" };
+      return { status: "error", error: "network" };
     }
     throw e;
   }
-  if (!work) return { success: false, work: null, error: "not-found" };
+  if (!work) return { status: "error", error: "not-found" };
 
   // Fetch journal-level stats (best-effort — `null` on failure is fine).
   const sourceId = work.primary_location?.source?.id;
   const sourceStats = sourceId ? await getSourceStats(sourceId) : null;
 
   await cacheWorkData(item, work, sourceStats);
-  return { success: true, work };
+  return { status: "ok", work };
 }
 
 /**
@@ -164,7 +169,7 @@ export async function fetchAndCacheItems(
   for (let i = 0; i < eligible.length; i++) {
     try {
       const result = await fetchAndCacheItem(eligible[i]);
-      if (result.success) fetched++;
+      if (result.status === "ok") fetched++;
     } catch (e) {
       logError(`fetchAndCacheItems item ${eligible[i].id}`, e);
     }

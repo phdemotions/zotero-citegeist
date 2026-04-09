@@ -2,7 +2,7 @@
  * Context menu items and batch operations for Citegeist.
  */
 
-import { fetchAndCacheItems } from "./citationService";
+import { fetchAndCacheItems, extractIdentifier } from "./citationService";
 import { showCitationNetwork } from "./citationNetwork";
 import { logError } from "./utils";
 
@@ -45,7 +45,7 @@ export function registerMenus(win: Window): void {
       if (items.length === 0) return;
 
       const eligible = items.filter(
-        (i: _ZoteroTypes.Item) => i.isRegularItem() && i.getField("DOI")?.trim(),
+        (i: _ZoteroTypes.Item) => i.isRegularItem() && extractIdentifier(i) !== null,
       );
       if (eligible.length === 0) return;
 
@@ -97,10 +97,10 @@ export function registerMenus(win: Window): void {
     // Hide citing/refs options when multiple items are selected (they only work on single items)
     itemMenu.addEventListener("popupshowing", () => {
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
-      const singleWithDOI =
-        items.length === 1 && items[0].isRegularItem() && !!items[0].getField("DOI")?.trim();
-      citingItem.hidden = !singleWithDOI;
-      refsItem.hidden = !singleWithDOI;
+      const singleWithIdentifier =
+        items.length === 1 && items[0].isRegularItem() && extractIdentifier(items[0]) !== null;
+      citingItem.hidden = !singleWithIdentifier;
+      refsItem.hidden = !singleWithIdentifier;
     });
   }
 
@@ -130,7 +130,7 @@ export function registerMenus(win: Window): void {
       collectRecursive(collection);
 
       const eligible = [...allItems.values()].filter(
-        (i) => i.isRegularItem() && i.getField("DOI")?.trim(),
+        (i) => i.isRegularItem() && extractIdentifier(i) !== null,
       );
 
       const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });

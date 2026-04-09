@@ -18,7 +18,7 @@ import { fetchAndCacheItem, extractIdentifier } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork } from "./citationNetwork";
-import { escapeHTML, logError } from "./utils";
+import { escapeHTML, logError, isBookType } from "./utils";
 import { HEADLINE_COUNT_FONT_SIZE_PX } from "../constants";
 
 let refreshing = false;
@@ -31,7 +31,7 @@ const PANE_ID = "citegeist-citation-details";
  * because zero almost always reflects incomplete coverage, not genuine uncitedness.
  */
 function citationSummary(count: number, item: _ZoteroTypes.Item): string {
-  if (count === 0 && (item.itemType === "book" || item.itemType === "bookSection")) {
+  if (count === 0 && isBookType(item)) {
     return "Found on OpenAlex";
   }
   return `${count.toLocaleString()} citations`;
@@ -77,7 +77,7 @@ export function registerCitationPane(pluginID: string): void {
             flex-shrink: 0;
           }
           @keyframes cg-spin { to { transform: rotate(360deg); } }
-          .cg-no-doi { color: var(--fill-secondary); padding: 4px 0; }
+          .cg-no-identifier { color: var(--fill-secondary); padding: 4px 0; }
 
           .cg-retracted {
             background: var(--accent-red5, #fee);
@@ -206,7 +206,7 @@ export function registerCitationPane(pluginID: string): void {
       if (!container) return;
 
       if (!extractIdentifier(item)) {
-        container.innerHTML = `<div class="cg-no-doi">No DOI, PubMed ID, or arXiv ID found for this item.</div>`;
+        container.innerHTML = `<div class="cg-no-identifier">No recognized identifier found. Add a DOI, PMID, arXiv ID, or ISBN to enable citation data.</div>`;
         setSectionSummary("No identifier");
         return;
       }
@@ -232,7 +232,7 @@ export function registerCitationPane(pluginID: string): void {
       if (alreadyCached && !isCacheStale(item)) return;
 
       const result = await fetchAndCacheItem(item);
-      if (result.success && result.work) {
+      if (result.status === "ok") {
         const freshData = getCachedData(item);
         if (freshData) {
           renderPane(container, freshData, item, result.work);
@@ -240,12 +240,12 @@ export function registerCitationPane(pluginID: string): void {
           // Notify columns to refresh so citation data appears immediately
           invalidateColumnCache(item.id);
         }
-      } else if (!alreadyCached && !result.success) {
+      } else if (result.status === "error" && !alreadyCached) {
         if (result.error === "network") {
-          container.innerHTML = `<div class="cg-no-doi">OpenAlex is currently unavailable. Try again in a few minutes.</div>`;
+          container.innerHTML = `<div class="cg-no-identifier">OpenAlex is currently unavailable. Try again in a few minutes.</div>`;
           setSectionSummary("Unavailable");
         } else {
-          container.innerHTML = `<div class="cg-no-doi">This work was not found on OpenAlex.</div>`;
+          container.innerHTML = `<div class="cg-no-identifier">This work was not found on OpenAlex.</div>`;
           setSectionSummary("Not found");
         }
       }
@@ -268,14 +268,14 @@ export function registerCitationPane(pluginID: string): void {
             const cached = getCachedData(item);
             if (container) {
               if (cached) {
-                renderPane(container, cached, item, result.work ?? undefined);
+                renderPane(container, cached, item, result.status === "ok" ? result.work : undefined);
                 setSectionSummary(citationSummary(cached.citedByCount, item));
                 invalidateColumnCache(item.id);
-              } else if (result.error === "network") {
-                container.innerHTML = `<div class="cg-no-doi">OpenAlex is currently unavailable. Try again in a few minutes.</div>`;
+              } else if (result.status === "error" && result.error === "network") {
+                container.innerHTML = `<div class="cg-no-identifier">OpenAlex is currently unavailable. Try again in a few minutes.</div>`;
                 setSectionSummary("Unavailable");
               } else {
-                container.innerHTML = `<div class="cg-no-doi">This work was not found on OpenAlex.</div>`;
+                container.innerHTML = `<div class="cg-no-identifier">This work was not found on OpenAlex.</div>`;
                 setSectionSummary("Not found");
               }
             }
@@ -318,7 +318,7 @@ function renderPane(
   }
 
   // ── Headline stat line ──
-  const isBook = item.itemType === "book" || item.itemType === "bookSection";
+  const isBook = isBookType(item);
   const suppressCount = isBook && data.citedByCount === 0;
 
   if (!suppressCount) {
@@ -347,7 +347,7 @@ function renderPane(
     container.appendChild(headline);
   } else {
     const note = doc.createElement("div");
-    note.className = "cg-no-doi";
+    note.className = "cg-no-identifier";
     note.textContent = "Citation tracking for books is limited in OpenAlex.";
     container.appendChild(note);
   }
