@@ -66,7 +66,12 @@ vi.mock("../src/modules/openalex", () => ({
 }));
 
 import { fetchAndCacheItem, extractIdentifier } from "../src/modules/citationService";
-import { getWorkByDOI, getWorkByPMID, getWorkByArxivId, getWorkByISBN } from "../src/modules/openalex";
+import {
+  getWorkByDOI,
+  getWorkByPMID,
+  getWorkByArxivId,
+  getWorkByISBN,
+} from "../src/modules/openalex";
 
 const mockedGetWorkByDOI = vi.mocked(getWorkByDOI);
 const mockedGetWorkByPMID = vi.mocked(getWorkByPMID);

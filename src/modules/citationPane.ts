@@ -268,7 +268,12 @@ export function registerCitationPane(pluginID: string): void {
             const cached = getCachedData(item);
             if (container) {
               if (cached) {
-                renderPane(container, cached, item, result.status === "ok" ? result.work : undefined);
+                renderPane(
+                  container,
+                  cached,
+                  item,
+                  result.status === "ok" ? result.work : undefined,
+                );
                 setSectionSummary(citationSummary(cached.citedByCount, item));
                 invalidateColumnCache(item.id);
               } else if (result.status === "error" && result.error === "network") {

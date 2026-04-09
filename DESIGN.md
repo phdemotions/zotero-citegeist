@@ -156,11 +156,11 @@ Only the top-ranked candidate after local scoring is considered — we never pre
 
 Candidates returned by OpenAlex are scored locally against three signals, weighted by their discriminating power for academic titles:
 
-| Signal | Weight | Notes |
-|--------|--------|-------|
-| Title similarity | 60% | Word-level Dice coefficient on normalized tokens |
-| Year match | 25% | Exact = 1.0, ±1 = 0.8, ±2 = 0.5, else = 0.0 |
-| Author last-name overlap | 15% | Fraction of Zotero authors matched in candidate; neutral (0.5) if item has no authors |
+| Signal                   | Weight | Notes                                                                                 |
+| ------------------------ | ------ | ------------------------------------------------------------------------------------- |
+| Title similarity         | 60%    | Word-level Dice coefficient on normalized tokens                                      |
+| Year match               | 25%    | Exact = 1.0, ±1 = 0.8, ±2 = 0.5, else = 0.0                                           |
+| Author last-name overlap | 15%    | Fraction of Zotero authors matched in candidate; neutral (0.5) if item has no authors |
 
 ```
 score = title_score × 0.60 + year_score × 0.25 + author_score × 0.15
@@ -170,11 +170,11 @@ Word-level Dice coefficient was chosen over character-level edit distance becaus
 
 **Thresholds:**
 
-| Tier | Score | Behaviour |
-|------|-------|-----------|
-| **High confidence** | ≥ 0.92 | Data displayed immediately with `~` prefix; pane shows "Matched by title" banner with Confirm / Not this paper |
+| Tier                  | Score       | Behaviour                                                                                                           |
+| --------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------- |
+| **High confidence**   | ≥ 0.92      | Data displayed immediately with `~` prefix; pane shows "Matched by title" banner with Confirm / Not this paper      |
 | **Medium confidence** | 0.72 – 0.92 | No data in columns (`?` badge only); pane shows a suggestion card with full match details, Confirm / Not this paper |
-| **No match** | < 0.72 | Nothing shown; `Citegeist.noMatch: true` written with timestamp |
+| **No match**          | < 0.72      | Nothing shown; `Citegeist.noMatch: true` written with timestamp                                                     |
 
 The high-confidence threshold (0.92) is conservative by design. A wrong citation count attached to the wrong paper in a tenure packet is worse than a blank cell. Researchers who want more coverage can confirm medium-confidence suggestions themselves.
 
@@ -193,11 +193,12 @@ Citegeist.noMatchTimestamp: 2026-04-09T15:00:00Z  (for 30-day retry window)
 
 ```typescript
 type FetchResult =
-  | { success: true;  work: OpenAlexWork | null }
-  | { success: false; error: "invalid-item" | "no-identifier" | "not-found"
-                            | "network" | "no-match" }
-  | { success: "suggestion"; candidate: OpenAlexWork;
-      tier: "high" | "medium"; confidence: number };
+  | { success: true; work: OpenAlexWork | null }
+  | {
+      success: false;
+      error: "invalid-item" | "no-identifier" | "not-found" | "network" | "no-match";
+    }
+  | { success: "suggestion"; candidate: OpenAlexWork; tier: "high" | "medium"; confidence: number };
 ```
 
 The `"suggestion"` branch is distinct from both `true` and `false` so that callers cannot accidentally treat an unconfirmed match as confirmed data.
@@ -205,6 +206,7 @@ The `"suggestion"` branch is distinct from both `true` and `false` so that calle
 ### UI states
 
 **Columns (`citationColumn.ts`):**
+
 - Confirmed match: normal display
 - High-confidence suggestion: `~42` (tilde prefix on Citations; FWCI and Percentile shown normally)
 - Medium-confidence suggestion: `?` in Citations column; FWCI and Percentile blank
@@ -212,12 +214,14 @@ The `"suggestion"` branch is distinct from both `true` and `false` so that calle
 
 **Pane (`citationPane.ts`):**
 
-*High-confidence banner* — sits above the metrics section, styled in amber (caution, not error):
+_High-confidence banner_ — sits above the metrics section, styled in amber (caution, not error):
+
 > **Matched by title** — we couldn't find a direct identifier for this item, so we matched it by title, year, and authors. Please confirm this is the right paper.
 >
 > [Confirm match] [Not this paper]
 
-*Medium-confidence card* — replaces the metrics section entirely:
+_Medium-confidence card_ — replaces the metrics section entirely:
+
 > **Possible match found**
 > _[Candidate title]_
 > [Authors] · [Journal] · [Year]
@@ -228,6 +232,7 @@ The `"suggestion"` branch is distinct from both `true` and `false` so that calle
 ### Confirm / Dismiss flow
 
 **On Confirm:**
+
 1. Write all citation fields to Extra as usual
 2. Write `Citegeist.matchMethod: title-match` and `Citegeist.matchConfidence: <tier>`
 3. Write `Citegeist.openAlexId: W<id>` — future fetches go directly to `/works/W<id>`, bypassing title search entirely
@@ -235,11 +240,13 @@ The `"suggestion"` branch is distinct from both `true` and `false` so that calle
 5. Re-render the pane in confirmed state; remove tilde from columns
 
 **On "Not this paper":**
+
 1. Write `Citegeist.noMatch: true` + `Citegeist.noMatchTimestamp: <now>`
 2. Clear any speculatively displayed data
 3. Pane shows: "No match confirmed. You can retry in 30 days or add a DOI manually."
 
 **On automatic no-match (score < 0.72):**
+
 1. Write `Citegeist.noMatch: true` + timestamp (silently — no UI disruption)
 2. Columns stay blank; pane shows the existing "no identifier" message with an added note: "We also searched by title and found no confident match."
 
@@ -256,15 +263,13 @@ export interface TitleMatchResult {
   tier: "high" | "medium";
 }
 
-export async function searchByMetadata(
-  item: _ZoteroTypes.Item
-): Promise<TitleMatchResult | null>
+export async function searchByMetadata(item: _ZoteroTypes.Item): Promise<TitleMatchResult | null>;
 
 // Not exported — internal scoring
-function scoreCandidate(candidate: OpenAlexWork, item: _ZoteroTypes.Item): number
-function normalizeTitleTokens(title: string): Set<string>
-function diceSimilarity(a: Set<string>, b: Set<string>): number
-function authorOverlap(item: _ZoteroTypes.Item, work: OpenAlexWork): number
+function scoreCandidate(candidate: OpenAlexWork, item: _ZoteroTypes.Item): number;
+function normalizeTitleTokens(title: string): Set<string>;
+function diceSimilarity(a: Set<string>, b: Set<string>): number;
+function authorOverlap(item: _ZoteroTypes.Item, work: OpenAlexWork): number;
 ```
 
 `citationService.ts` calls `searchByMetadata` after a failed direct lookup and returns the `"suggestion"` result type. It does not apply the match automatically — the pane and confirm flow handle that.
@@ -274,7 +279,7 @@ function authorOverlap(item: _ZoteroTypes.Item, work: OpenAlexWork): number
 ```typescript
 export const TITLE_MATCH_HIGH_THRESHOLD = 0.92;
 export const TITLE_MATCH_MEDIUM_THRESHOLD = 0.72;
-export const TITLE_SEARCH_RESULTS = 5;        // per-page for candidate query
+export const TITLE_SEARCH_RESULTS = 5; // per-page for candidate query
 export const NO_MATCH_RETRY_DAYS = 30;
 ```
 
