@@ -5,7 +5,7 @@
  * and year, scores the top candidates, and returns the best match above a
  * confidence threshold.
  *
- * Scoring weights (per DESIGN.md):
+ * Scoring weights (per docs/DESIGN.md):
  *   Title similarity  60%  — word-level Dice coefficient on normalized tokens
  *   Year match        25%  — exact=1.0, ±1=0.8, ±2=0.5, else=0.0
  *   Author overlap    15%  — fraction of Zotero authors matched; 0.5 if no authors

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" width="200" alt="Citegeist logo" />
+  <img src="docs/assets/logo.png" width="200" alt="Citegeist logo" />
 </p>
 
 <h1 align="center">Citegeist</h1>
@@ -324,13 +324,13 @@ In Zotero, open **Help → Debug Output Logging → Enable**, reproduce the prob
 
 - **Bug reports & feature requests:** [GitHub Issues](https://github.com/phdemotions/zotero-citegeist/issues)
 - **Contributing:** See [CONTRIBUTING.md](CONTRIBUTING.md)
-- **Code of Conduct:** All participants are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md)
-- **Roadmap:** See [BACKLOG.md](BACKLOG.md) for upcoming work and ideas
+- **Code of Conduct:** All participants are expected to follow the [Code of Conduct](.github/CODE_OF_CONDUCT.md)
+- **Roadmap:** See [BACKLOG.md](docs/BACKLOG.md) for upcoming work and ideas
 - Citegeist is **completely free** and always will be. If you find it useful, you can [sponsor the project on GitHub](https://github.com/sponsors/phdemotions).
 
 ## Citing Citegeist
 
-If Citegeist contributes to your research, please cite it. See [`CITATION.cff`](CITATION.cff) or the paper in [`paper/paper.md`](paper/paper.md).
+If Citegeist contributes to your research, please cite it. See [`CITATION.cff`](CITATION.cff) or the paper in [`docs/paper/paper.md`](docs/paper/paper.md).
 
 ---
 

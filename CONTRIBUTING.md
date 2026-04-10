@@ -90,7 +90,7 @@ Use the **Bug report** issue template. At minimum we need:
 
 ## Architecture Overview
 
-See [`DESIGN.md`](DESIGN.md) for the design rationale and trade-offs. Key modules:
+See [`DESIGN.md`](docs/DESIGN.md) for the design rationale and trade-offs. Key modules:
 
 - `src/modules/openalex.ts` — OpenAlex client with polite-pool rate limiting and retry
 - `src/modules/cache.ts` — Read/write Citegeist fields in Zotero's Extra field
@@ -106,7 +106,7 @@ By contributing, you agree that your contributions will be licensed under the [G
 
 ## Code of Conduct
 
-All contributors are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+All contributors are expected to follow the [Code of Conduct](.github/CODE_OF_CONDUCT.md).
 
 ## Support the Project
 
