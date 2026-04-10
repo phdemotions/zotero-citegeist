@@ -27,6 +27,11 @@ const mockZotero = {
 };
 vi.stubGlobal("Zotero", mockZotero);
 
+// Mock titleSearch so unit tests don't trigger title search fallback
+vi.mock("../src/modules/titleSearch", () => ({
+  searchByMetadata: vi.fn().mockResolvedValue(null),
+}));
+
 // Mock the openalex module so we don't make real HTTP requests
 vi.mock("../src/modules/openalex", () => ({
   getWorkByDOI: vi.fn(),
@@ -262,11 +267,11 @@ describe("fetchAndCacheItem", () => {
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
   });
 
-  it("returns no-identifier when item has no usable identifier", async () => {
+  it("returns no-match when item has no usable identifier (title search also fails)", async () => {
     const item = mockItem({ extra: "Some note" });
     const result = await fetchAndCacheItem(item);
     expect(result.status).toBe("error");
-    if (result.status === "error") expect(result.error).toBe("no-identifier");
+    if (result.status === "error") expect(result.error).toBe("no-match");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
   });
 
@@ -337,22 +342,22 @@ describe("fetchAndCacheItem", () => {
     expect(mockedGetWorkByArxivId).toHaveBeenCalledWith("2205.01833");
   });
 
-  it("returns not-found when API returns null", async () => {
+  it("returns no-match when API returns null (falls through to title search, which also fails)", async () => {
     const item = mockItem({ doi: "10.1234/test" });
     mockedGetWorkByDOI.mockResolvedValue(null);
 
     const result = await fetchAndCacheItem(item);
     expect(result.status).toBe("error");
-    if (result.status === "error") expect(result.error).toBe("not-found");
+    if (result.status === "error") expect(result.error).toBe("no-match");
   });
 
-  it("returns not-found when PMID lookup returns null", async () => {
+  it("returns no-match when PMID lookup returns null (falls through to title search, which also fails)", async () => {
     const item = mockItem({ extra: "PMID: 99999999" });
     mockedGetWorkByPMID.mockResolvedValue(null);
 
     const result = await fetchAndCacheItem(item);
     expect(result.status).toBe("error");
-    if (result.status === "error") expect(result.error).toBe("not-found");
+    if (result.status === "error") expect(result.error).toBe("no-match");
   });
 
   it("fetches via ISBN when no other identifier", async () => {
@@ -367,12 +372,12 @@ describe("fetchAndCacheItem", () => {
     expect(item.saveTx).toHaveBeenCalled();
   });
 
-  it("returns not-found when ISBN lookup returns null", async () => {
+  it("returns no-match when ISBN lookup returns null (falls through to title search, which also fails)", async () => {
     const item = mockItem({ isbn: "9780262046309", itemType: "book" });
     mockedGetWorkByISBN.mockResolvedValue(null);
 
     const result = await fetchAndCacheItem(item);
     expect(result.status).toBe("error");
-    if (result.status === "error") expect(result.error).toBe("not-found");
+    if (result.status === "error") expect(result.error).toBe("no-match");
   });
 });

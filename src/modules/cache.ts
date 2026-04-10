@@ -234,7 +234,10 @@ export async function cacheWorkData(
     citegeistFields.set(`${PREFIX}citedness2yr`, sourceStats.citedness2yr.toFixed(2));
     citegeistFields.set(`${PREFIX}journalHIndex`, String(sourceStats.hIndex));
     if (sourceStats.issns.length > 0) {
-      citegeistFields.set(`${PREFIX}sourceISSNs`, sourceStats.issns.map(sanitizeCacheValue).join(","));
+      citegeistFields.set(
+        `${PREFIX}sourceISSNs`,
+        sourceStats.issns.map(sanitizeCacheValue).join(","),
+      );
     }
   }
   // Also store the issn_l from the work's primary location as fallback
@@ -286,9 +289,7 @@ function isMatchTier(v: unknown): v is MatchTier {
 }
 
 function isMatchMethod(v: unknown): v is MatchMethod {
-  return (
-    v === "doi" || v === "pmid" || v === "arxiv" || v === "isbn" || v === "title-match"
-  );
+  return v === "doi" || v === "pmid" || v === "arxiv" || v === "isbn" || v === "title-match";
 }
 
 export interface TitleMatchMeta {
@@ -380,7 +381,10 @@ export async function writePendingSuggestion(
   confidence: number,
 ): Promise<void> {
   const { citegeistFields, otherLines } = parseExtra(item);
-  citegeistFields.set(`${PREFIX}pendingSuggestionId`, sanitizeCacheValue(work.id.replace("https://openalex.org/", "")));
+  citegeistFields.set(
+    `${PREFIX}pendingSuggestionId`,
+    sanitizeCacheValue(work.id.replace("https://openalex.org/", "")),
+  );
   citegeistFields.set(`${PREFIX}pendingSuggestionTitle`, sanitizeCacheValue(work.display_name));
   citegeistFields.set(`${PREFIX}pendingSuggestionCount`, String(work.cited_by_count));
   citegeistFields.set(

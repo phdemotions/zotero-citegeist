@@ -52,3 +52,13 @@ export const MAX_ABSTRACT_LENGTH = 100_000;
 // ── Pane ──
 /** Headline citation-count font size in px. */
 export const HEADLINE_COUNT_FONT_SIZE_PX = 24;
+
+// ── Title-based metadata matching ──
+/** Score threshold for high-confidence title match (data shown with ~ prefix). */
+export const TITLE_MATCH_HIGH_THRESHOLD = 0.92;
+/** Score threshold for medium-confidence title match (suggestion card, no data). */
+export const TITLE_MATCH_MEDIUM_THRESHOLD = 0.72;
+/** Number of candidates to fetch from OpenAlex title search. */
+export const TITLE_SEARCH_RESULTS = 5;
+/** Days before retrying a dismissed or no-match item. */
+export const NO_MATCH_RETRY_DAYS = 30;

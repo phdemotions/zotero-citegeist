@@ -559,6 +559,38 @@ export async function getSourceStats(sourceId: string): Promise<OpenAlexSourceSt
   }
 }
 
+/**
+ * Search for works by title + optional year.
+ *
+ * Used by the metadata-matching fallback when direct identifier lookup fails.
+ * Returns up to `perPage` candidates for local scoring.
+ *
+ * @throws {@link OpenAlexNetworkError} when the service is unreachable.
+ */
+export async function searchWorksByTitle(
+  title: string,
+  year: number | null,
+  perPage: number = 5,
+): Promise<OpenAlexWork[]> {
+  if (!title.trim()) return [];
+
+  const filter = year ? `title.search:${title},publication_year:${year}` : `title.search:${title}`;
+
+  const url = buildUrl("/works", {
+    filter,
+    select: LIST_SELECT,
+    per_page: String(perPage),
+  });
+
+  try {
+    const resp = await rateLimitedFetch<OpenAlexListResponse>(url, `title search: ${title}`);
+    return (resp.results || []).map(normalizeWork);
+  } catch (e) {
+    if (e instanceof OpenAlexNotFoundError) return [];
+    throw e;
+  }
+}
+
 /** Clear the session-level source stats cache (call on shutdown). */
 export function clearSourceStatsCache(): void {
   sourceStatsCache.clear();

@@ -1,6 +1,6 @@
 # Citegeist — Open Issues
 
-> **Last Updated:** 2026-04-09 (v1.0.3)
+> **Last Updated:** 2026-04-09 (v1.1.2)
 
 ---
 
@@ -9,8 +9,8 @@
 | Priority     | Open |
 | ------------ | ---- |
 | P0 (Blocker) | 0    |
-| P1 (High)    | 3    |
-| P2 (Medium)  | 4    |
+| P1 (High)    | 0    |
+| P2 (Medium)  | 3    |
 | P3 (Low)     | 2    |
 
 ---
@@ -23,23 +23,7 @@ _None currently._
 
 ## P1 — High Priority
 
-### DEBT-001: Pane "no identifier" message missing ISBN
-
-**Impact:** A researcher with a book and no ISBN sees "No DOI, PubMed ID, or arXiv ID found" — the message implies ISBN won't help, but it would. Actively misleads the book-focused users v1.1.0 was built to serve.
-**Fix:** `citationPane.ts:209` — update copy to "No recognized identifier found. Add a DOI, PMID, arXiv ID, or ISBN to enable citation data." Also rename `cg-no-doi` CSS class → `cg-no-identifier`.
-**Found:** Session audit 2026-04-09 (/cdo 🔴)
-
-### DEBT-002: `menu.ts` right-click guards check DOI only — breaks non-DOI items
-
-**Impact:** "View Citing Works" and "View References" are hidden for any item resolved via PMID/arXiv/ISBN, even when citation data is visible in the pane. A researcher sees citation counts but can't open the network browser from the same item — looks like a bug.
-**Fix:** Replace DOI field checks in `menu.ts:48` and `menu.ts:101` with `extractIdentifier(item) !== null`.
-**Found:** Session audit 2026-04-09 (/ux 🟠)
-
-### DEBT-003: `bumpp` v9.11.1 carries four high-severity CVEs in `tar` dependency
-
-**Impact:** Path traversal, symlink poisoning, and arbitrary file overwrite via hardlink — fires during every `npm run release`.
-**Fix:** `npm install bumpp@^10 esbuild@^0.28.0` (esbuild also behind 3 minor versions; batch together). Update ranges in `package.json`.
-**Found:** Session audit 2026-04-09 (/freshen 🔴)
+_None currently._
 
 ---
 
@@ -101,3 +85,6 @@ _None currently._
 | FEAT-ISBN | ISBN support for books                                                          | `getWorkByISBN` added; zero-citation suppression in columns and pane; book/bookSection handled gracefully              | 2026-04-09 |
 | RANK-001  | AJG rankings out of date (2021 edition)                                         | Rebuilt from master-journals.csv: 3177 journals, AJG 2024 edition, column renamed "AJG '24"                            | 2026-04-09 |
 | RANK-002  | ABDC rankings — 2025/2026 edition expected                                      | ABDC 2025 edition now bundled (2684 journals); column renamed "ABDC '25"                                               | 2026-04-09 |
+| DEBT-001  | Pane "no identifier" message missing ISBN                                       | Copy updated; `cg-no-doi` → `cg-no-identifier`                                                                         | 2026-04-09 |
+| DEBT-002  | `menu.ts` right-click guards check DOI only                                     | Both guards replaced with `extractIdentifier(item) !== null`                                                           | 2026-04-09 |
+| DEBT-003  | `bumpp` v9.x carries high-severity CVEs in `tar`                                | Upgraded to bumpp@10.4.1 + esbuild@0.28.0                                                                              | 2026-04-09 |

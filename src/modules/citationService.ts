@@ -15,6 +15,7 @@ import {
   getWorkByPMID,
   getWorkByArxivId,
   getWorkByISBN,
+  getWorkById,
   getSourceStats,
   normalizeDOI,
   normalizePMID,
@@ -22,24 +23,34 @@ import {
   normalizeISBN,
   type OpenAlexWork,
 } from "./openalex";
-import { cacheWorkData, isCacheStale, getCachedData } from "./cache";
+import {
+  cacheWorkData,
+  isCacheStale,
+  getCachedData,
+  isNoMatchSuppressed,
+  writeNoMatch,
+  writePendingSuggestion,
+  getTitleMatchMeta,
+} from "./cache";
+import { searchByMetadata, type TitleMatchResult } from "./titleSearch";
 import { OpenAlexNetworkError, logError } from "./utils";
-import { BULK_FETCH_DELAY_MS } from "../constants";
+import { BULK_FETCH_DELAY_MS, NO_MATCH_RETRY_DAYS } from "../constants";
 
 /** Reason a fetch didn't produce a work. */
-export type FetchError = "no-identifier" | "not-found" | "network" | "invalid-item";
+export type FetchError = "no-identifier" | "not-found" | "network" | "invalid-item" | "no-match";
 
 /**
- * Discriminated union so TypeScript can narrow result properties without
- * redundant null checks. Three states:
- *   "ok"     — fresh data fetched; `work` is the OpenAlex record
- *   "cached" — cache is still fresh; nothing was fetched
- *   "error"  — fetch failed; `error` describes why
+ * Discriminated union for fetch results. Five states:
+ *   "ok"         — fresh data fetched; `work` is the OpenAlex record
+ *   "cached"     — cache is still fresh; nothing was fetched
+ *   "error"      — fetch failed; `error` describes why
+ *   "suggestion" — title match found but unconfirmed; `candidate` holds the work
  */
 export type FetchResult =
   | { status: "ok"; work: OpenAlexWork }
   | { status: "cached" }
-  | { status: "error"; error: FetchError };
+  | { status: "error"; error: FetchError }
+  | { status: "suggestion"; candidate: OpenAlexWork; tier: "high" | "medium"; confidence: number };
 
 /** A resolved identifier ready for an OpenAlex lookup. */
 export interface ItemIdentifier {
@@ -113,9 +124,34 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
     return { status: "error", error: "invalid-item" };
   }
 
+  // If researcher previously confirmed a title match, use the stored OpenAlex ID directly.
+  const matchMeta = getTitleMatchMeta(item);
+  if (matchMeta.confirmedOpenAlexId) {
+    if (!isCacheStale(item)) return { status: "cached" };
+    try {
+      const work = await getWorkById(matchMeta.confirmedOpenAlexId);
+      if (work) {
+        const sourceStats = work.primary_location?.source?.id
+          ? await getSourceStats(work.primary_location.source.id)
+          : null;
+        await cacheWorkData(item, work, sourceStats);
+        return { status: "ok", work };
+      }
+    } catch (e) {
+      if (e instanceof OpenAlexNetworkError) {
+        logError(`fetchAndCacheItem(confirmed id ${matchMeta.confirmedOpenAlexId})`, e);
+        return { status: "error", error: "network" };
+      }
+      throw e;
+    }
+    // Confirmed ID no longer found — fall through to title search
+  }
+
   const identifier = extractIdentifier(item);
+
   if (!identifier) {
-    return { status: "error", error: "no-identifier" };
+    // No identifier — try title search (unless suppressed)
+    return attemptTitleSearch(item);
   }
 
   // Skip if cache is fresh
@@ -144,7 +180,11 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
     }
     throw e;
   }
-  if (!work) return { status: "error", error: "not-found" };
+
+  if (!work) {
+    // Identifier found but not in OpenAlex — try title search as fallback
+    return attemptTitleSearch(item);
+  }
 
   // Fetch journal-level stats (best-effort — `null` on failure is fine).
   const sourceId = work.primary_location?.source?.id;
@@ -155,6 +195,48 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
 }
 
 /**
+ * Attempt a title-based metadata search after direct lookup failed.
+ * Handles the no-match suppression window and writes the result to cache.
+ */
+async function attemptTitleSearch(item: _ZoteroTypes.Item): Promise<FetchResult> {
+  // Don't re-search if researcher dismissed or we already found no match recently
+  if (isNoMatchSuppressed(item, NO_MATCH_RETRY_DAYS)) {
+    return { status: "error", error: "no-match" };
+  }
+
+  let match: TitleMatchResult | null;
+  try {
+    match = await searchByMetadata(item);
+  } catch (e) {
+    if (e instanceof OpenAlexNetworkError) {
+      logError(`attemptTitleSearch(${item.id})`, e);
+      return { status: "error", error: "network" };
+    }
+    throw e;
+  }
+
+  if (!match) {
+    await writeNoMatch(item);
+    return { status: "error", error: "no-match" };
+  }
+
+  // Store the suggestion so the pane can render the card without re-fetching
+  await writePendingSuggestion(
+    item,
+    { ...match.work, doi: match.work.doi ?? null },
+    match.tier,
+    match.confidence,
+  );
+
+  return {
+    status: "suggestion",
+    candidate: match.work,
+    tier: match.tier,
+    confidence: match.confidence,
+  };
+}
+
+/**
  * Batch fetch citation data for multiple items.
  * Returns count of successfully fetched items.
  */
@@ -162,7 +244,7 @@ export async function fetchAndCacheItems(
   items: _ZoteroTypes.Item[],
   onProgress?: (current: number, total: number) => void,
 ): Promise<number> {
-  const eligible = items.filter((item) => item.isRegularItem() && extractIdentifier(item));
+  const eligible = items.filter((item) => item.isRegularItem());
 
   let fetched = 0;
 

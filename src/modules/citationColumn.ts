@@ -94,7 +94,8 @@ function getMetricsAndMaybeQueue(item: _ZoteroTypes.Item): AllMetrics | null {
   const hasUsableTitle = ((item.getField("title") as string) || "").trim().length > 0;
 
   // Nothing to show and nothing to fetch — skip entirely
-  if (!hasFetchable && !hasUsableTitle && metrics.count === null && metrics.suggestion === null) return null;
+  if (!hasFetchable && !hasUsableTitle && metrics.count === null && metrics.suggestion === null)
+    return null;
 
   metricsCache.set(item.id, metrics);
 
