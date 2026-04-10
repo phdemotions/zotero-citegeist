@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-04-09
+
+### Added
+
+- **Metadata-based matching** — items with no recognized identifier (DOI, PMID, arXiv ID, or ISBN) are now matched to OpenAlex works by title, publication year, and author overlap. Scoring uses a weighted Dice coefficient (title 60%, year 25%, authors 15%). High-confidence matches (≥ 0.92) show speculative metrics with a `~` prefix and a confirmation banner in the citation pane; medium-confidence matches (≥ 0.72) show a candidate card for researcher review.
+- **Confirm / Dismiss flow** — researchers can confirm or dismiss a suggested match from the citation pane. Confirming stores the OpenAlex work ID so future refreshes bypass title search entirely (direct ID lookup). Dismissing suppresses re-search for 30 days.
+- **DOI population bonus** — after confirming a title match, if the matched work has a DOI and the Zotero item doesn't, Citegeist offers to add the DOI to the item field. Accepting permanently graduates the item out of the title-search pipeline.
+- `searchByMetadata` in `titleSearch.ts` — standalone scoring module with exported `normalizeTitle`, `normalizeTitleTokens`, and `diceSimilarity` helpers (20 new unit tests)
+- `searchWorksByTitle` in `openalex.ts` — OpenAlex title search endpoint with year filter
+- `writePendingSuggestion`, `getPendingSuggestion`, `clearPendingSuggestion`, `confirmTitleMatch`, `writeNoMatch`, `isNoMatchSuppressed` — new cache primitives for the suggestion lifecycle
+- `FetchResult` union extended with `{ status: "suggestion"; candidate; tier; confidence }` branch
+- `FetchError` extended with `"no-match"` for items where title search found nothing
+
+### Fixed
+
+- Cache injection guard: all OpenAlex string values (`sourceId`, `issnL`, `sourceISSNs`, suggestion title/DOI/ID) are now stripped of `\r`/`\n` before writing to the Extra field
+- `PendingSuggestion.year` typed as `number | null`; year display in the medium-confidence card is omitted when year is unavailable
+- `isMatchTier` and `isMatchMethod` guard functions added; all `as MatchTier` / `as MatchMethod` casts replaced with runtime-checked alternatives
+- DOI written to item field via `normalizeDOI()` normalization to ensure canonical format
+- `processFetchQueue` now calls `invalidateColumnCache` immediately on `"suggestion"` result so column indicators update without waiting for the full batch refresh
+- `getMetricsAndMaybeQueue` skips the fetch queue for items with no title and for items whose no-match suppression window has not expired, eliminating redundant API calls
+- `STOP_WORDS` set moved to module scope in `titleSearch.ts` (was re-allocated on every `normalizeTitleTokens` call)
+
 ## [1.1.2] — 2026-04-09
 
 ### Added
@@ -122,6 +145,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[1.2.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.1.2
 [1.1.1]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.1.1
 [1.1.0]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.1.0

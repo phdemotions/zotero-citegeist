@@ -11,7 +11,7 @@
  * Journal rankings are resolved from a bundled lookup table (zero API calls).
  */
 
-import { getCachedMetrics, type AllMetrics } from "./cache";
+import { getCachedMetrics, isNoMatchSuppressed, type AllMetrics } from "./cache";
 import { fetchAndCacheItem, extractIdentifier } from "./citationService";
 import { lookupRanking, RANKING_VERSIONS, type JournalRanking } from "../data/journalRankings";
 import { getCachedSourceISSNs } from "./openalex";
@@ -22,6 +22,7 @@ import {
   FETCH_BATCH_SIZE,
   FETCH_QUEUE_DEBOUNCE_MS,
   MAX_ATTEMPTED_FETCH_CACHE,
+  NO_MATCH_RETRY_DAYS,
 } from "../constants";
 
 // Column data keys
@@ -90,17 +91,19 @@ function getMetricsAndMaybeQueue(item: _ZoteroTypes.Item): AllMetrics | null {
 
   const metrics = getCachedMetrics(item);
   const hasFetchable = extractIdentifier(item) !== null;
+  const hasUsableTitle = ((item.getField("title") as string) || "").trim().length > 0;
 
   // Nothing to show and nothing to fetch — skip entirely
-  if (!hasFetchable && metrics.count === null) return null;
+  if (!hasFetchable && !hasUsableTitle && metrics.count === null && metrics.suggestion === null) return null;
 
   metricsCache.set(item.id, metrics);
 
+  // Queue for fetch if stale/missing, not already attempted, and not suppressed
   if (
     getAutoFetch() &&
-    hasFetchable &&
     (metrics.count === null || metrics.isStale) &&
-    !fetchAttempted.has(item.id)
+    !fetchAttempted.has(item.id) &&
+    !isNoMatchSuppressed(item, NO_MATCH_RETRY_DAYS)
   ) {
     queueFetch(item.id);
   }
@@ -178,6 +181,11 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
         if (metrics.count === 0 && isBookType(item)) return "";
         return String(metrics.count);
       }
+      // Unconfirmed title match
+      if (metrics.suggestion) {
+        if (metrics.suggestion.count === 0 && isBookType(item)) return "";
+        return metrics.suggestion.tier === "high" ? `~${metrics.suggestion.count}` : "?";
+      }
       return getAutoFetch() ? "…" : "";
     },
   });
@@ -196,6 +204,10 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
         // Suppress the "—" placeholder for 0-count books (same coverage rationale)
         if (metrics.count === 0 && isBookType(item)) return "";
         return "—";
+      }
+      // Show FWCI for high-confidence suggestion only
+      if (metrics.suggestion?.tier === "high" && metrics.suggestion.fwci !== null) {
+        return `~${metrics.suggestion.fwci.toFixed(2)}`;
       }
       return getAutoFetch() ? "…" : "";
     },
@@ -379,7 +391,10 @@ async function processFetchQueue(): Promise<void> {
         try {
           const item = Zotero.Items.get(id);
           if (item) {
-            await fetchAndCacheItem(item as _ZoteroTypes.Item);
+            const result = await fetchAndCacheItem(item as _ZoteroTypes.Item);
+            if (result.status === "suggestion") {
+              invalidateColumnCache(id);
+            }
           }
         } catch (e) {
           logError(`processFetchQueue item ${id}`, e);

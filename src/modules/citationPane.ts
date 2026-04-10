@@ -13,9 +13,20 @@
  * <button> elements set via innerHTML.
  */
 
-import { getCachedData, clearCache, isCacheStale, type CachedData } from "./cache";
+import {
+  getCachedData,
+  clearCache,
+  isCacheStale,
+  getPendingSuggestion,
+  clearPendingSuggestion,
+  writeNoMatch,
+  confirmTitleMatch,
+  type CachedData,
+  type PendingSuggestion,
+} from "./cache";
 import { fetchAndCacheItem, extractIdentifier } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
+import { normalizeDOI } from "./openalex";
 import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork } from "./citationNetwork";
 import { escapeHTML, logError, isBookType } from "./utils";
@@ -194,6 +205,118 @@ export function registerCitationPane(pluginID: string): void {
             color: var(--fill-secondary, #8e8e93);
             line-height: 1.4;
           }
+
+          /* ── Title-match suggestion UI ── */
+          .cg-match-banner {
+            background: rgba(180,130,40,0.12);
+            border: 1px solid rgba(180,130,40,0.35);
+            border-radius: 6px;
+            padding: 8px 10px;
+            margin-bottom: 10px;
+            font-size: 11px;
+            color: #C99A3A;
+            line-height: 1.45;
+          }
+          .cg-match-banner strong {
+            display: block;
+            font-size: 11px;
+            font-weight: 700;
+            margin-bottom: 3px;
+            color: #D4A84B;
+          }
+          .cg-match-card {
+            border: 1px solid rgba(143,173,159,0.25);
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            font-size: 11px;
+            line-height: 1.5;
+          }
+          .cg-match-card-title {
+            font-weight: 600;
+            font-size: 12px;
+            color: var(--fill-primary);
+            margin-bottom: 3px;
+          }
+          .cg-match-card-meta {
+            color: var(--fill-secondary, #8e8e93);
+            font-size: 11px;
+            margin-bottom: 8px;
+          }
+          .cg-match-actions {
+            display: flex;
+            gap: 6px;
+          }
+          #citegeist-pane-root .cg-match-confirm {
+            flex: 1;
+            padding: 7px 10px;
+            background: #4A7D6B;
+            border: none;
+            border-radius: 6px;
+            color: #E7EEE9;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+          }
+          #citegeist-pane-root .cg-match-confirm:hover {
+            background: #3D6658;
+          }
+          #citegeist-pane-root .cg-match-dismiss {
+            flex: 1;
+            padding: 7px 10px;
+            background: transparent;
+            border: 1px solid rgba(143,173,159,0.3);
+            border-radius: 6px;
+            color: #BFCBC5;
+            font-size: 12px;
+            font-family: inherit;
+            cursor: pointer;
+          }
+          #citegeist-pane-root .cg-match-dismiss:hover {
+            background: rgba(143,173,159,0.08);
+          }
+          .cg-doi-prompt {
+            border: 1px solid rgba(143,173,159,0.25);
+            border-radius: 6px;
+            padding: 8px 10px;
+            margin-top: 10px;
+            font-size: 11px;
+            color: var(--fill-secondary, #8e8e93);
+            line-height: 1.45;
+          }
+          .cg-doi-prompt strong {
+            display: block;
+            color: var(--fill-primary);
+            font-size: 11px;
+            margin-bottom: 4px;
+          }
+          .cg-doi-prompt-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+          }
+          #citegeist-pane-root .cg-doi-yes {
+            padding: 5px 10px;
+            background: rgba(143,173,159,0.15);
+            border: 1px solid rgba(143,173,159,0.35);
+            border-radius: 5px;
+            color: #8FAD9F;
+            font-size: 11px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+          }
+          #citegeist-pane-root .cg-doi-yes:hover { background: rgba(143,173,159,0.25); }
+          #citegeist-pane-root .cg-doi-no {
+            padding: 5px 10px;
+            background: transparent;
+            border: none;
+            color: var(--fill-secondary, #8e8e93);
+            font-size: 11px;
+            font-family: inherit;
+            cursor: pointer;
+          }
         </style>
         <div id="citegeist-content"></div>
       </div>
@@ -205,45 +328,62 @@ export function registerCitationPane(pluginID: string): void {
       const container = body.querySelector("#citegeist-content") as HTMLElement;
       if (!container) return;
 
+      const cached = getCachedData(item);
+      if (cached) {
+        renderPane(container, cached, item);
+        setSectionSummary(citationSummary(cached.citedByCount, item));
+        return;
+      }
+
+      // Check for a pending unconfirmed suggestion from a previous fetch
+      const suggestion = getPendingSuggestion(item);
+      if (suggestion) {
+        renderSuggestion(container, suggestion, item, setSectionSummary);
+        return;
+      }
+
       if (!extractIdentifier(item)) {
         container.innerHTML = `<div class="cg-no-identifier">No recognized identifier found. Add a DOI, PMID, arXiv ID, or ISBN to enable citation data.</div>`;
         setSectionSummary("No identifier");
         return;
       }
 
-      const cached = getCachedData(item);
-      if (cached) {
-        renderPane(container, cached, item);
-        setSectionSummary(citationSummary(cached.citedByCount, item));
-      } else {
-        container.innerHTML = `<div class="cg-loading">Fetching citation data…</div>`;
-        setSectionSummary("Loading…");
-      }
+      container.innerHTML = `<div class="cg-loading">Fetching citation data…</div>`;
+      setSectionSummary("Loading…");
     },
     onAsyncRender: async ({ body, item, setSectionSummary }) => {
       const container = body.querySelector("#citegeist-content") as HTMLElement;
       if (!container) return;
 
-      if (!extractIdentifier(item)) return;
-
-      // If we already rendered cached data in onRender, skip the network call
-      // unless the cache is stale. This avoids redundant re-renders.
+      // If we already rendered cached data in onRender and it's fresh, skip
       const alreadyCached = getCachedData(item);
       if (alreadyCached && !isCacheStale(item)) return;
 
+      // If a suggestion is already rendered (from a prior fetch stored in Extra), skip
+      if (!alreadyCached && getPendingSuggestion(item)) return;
+
       const result = await fetchAndCacheItem(item);
+
       if (result.status === "ok") {
         const freshData = getCachedData(item);
         if (freshData) {
           renderPane(container, freshData, item, result.work);
           setSectionSummary(citationSummary(freshData.citedByCount, item));
-          // Notify columns to refresh so citation data appears immediately
+          invalidateColumnCache(item.id);
+        }
+      } else if (result.status === "suggestion") {
+        const suggestion = getPendingSuggestion(item);
+        if (suggestion) {
+          renderSuggestion(container, suggestion, item, setSectionSummary);
           invalidateColumnCache(item.id);
         }
       } else if (result.status === "error" && !alreadyCached) {
         if (result.error === "network") {
           container.innerHTML = `<div class="cg-no-identifier">OpenAlex is currently unavailable. Try again in a few minutes.</div>`;
           setSectionSummary("Unavailable");
+        } else if (result.error === "no-match") {
+          container.innerHTML = `<div class="cg-no-identifier">Not found on OpenAlex. We also searched by title and found no confident match.</div>`;
+          setSectionSummary("Not found");
         } else {
           container.innerHTML = `<div class="cg-no-identifier">This work was not found on OpenAlex.</div>`;
           setSectionSummary("Not found");
@@ -263,7 +403,7 @@ export function registerCitationPane(pluginID: string): void {
             if (container) {
               container.innerHTML = `<div class="cg-loading">Refreshing\u2026</div>`;
             }
-            await clearCache(item);
+            await clearCache(item); // clearCache already wipes pendingSuggestion fields
             const result = await fetchAndCacheItem(item);
             const cached = getCachedData(item);
             if (container) {
@@ -276,6 +416,12 @@ export function registerCitationPane(pluginID: string): void {
                 );
                 setSectionSummary(citationSummary(cached.citedByCount, item));
                 invalidateColumnCache(item.id);
+              } else if (result.status === "suggestion") {
+                const suggestion = getPendingSuggestion(item);
+                if (suggestion) {
+                  renderSuggestion(container, suggestion, item, setSectionSummary);
+                  invalidateColumnCache(item.id);
+                }
               } else if (result.status === "error" && result.error === "network") {
                 container.innerHTML = `<div class="cg-no-identifier">OpenAlex is currently unavailable. Try again in a few minutes.</div>`;
                 setSectionSummary("Unavailable");
@@ -293,6 +439,191 @@ export function registerCitationPane(pluginID: string): void {
   });
 
   Zotero.debug("[Citegeist] Citation pane section registered");
+}
+
+/**
+ * Append a DOI population prompt below the rendered pane after a confirmed title match.
+ * If the researcher accepts, the DOI is written to the item field, graduating it out of
+ * the title-search pipeline permanently.
+ */
+function renderDoiPrompt(
+  container: HTMLElement,
+  item: _ZoteroTypes.Item,
+  doi: string,
+  cached: CachedData,
+): void {
+  const doc = container.ownerDocument;
+
+  const prompt = doc.createElement("div");
+  prompt.className = "cg-doi-prompt";
+
+  const label = doc.createElement("strong");
+  label.textContent = "Also add DOI to this item?";
+  prompt.appendChild(label);
+
+  const detail = doc.createElement("span");
+  detail.textContent = `The matched paper has DOI ${doi}. Adding it means future refreshes go direct \u2014 no title search needed.`;
+  prompt.appendChild(detail);
+
+  const promptActions = doc.createElement("div");
+  promptActions.className = "cg-doi-prompt-actions";
+
+  const yesBtn = doc.createElement("button");
+  yesBtn.type = "button";
+  yesBtn.className = "cg-doi-yes";
+  yesBtn.textContent = "Add DOI";
+  yesBtn.addEventListener("click", async () => {
+    try {
+      item.setField("DOI", normalizeDOI(doi) ?? doi);
+      await item.saveTx();
+      prompt.remove();
+    } catch (e) {
+      logError("renderDoiPrompt add DOI", e);
+    }
+  });
+
+  const noBtn = doc.createElement("button");
+  noBtn.type = "button";
+  noBtn.className = "cg-doi-no";
+  noBtn.textContent = "No thanks";
+  noBtn.addEventListener("click", () => prompt.remove());
+
+  promptActions.appendChild(yesBtn);
+  promptActions.appendChild(noBtn);
+  prompt.appendChild(promptActions);
+  container.appendChild(prompt);
+
+  void cached; // referenced to keep the parameter for future use
+}
+
+/**
+ * Render the suggestion confirmation UI for an unconfirmed title match.
+ * High-confidence: shows metrics with a banner above them.
+ * Medium-confidence: shows a card with match details only, no metrics.
+ */
+function renderSuggestion(
+  container: HTMLElement,
+  suggestion: PendingSuggestion,
+  item: _ZoteroTypes.Item,
+  setSectionSummary: (s: string) => void,
+): void {
+  const doc = container.ownerDocument;
+  container.textContent = "";
+
+  const makeButton = (label: string, className: string, onClick: () => void): HTMLButtonElement => {
+    const btn = doc.createElement("button");
+    btn.type = "button";
+    btn.className = className;
+    btn.textContent = label;
+    btn.addEventListener("click", onClick);
+    return btn;
+  };
+
+  const onConfirm = async (): Promise<void> => {
+    try {
+      // confirmTitleMatch sets confirmedOpenAlexId from pendingSuggestionId before clearing
+      await confirmTitleMatch(item, suggestion.tier);
+      await clearPendingSuggestion(item);
+
+      // Fetch the full work using the now-confirmed ID
+      container.innerHTML = `<div class="cg-loading">Loading\u2026</div>`;
+      const result = await fetchAndCacheItem(item);
+      const fresh = getCachedData(item);
+      if (fresh) {
+        renderPane(container, fresh, item, result.status === "ok" ? result.work : undefined);
+        setSectionSummary(citationSummary(fresh.citedByCount, item));
+      }
+      invalidateColumnCache(item.id);
+
+      // DOI population bonus: if matched work has a DOI and item doesn't, offer to add it
+      const itemDoi = (item.getField("DOI") as string) || "";
+      if (suggestion.doi && !itemDoi.trim() && fresh) {
+        renderDoiPrompt(container, item, suggestion.doi, fresh);
+      }
+    } catch (e) {
+      logError("renderSuggestion confirm", e);
+    }
+  };
+
+  const onDismiss = async (): Promise<void> => {
+    try {
+      await clearPendingSuggestion(item);
+      await writeNoMatch(item);
+      container.innerHTML = `<div class="cg-no-identifier">Match dismissed. Add a DOI to get citation data, or we\u2019ll search again in 30 days.</div>`;
+      setSectionSummary("Not found");
+      invalidateColumnCache(item.id);
+    } catch (e) {
+      logError("renderSuggestion dismiss", e);
+    }
+  };
+
+  if (suggestion.tier === "high") {
+    // High-confidence: show a banner above the metrics
+    const banner = doc.createElement("div");
+    banner.className = "cg-match-banner";
+    banner.innerHTML = `<strong>Matched by title</strong>We couldn\u2019t find a direct identifier, so we matched this item by title, year, and authors. Please confirm this is the right paper.`;
+    container.appendChild(banner);
+
+    // Show the metrics speculatively
+    const headline = doc.createElement("div");
+    headline.className = "cg-headline";
+    let html = `<span class="cg-headline-count">~${escapeHTML(String(suggestion.citedByCount))}</span>`;
+    html += `<span class="cg-headline-label">citations</span>`;
+    if (suggestion.fwci !== null) {
+      html += `<span class="cg-headline-sep">\u00B7</span>`;
+      html += `<span class="cg-headline-detail">FWCI <strong>~${escapeHTML(suggestion.fwci.toFixed(2))}</strong></span>`;
+    }
+    headline.innerHTML = html;
+    container.appendChild(headline);
+
+    const actions = doc.createElement("div");
+    actions.className = "cg-match-actions";
+    actions.appendChild(
+      makeButton("Confirm match", "cg-match-confirm", () => {
+        onConfirm().catch((e) => logError("onConfirm", e));
+      }),
+    );
+    actions.appendChild(
+      makeButton("Not this paper", "cg-match-dismiss", () => {
+        onDismiss().catch((e) => logError("onDismiss", e));
+      }),
+    );
+    container.appendChild(actions);
+  } else {
+    // Medium-confidence: show the candidate card, no metrics
+    const card = doc.createElement("div");
+    card.className = "cg-match-card";
+
+    const titleDiv = doc.createElement("div");
+    titleDiv.className = "cg-match-card-title";
+    titleDiv.textContent = suggestion.title;
+    card.appendChild(titleDiv);
+
+    const meta = doc.createElement("div");
+    meta.className = "cg-match-card-meta";
+    const parts: string[] = suggestion.year !== null ? [String(suggestion.year)] : [];
+    if (suggestion.citedByCount > 0) parts.push(`${suggestion.citedByCount} citations`);
+    if (suggestion.fwci !== null) parts.push(`FWCI ${suggestion.fwci.toFixed(2)}`);
+    meta.textContent = parts.join(" \u00B7 ");
+    card.appendChild(meta);
+
+    const actions = doc.createElement("div");
+    actions.className = "cg-match-actions";
+    actions.appendChild(
+      makeButton("Confirm match", "cg-match-confirm", () => {
+        onConfirm().catch((e) => logError("onConfirm", e));
+      }),
+    );
+    actions.appendChild(
+      makeButton("Not this paper", "cg-match-dismiss", () => {
+        onDismiss().catch((e) => logError("onDismiss", e));
+      }),
+    );
+    card.appendChild(actions);
+
+    container.appendChild(card);
+    setSectionSummary("Possible match");
+  }
 }
 
 /**

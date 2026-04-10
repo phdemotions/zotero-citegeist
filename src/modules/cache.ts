@@ -17,6 +17,11 @@ import { safeParseInt, safeParseFloat } from "./utils";
 
 const PREFIX = "Citegeist.";
 
+/** Strip characters that would break the Extra field line format. */
+function sanitizeCacheValue(s: string): string {
+  return s.replace(/[\r\n]/g, " ").trim();
+}
+
 export interface CachedData {
   openAlexId: string;
   citedByCount: number;
@@ -113,6 +118,8 @@ export interface AllMetrics {
   journalHIndex: number | null;
   /** All known ISSNs from OpenAlex (for ranking lookups) */
   sourceISSNs: string[];
+  /** Pending unconfirmed title match, if any */
+  suggestion: { count: number; fwci: number | null; tier: "high" | "medium" } | null;
 }
 
 export function getCachedMetrics(item: _ZoteroTypes.Item): AllMetrics {
@@ -127,6 +134,17 @@ export function getCachedMetrics(item: _ZoteroTypes.Item): AllMetrics {
   const issnRaw =
     citegeistFields.get(`${PREFIX}sourceISSNs`) || citegeistFields.get(`${PREFIX}issnL`) || "";
   const sourceISSNs = issnRaw ? issnRaw.split(",").filter(Boolean) : [];
+  // Pending suggestion (unconfirmed title match)
+  const suggestionId = citegeistFields.get(`${PREFIX}pendingSuggestionId`);
+  let suggestion: AllMetrics["suggestion"] = null;
+  if (suggestionId && count === null) {
+    const sCount = safeParseInt(citegeistFields.get(`${PREFIX}pendingSuggestionCount`));
+    const sFwci = safeParseFloat(citegeistFields.get(`${PREFIX}pendingSuggestionFwci`));
+    const rawTier = citegeistFields.get(`${PREFIX}pendingSuggestionTier`);
+    const sTier: MatchTier = isMatchTier(rawTier) ? rawTier : "medium";
+    suggestion = { count: sCount, fwci: sFwci, tier: sTier };
+  }
+
   return {
     count,
     fwci,
@@ -136,6 +154,7 @@ export function getCachedMetrics(item: _ZoteroTypes.Item): AllMetrics {
     citedness2yr,
     journalHIndex,
     sourceISSNs,
+    suggestion,
   };
 }
 
@@ -209,19 +228,19 @@ export async function cacheWorkData(
   // Source/journal data
   const sourceId = work.primary_location?.source?.id?.replace("https://openalex.org/", "");
   if (sourceId) {
-    citegeistFields.set(`${PREFIX}sourceId`, sourceId);
+    citegeistFields.set(`${PREFIX}sourceId`, sanitizeCacheValue(sourceId));
   }
   if (sourceStats) {
     citegeistFields.set(`${PREFIX}citedness2yr`, sourceStats.citedness2yr.toFixed(2));
     citegeistFields.set(`${PREFIX}journalHIndex`, String(sourceStats.hIndex));
     if (sourceStats.issns.length > 0) {
-      citegeistFields.set(`${PREFIX}sourceISSNs`, sourceStats.issns.join(","));
+      citegeistFields.set(`${PREFIX}sourceISSNs`, sourceStats.issns.map(sanitizeCacheValue).join(","));
     }
   }
   // Also store the issn_l from the work's primary location as fallback
   const issnL = work.primary_location?.source?.issn_l;
   if (issnL) {
-    citegeistFields.set(`${PREFIX}issnL`, issnL);
+    citegeistFields.set(`${PREFIX}issnL`, sanitizeCacheValue(issnL));
   }
 
   writeExtra(item, citegeistFields, otherLines);
@@ -254,5 +273,180 @@ export function isCacheStale(item: _ZoteroTypes.Item): boolean {
 export async function clearCache(item: _ZoteroTypes.Item): Promise<void> {
   const { otherLines } = parseExtra(item);
   writeExtra(item, new Map(), otherLines);
+  await item.saveTx();
+}
+
+// ── Title-match metadata ──────────────────────────────────────────────────────
+
+export type MatchMethod = "doi" | "pmid" | "arxiv" | "isbn" | "title-match";
+export type MatchTier = "high" | "medium";
+
+function isMatchTier(v: unknown): v is MatchTier {
+  return v === "high" || v === "medium";
+}
+
+function isMatchMethod(v: unknown): v is MatchMethod {
+  return (
+    v === "doi" || v === "pmid" || v === "arxiv" || v === "isbn" || v === "title-match"
+  );
+}
+
+export interface TitleMatchMeta {
+  noMatch: boolean;
+  noMatchTimestamp: string | null;
+  matchMethod: MatchMethod | null;
+  matchConfidence: MatchTier | null;
+  /** Stored after researcher confirms a title match — bypasses title search on refresh. */
+  confirmedOpenAlexId: string | null;
+}
+
+export function getTitleMatchMeta(item: _ZoteroTypes.Item): TitleMatchMeta {
+  const { citegeistFields } = parseExtra(item);
+  return {
+    noMatch: citegeistFields.get(`${PREFIX}noMatch`) === "true",
+    noMatchTimestamp: citegeistFields.get(`${PREFIX}noMatchTimestamp`) || null,
+    matchMethod: ((): MatchMethod | null => {
+      const v = citegeistFields.get(`${PREFIX}matchMethod`);
+      return isMatchMethod(v) ? v : null;
+    })(),
+    matchConfidence: ((): MatchTier | null => {
+      const v = citegeistFields.get(`${PREFIX}matchConfidence`);
+      return isMatchTier(v) ? v : null;
+    })(),
+    confirmedOpenAlexId: citegeistFields.get(`${PREFIX}confirmedOpenAlexId`) || null,
+  };
+}
+
+/** Write a no-match flag (auto or dismissed). Preserves all other Citegeist data. */
+export async function writeNoMatch(item: _ZoteroTypes.Item): Promise<void> {
+  const { citegeistFields, otherLines } = parseExtra(item);
+  citegeistFields.set(`${PREFIX}noMatch`, "true");
+  citegeistFields.set(`${PREFIX}noMatchTimestamp`, new Date().toISOString());
+  writeExtra(item, citegeistFields, otherLines);
+  await item.saveTx();
+}
+
+/**
+ * Confirm a title match: mark matchMethod/Confidence and store confirmedOpenAlexId
+ * so future fetches go directly to the work by ID, bypassing title search.
+ *
+ * Uses pendingSuggestionId as the source of truth — cacheWorkData has not run yet
+ * at the point of confirmation, so Citegeist.openAlexId is not set.
+ */
+export async function confirmTitleMatch(item: _ZoteroTypes.Item, tier: MatchTier): Promise<void> {
+  const { citegeistFields, otherLines } = parseExtra(item);
+  citegeistFields.delete(`${PREFIX}noMatch`);
+  citegeistFields.delete(`${PREFIX}noMatchTimestamp`);
+  citegeistFields.set(`${PREFIX}matchMethod`, "title-match");
+  citegeistFields.set(`${PREFIX}matchConfidence`, tier);
+  // pendingSuggestionId is the OpenAlex work ID — promote it so the next fetch goes direct
+  const pendingId =
+    citegeistFields.get(`${PREFIX}pendingSuggestionId`) ||
+    citegeistFields.get(`${PREFIX}openAlexId`);
+  if (pendingId) {
+    citegeistFields.set(`${PREFIX}confirmedOpenAlexId`, pendingId);
+  }
+  writeExtra(item, citegeistFields, otherLines);
+  await item.saveTx();
+}
+
+/**
+ * Check if a no-match flag is still within the retry suppression window.
+ */
+export function isNoMatchSuppressed(item: _ZoteroTypes.Item, retryDays: number): boolean {
+  const { citegeistFields } = parseExtra(item);
+  if (citegeistFields.get(`${PREFIX}noMatch`) !== "true") return false;
+  const ts = citegeistFields.get(`${PREFIX}noMatchTimestamp`);
+  if (!ts) return true; // flag exists but no timestamp — suppress
+  const age = Date.now() - new Date(ts).getTime();
+  return age < retryDays * 24 * 60 * 60 * 1000;
+}
+
+/**
+ * Write the pending suggestion candidate to Extra so the pane can render
+ * the confirmation card without re-fetching. Stores minimal fields only.
+ */
+export async function writePendingSuggestion(
+  item: _ZoteroTypes.Item,
+  work: {
+    id: string;
+    display_name: string;
+    cited_by_count: number;
+    fwci: number | null;
+    publication_year: number;
+    doi: string | null;
+  },
+  tier: MatchTier,
+  confidence: number,
+): Promise<void> {
+  const { citegeistFields, otherLines } = parseExtra(item);
+  citegeistFields.set(`${PREFIX}pendingSuggestionId`, sanitizeCacheValue(work.id.replace("https://openalex.org/", "")));
+  citegeistFields.set(`${PREFIX}pendingSuggestionTitle`, sanitizeCacheValue(work.display_name));
+  citegeistFields.set(`${PREFIX}pendingSuggestionCount`, String(work.cited_by_count));
+  citegeistFields.set(
+    `${PREFIX}pendingSuggestionFwci`,
+    work.fwci !== null ? work.fwci.toFixed(2) : "",
+  );
+  citegeistFields.set(`${PREFIX}pendingSuggestionYear`, String(work.publication_year));
+  citegeistFields.set(`${PREFIX}pendingSuggestionTier`, tier);
+  citegeistFields.set(`${PREFIX}pendingSuggestionConfidence`, confidence.toFixed(3));
+  if (work.doi) {
+    citegeistFields.set(`${PREFIX}pendingSuggestionDoi`, sanitizeCacheValue(work.doi));
+  }
+  writeExtra(item, citegeistFields, otherLines);
+  await item.saveTx();
+}
+
+export interface PendingSuggestion {
+  openAlexId: string;
+  title: string;
+  citedByCount: number;
+  fwci: number | null;
+  year: number | null;
+  tier: MatchTier;
+  confidence: number;
+  /** DOI from the matched work — offered to the researcher on confirm to permanently graduate the item. */
+  doi: string | null;
+}
+
+export function getPendingSuggestion(item: _ZoteroTypes.Item): PendingSuggestion | null {
+  const { citegeistFields } = parseExtra(item);
+  const openAlexId = citegeistFields.get(`${PREFIX}pendingSuggestionId`);
+  if (!openAlexId) return null;
+  return {
+    openAlexId,
+    title: citegeistFields.get(`${PREFIX}pendingSuggestionTitle`) || "",
+    citedByCount: safeParseInt(citegeistFields.get(`${PREFIX}pendingSuggestionCount`)),
+    fwci: safeParseFloat(citegeistFields.get(`${PREFIX}pendingSuggestionFwci`)),
+    year: ((): number | null => {
+      const s = citegeistFields.get(`${PREFIX}pendingSuggestionYear`);
+      if (!s) return null;
+      const n = safeParseInt(s);
+      return n > 0 ? n : null;
+    })(),
+    tier: ((): MatchTier => {
+      const t = citegeistFields.get(`${PREFIX}pendingSuggestionTier`);
+      return isMatchTier(t) ? t : "medium";
+    })(),
+    confidence: safeParseFloat(citegeistFields.get(`${PREFIX}pendingSuggestionConfidence`)) ?? 0,
+    doi: citegeistFields.get(`${PREFIX}pendingSuggestionDoi`) || null,
+  };
+}
+
+export async function clearPendingSuggestion(item: _ZoteroTypes.Item): Promise<void> {
+  const { citegeistFields, otherLines } = parseExtra(item);
+  for (const key of [
+    `${PREFIX}pendingSuggestionId`,
+    `${PREFIX}pendingSuggestionTitle`,
+    `${PREFIX}pendingSuggestionCount`,
+    `${PREFIX}pendingSuggestionFwci`,
+    `${PREFIX}pendingSuggestionYear`,
+    `${PREFIX}pendingSuggestionTier`,
+    `${PREFIX}pendingSuggestionConfidence`,
+    `${PREFIX}pendingSuggestionDoi`,
+  ]) {
+    citegeistFields.delete(key);
+  }
+  writeExtra(item, citegeistFields, otherLines);
   await item.saveTx();
 }
