@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-04-19
+
+### Fixed
+
+- Zotero 9 compatibility: bumped `strict_max_version` from `8.*` to `9.*` so the plugin installs on Zotero 9. Full Zotero 9 API verification (pane, columns, menus) is ongoing.
+
 ## [1.2.0] — 2026-04-09
 
 ### Added

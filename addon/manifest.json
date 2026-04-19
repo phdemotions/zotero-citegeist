@@ -13,7 +13,7 @@
       "id": "__addonID__",
       "update_url": "https://github.com/phdemotions/zotero-citegeist/releases/download/release/update.json",
       "strict_min_version": "6.999",
-      "strict_max_version": "8.*"
+      "strict_max_version": "9.*"
     }
   }
 }
