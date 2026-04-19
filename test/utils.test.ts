@@ -7,6 +7,7 @@ import {
   OpenAlexNetworkError,
   rawHTML,
   safeHTML,
+  toOrdinal,
 } from "../src/modules/utils";
 
 describe("escapeHTML", () => {
@@ -142,6 +143,41 @@ describe("normalizeError", () => {
     const err = new OpenAlexNetworkError("unreachable");
     expect(normalizeError(err)).toContain("unreachable");
     expect(err.name).toBe("OpenAlexNetworkError");
+  });
+});
+
+describe("toOrdinal", () => {
+  it("handles 1st, 2nd, 3rd, 4th", () => {
+    expect(toOrdinal(1)).toBe("1st");
+    expect(toOrdinal(2)).toBe("2nd");
+    expect(toOrdinal(3)).toBe("3rd");
+    expect(toOrdinal(4)).toBe("4th");
+  });
+
+  it("teen exceptions: 11th, 12th, 13th", () => {
+    expect(toOrdinal(11)).toBe("11th");
+    expect(toOrdinal(12)).toBe("12th");
+    expect(toOrdinal(13)).toBe("13th");
+  });
+
+  it("teen exceptions in higher ranges: 111th, 112th", () => {
+    expect(toOrdinal(111)).toBe("111th");
+    expect(toOrdinal(112)).toBe("112th");
+  });
+
+  it("larger values: 21st, 92nd, 93rd, 100th", () => {
+    expect(toOrdinal(21)).toBe("21st");
+    expect(toOrdinal(92)).toBe("92nd");
+    expect(toOrdinal(93)).toBe("93rd");
+    expect(toOrdinal(100)).toBe("100th");
+  });
+
+  it("121st — not a teen exception (121 % 100 = 21)", () => {
+    expect(toOrdinal(121)).toBe("121st");
+  });
+
+  it("0th boundary", () => {
+    expect(toOrdinal(0)).toBe("0th");
   });
 });
 
