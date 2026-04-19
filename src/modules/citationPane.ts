@@ -29,8 +29,7 @@ import { invalidateColumnCache } from "./citationColumn";
 import { normalizeDOI } from "./openalex";
 import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork } from "./citationNetwork";
-import { escapeHTML, logError, isBookType } from "./utils";
-import { HEADLINE_COUNT_FONT_SIZE_PX } from "../constants";
+import { escapeHTML, logError, isBookType, toOrdinal } from "./utils";
 
 let refreshing = false;
 
@@ -109,7 +108,7 @@ export function registerCitationPane(pluginID: string): void {
             margin-bottom: 10px;
           }
           .cg-headline-count {
-            font-size: ${HEADLINE_COUNT_FONT_SIZE_PX}px;
+            font-size: 24px;
             font-weight: 800;
             letter-spacing: -0.8px;
             color: var(--fill-primary);
@@ -149,6 +148,48 @@ export function registerCitationPane(pluginID: string): void {
           .cg-badge-top10 {
             background: rgba(143,173,159,0.14);
             color: #8FAD9F;
+          }
+
+          .cg-metric-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            align-items: stretch;
+            gap: 6px;
+            margin-bottom: 10px;
+          }
+          .cg-metric-tile {
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            background: rgba(143,173,159,0.06);
+            border: 1px solid rgba(143,173,159,0.12);
+            border-radius: 6px;
+            padding: 10px;
+            overflow: hidden;
+          }
+          .cg-metric-label {
+            display: block;
+            font-size: 10px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #8A9E95;
+            margin-bottom: 4px;
+          }
+          .cg-metric-value {
+            display: block;
+            font-size: 20px;
+            font-weight: 600;
+            color: #E7EEE9;
+            font-variant-numeric: tabular-nums;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+          }
+          .cg-metric-badge {
+            display: block;
+            margin-top: 4px;
+            margin-left: 0;
           }
 
           #citegeist-pane-root .cg-actions {
@@ -653,34 +694,43 @@ function renderPane(
     container.appendChild(banner);
   }
 
-  // ── Headline stat line ──
+  // ── Metric grid ──
   const isBook = isBookType(item);
   const suppressCount = isBook && data.citedByCount === 0;
 
   if (!suppressCount) {
-    const headline = doc.createElement("div");
-    headline.className = "cg-headline";
+    const grid = doc.createElement("div");
+    grid.className = "cg-metric-grid";
 
-    let headlineHTML = "";
-    headlineHTML += `<span class="cg-headline-count">${escapeHTML(data.citedByCount.toLocaleString())}</span>`;
-    headlineHTML += `<span class="cg-headline-label">citations</span>`;
+    // Citations tile
+    const citCount = escapeHTML(data.citedByCount.toLocaleString());
+    const citTile = doc.createElement("div");
+    citTile.className = "cg-metric-tile";
+    citTile.innerHTML = `<span class="cg-metric-label">CITATIONS</span><span class="cg-metric-value" title="${citCount}">${citCount}</span>`;
+    grid.appendChild(citTile);
 
-    if (data.fwci !== null) {
-      headlineHTML += `<span class="cg-headline-sep">\u00B7</span>`;
-      headlineHTML += `<span class="cg-headline-detail">FWCI <strong>${escapeHTML(data.fwci.toFixed(2))}</strong></span>`;
-    }
-    if (data.percentile !== null) {
-      headlineHTML += `<span class="cg-headline-sep">\u00B7</span>`;
-      headlineHTML += `<span class="cg-headline-detail"><strong>${escapeHTML(data.percentile.toFixed(0))}th</strong> %ile</span>`;
-    }
+    // FWCI tile
+    const fwciVal = data.fwci !== null ? escapeHTML(data.fwci.toFixed(2)) : "—";
+    const fwciTile = doc.createElement("div");
+    fwciTile.className = "cg-metric-tile";
+    fwciTile.innerHTML = `<span class="cg-metric-label">FWCI</span><span class="cg-metric-value" title="${fwciVal}">${fwciVal}</span>`;
+    grid.appendChild(fwciTile);
+
+    // Percentile tile
+    const pctVal =
+      data.percentile !== null ? escapeHTML(toOrdinal(Math.round(data.percentile))) : "—";
+    let pctHTML = `<span class="cg-metric-label">PERCENTILE</span><span class="cg-metric-value" title="${pctVal}">${pctVal}</span>`;
     if (data.isTop1Percent) {
-      headlineHTML += `<span class="cg-badge cg-badge-top1">Top 1%</span>`;
+      pctHTML += `<span class="cg-metric-badge"><span class="cg-badge cg-badge-top1">Top 1%</span></span>`;
     } else if (data.isTop10Percent) {
-      headlineHTML += `<span class="cg-badge cg-badge-top10">Top 10%</span>`;
+      pctHTML += `<span class="cg-metric-badge"><span class="cg-badge cg-badge-top10">Top 10%</span></span>`;
     }
+    const pctTile = doc.createElement("div");
+    pctTile.className = "cg-metric-tile";
+    pctTile.innerHTML = pctHTML;
+    grid.appendChild(pctTile);
 
-    headline.innerHTML = headlineHTML;
-    container.appendChild(headline);
+    container.appendChild(grid);
   } else {
     const note = doc.createElement("div");
     note.className = "cg-no-identifier";
