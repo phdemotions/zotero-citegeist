@@ -26,7 +26,7 @@
     "prefsPrefix": "extensions.zotero.citegeist"
   },
   "devDependencies": {
-    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.58.2",
     "@typescript-eslint/parser": "^8.0.0",
     "bumpp": "^10.0.0",
     "esbuild": "^0.28.0",
