@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
 title: "Citegeist: Real-Time Citation Intelligence for Business and Management Research"
-version: 1.2.1
+version: 1.3.0
 date-released: "2026-04-19"
 license: GPL-3.0-or-later
 url: "https://github.com/phdemotions/zotero-citegeist"

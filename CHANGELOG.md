@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-04-19
+
+### Changed
+
+- **Citation pane redesign** — replaced the single headline row (large citation count + subordinate FWCI/percentile text) with an equal-weight 3-tile metric grid. Citations, FWCI, and Percentile each get an uppercase label and a semibold tabular-nums value at the same visual scale. The Top 1% / Top 10% badge moves to a sub-element of the Percentile tile. Null FWCI or percentile show "—" rather than being omitted. Percentile values are now rendered as proper ordinals (92nd, 93rd, 11th — not bare numbers).
+
+### Added
+
+- `toOrdinal(n)` utility in `utils.ts` — pure English ordinal formatter with correct teen exceptions (11th, 12th, 13th, 111th, …)
+
 ## [1.2.1] — 2026-04-19
 
 ### Fixed
@@ -151,6 +161,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[1.3.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.2.1...v1.3.0
+[1.2.1]: https://github.com/phdemotions/zotero-citegeist/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.1.2
 [1.1.1]: https://github.com/phdemotions/zotero-citegeist/releases/tag/v1.1.1
