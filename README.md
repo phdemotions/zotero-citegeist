@@ -5,7 +5,7 @@
 <h1 align="center">Citegeist</h1>
 
 <p align="center">
-  A free Zotero 7 & 8 plugin that shows citation counts, field-weighted impact, and journal rankings alongside the items in your library — and lets you follow citations forward and backward without leaving Zotero. Works with DOIs, PubMed IDs, arXiv IDs, and ISBNs.
+  A free Zotero plugin that shows citation counts, field-weighted impact, and journal rankings alongside the items in your library — and lets you follow citations forward and backward without leaving Zotero. Works with DOIs, PubMed IDs, arXiv IDs, and ISBNs.
 </p>
 
 <p align="center">
