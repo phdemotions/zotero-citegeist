@@ -34,10 +34,10 @@ No account, API key, or subscription — the only optional setting is your email
 
 ## Install
 
-> **Requires [Zotero 7 or later](https://www.zotero.org/downloads/)** (including Zotero 8). Citegeist does not work with Zotero 6.
+> **Requires [Zotero 7 or later](https://www.zotero.org/downloads/)**. Citegeist does not work with Zotero 6.
 
 1. Download **[citegeist.xpi](https://github.com/phdemotions/zotero-citegeist/releases/latest)** from the latest release (click the `.xpi` file under "Assets" to download it)
-2. Open Zotero 7
+2. Open Zotero
 3. Go to **Tools &rarr; Add-ons** from the menu bar
 4. Click the gear icon (**&#9881;**) in the top-right corner of the Add-ons window &rarr; **Install Add-on From File...**
 5. Find and select the `.xpi` file you downloaded (it's probably in your Downloads folder)
@@ -258,7 +258,7 @@ No. Data is fetched in the background. Journal rankings are built into the plugi
 <details>
 <summary><strong>Can I use Citegeist with Zotero 6?</strong></summary>
 
-No. Citegeist requires Zotero 7 or later (including Zotero 8). You can [upgrade for free](https://www.zotero.org/downloads/).
+No. Citegeist requires Zotero 7 or later. You can [upgrade for free](https://www.zotero.org/downloads/).
 
 </details>
 
