@@ -62,13 +62,41 @@ export function registerCitationPane(pluginID: string): void {
     bodyXHTML: `
       <div id="citegeist-pane-root" xmlns="http://www.w3.org/1999/xhtml">
         <style>
+          /*
+           * Design tokens. All pane text colors flow from Zotero's CSS
+           * variables so dark/light theme switching works automatically.
+           * Accent colors define both light + dark values via the
+           * light-dark() CSS function (Firefox 128+, Zotero 9 ships on
+           * Firefox 128+); the function gracefully degrades to the first
+           * argument on older builds.
+           *
+           * Contrast targets: WCAG AA -- 4.5:1 for body text, 3:1 for
+           * large text (18px+ regular / 14px+ bold).
+           */
           #citegeist-pane-root {
+            /* Primary + secondary text — inherit Zotero theme */
+            --cg-text-primary: var(--fill-primary);
+            --cg-text-secondary: var(--fill-secondary);
+            /* Sage / green family — used for badges, links, secondary buttons */
+            --cg-sage-fg: light-dark(#2F6B5A, #8FAD9F);
+            --cg-sage-bg: light-dark(rgba(60, 110, 95, 0.08), rgba(143, 173, 159, 0.10));
+            --cg-sage-border: light-dark(rgba(60, 110, 95, 0.35), rgba(143, 173, 159, 0.35));
+            /* Primary action button — dark green works against both themes */
+            --cg-primary-bg: #2F6B5A;
+            --cg-primary-bg-hover: #245546;
+            --cg-primary-fg: #ffffff;
+            /* Top-1% percentile + suggestion banner accent (warm amber) */
+            --cg-amber-fg: light-dark(#8B5A1A, #D4A84B);
+            --cg-amber-fg-strong: light-dark(#6F4715, #E0B458);
+            --cg-amber-bg: light-dark(rgba(168, 101, 26, 0.10), rgba(180, 130, 40, 0.15));
+            --cg-amber-border: light-dark(rgba(168, 101, 26, 0.30), rgba(180, 130, 40, 0.35));
+
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             font-feature-settings: 'kern' 1, 'liga' 1;
             padding: 8px 12px 10px;
             font-size: 12px;
             line-height: 1.5;
-            color: var(--fill-primary);
+            color: var(--cg-text-primary);
           }
           .cg-loading {
             color: var(--fill-secondary);
@@ -142,12 +170,12 @@ export function registerCitationPane(pluginID: string): void {
             vertical-align: middle;
           }
           .cg-badge-top1 {
-            background: rgba(168,101,26,0.15);
-            color: #C77E2A;
+            background: var(--cg-amber-bg);
+            color: var(--cg-amber-fg);
           }
           .cg-badge-top10 {
-            background: rgba(143,173,159,0.14);
-            color: #8FAD9F;
+            background: var(--cg-sage-bg);
+            color: var(--cg-sage-fg);
           }
 
           .cg-metric-grid {
@@ -161,26 +189,26 @@ export function registerCitationPane(pluginID: string): void {
             display: flex;
             flex-direction: column;
             justify-content: flex-start;
-            background: rgba(143,173,159,0.06);
-            border: 1px solid rgba(143,173,159,0.12);
+            background: var(--cg-sage-bg);
+            border: 1px solid var(--cg-sage-border);
             border-radius: 6px;
             padding: 10px;
             overflow: hidden;
           }
           .cg-metric-label {
             display: block;
-            font-size: 10px;
-            font-weight: 500;
+            font-size: 11px;
+            font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            color: #8A9E95;
+            color: var(--cg-text-secondary);
             margin-bottom: 4px;
           }
           .cg-metric-value {
             display: block;
             font-size: 20px;
             font-weight: 600;
-            color: #E7EEE9;
+            color: var(--cg-text-primary);
             font-variant-numeric: tabular-nums;
             overflow: hidden;
             white-space: nowrap;
@@ -200,12 +228,12 @@ export function registerCitationPane(pluginID: string): void {
           #citegeist-pane-root .cg-action-btn {
             flex: 1;
             padding: 14px 12px;
-            border: 1px solid rgba(143,173,159,0.35);
+            border: 1px solid var(--cg-sage-border);
             border-radius: 8px;
-            background: rgba(56,104,87,0.10);
-            color: #BFCBC5;
+            background: var(--cg-sage-bg);
+            color: var(--cg-sage-fg);
             font-size: 13px;
-            font-weight: 500;
+            font-weight: 600;
             font-family: inherit;
             cursor: pointer;
             display: flex;
@@ -218,25 +246,25 @@ export function registerCitationPane(pluginID: string): void {
             transition: background 0.12s, border-color 0.12s, color 0.12s;
           }
           #citegeist-pane-root .cg-action-btn:focus-visible {
-            outline: 2px solid #8FAD9F;
+            outline: 2px solid var(--cg-sage-fg);
             outline-offset: 2px;
           }
           #citegeist-pane-root .cg-action-btn:hover {
-            background: rgba(143,173,159,0.16);
-            border-color: rgba(143,173,159,0.55);
-            color: #E7EEE9;
+            background: light-dark(rgba(60, 110, 95, 0.16), rgba(143, 173, 159, 0.18));
+            border-color: var(--cg-sage-fg);
+            color: var(--cg-text-primary);
           }
           #citegeist-pane-root .cg-action-btn-primary {
-            background: #4A7D6B;
+            background: var(--cg-primary-bg);
             border-color: transparent;
-            color: #E7EEE9;
+            color: var(--cg-primary-fg);
             font-weight: 600;
             font-size: 13px;
           }
           #citegeist-pane-root .cg-action-btn-primary:hover {
-            background: #3D6658;
+            background: var(--cg-primary-bg-hover);
             border-color: transparent;
-            color: #E7EEE9;
+            color: var(--cg-primary-fg);
           }
 
           .cg-trend {
@@ -249,13 +277,13 @@ export function registerCitationPane(pluginID: string): void {
 
           /* ── Title-match suggestion UI ── */
           .cg-match-banner {
-            background: rgba(180,130,40,0.12);
-            border: 1px solid rgba(180,130,40,0.35);
+            background: var(--cg-amber-bg);
+            border: 1px solid var(--cg-amber-border);
             border-radius: 6px;
             padding: 8px 10px;
             margin-bottom: 10px;
             font-size: 11px;
-            color: #C99A3A;
+            color: var(--cg-amber-fg);
             line-height: 1.45;
           }
           .cg-match-banner strong {
@@ -263,7 +291,7 @@ export function registerCitationPane(pluginID: string): void {
             font-size: 11px;
             font-weight: 700;
             margin-bottom: 3px;
-            color: #D4A84B;
+            color: var(--cg-amber-fg-strong);
           }
           .cg-match-card {
             border: 1px solid rgba(143,173,159,0.25);
@@ -291,31 +319,40 @@ export function registerCitationPane(pluginID: string): void {
           #citegeist-pane-root .cg-match-confirm {
             flex: 1;
             padding: 7px 10px;
-            background: #4A7D6B;
+            background: var(--cg-primary-bg);
             border: none;
             border-radius: 6px;
-            color: #E7EEE9;
+            color: var(--cg-primary-fg);
             font-size: 12px;
             font-weight: 600;
             font-family: inherit;
             cursor: pointer;
           }
+          #citegeist-pane-root .cg-match-confirm:focus-visible {
+            outline: 2px solid var(--cg-sage-fg);
+            outline-offset: 2px;
+          }
           #citegeist-pane-root .cg-match-confirm:hover {
-            background: #3D6658;
+            background: var(--cg-primary-bg-hover);
           }
           #citegeist-pane-root .cg-match-dismiss {
             flex: 1;
             padding: 7px 10px;
             background: transparent;
-            border: 1px solid rgba(143,173,159,0.3);
+            border: 1px solid var(--cg-sage-border);
             border-radius: 6px;
-            color: #BFCBC5;
+            color: var(--cg-text-secondary);
             font-size: 12px;
             font-family: inherit;
             cursor: pointer;
           }
+          #citegeist-pane-root .cg-match-dismiss:focus-visible {
+            outline: 2px solid var(--cg-sage-fg);
+            outline-offset: 2px;
+          }
           #citegeist-pane-root .cg-match-dismiss:hover {
-            background: rgba(143,173,159,0.08);
+            background: var(--cg-sage-bg);
+            color: var(--cg-text-primary);
           }
           .cg-doi-prompt {
             border: 1px solid rgba(143,173,159,0.25);
@@ -339,16 +376,22 @@ export function registerCitationPane(pluginID: string): void {
           }
           #citegeist-pane-root .cg-doi-yes {
             padding: 5px 10px;
-            background: rgba(143,173,159,0.15);
-            border: 1px solid rgba(143,173,159,0.35);
+            background: var(--cg-sage-bg);
+            border: 1px solid var(--cg-sage-border);
             border-radius: 5px;
-            color: #8FAD9F;
+            color: var(--cg-sage-fg);
             font-size: 11px;
             font-weight: 600;
             font-family: inherit;
             cursor: pointer;
           }
-          #citegeist-pane-root .cg-doi-yes:hover { background: rgba(143,173,159,0.25); }
+          #citegeist-pane-root .cg-doi-yes:focus-visible {
+            outline: 2px solid var(--cg-sage-fg);
+            outline-offset: 2px;
+          }
+          #citegeist-pane-root .cg-doi-yes:hover {
+            background: light-dark(rgba(60, 110, 95, 0.16), rgba(143, 173, 159, 0.25));
+          }
           #citegeist-pane-root .cg-doi-no {
             padding: 5px 10px;
             background: transparent;
