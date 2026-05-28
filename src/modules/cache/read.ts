@@ -47,12 +47,12 @@ export function getCachedCountAndStaleness(item: _ZoteroTypes.Item): {
   count: number | null;
   isStale: boolean;
 } {
-  const row = getRow(item.key);
+  const row = getRow(item.libraryID, item.key);
   return { count: row?.cited_by_count ?? null, isStale: isLastFetchedStaleRow(row) };
 }
 
 export function getCachedMetrics(item: _ZoteroTypes.Item): AllMetrics {
-  const row = getRow(item.key);
+  const row = getRow(item.libraryID, item.key);
   if (!row) return EMPTY_METRICS;
 
   const count = row.cited_by_count;
@@ -86,15 +86,15 @@ export function getCachedMetrics(item: _ZoteroTypes.Item): AllMetrics {
 }
 
 export function getCachedCitationCount(item: _ZoteroTypes.Item): number | null {
-  return getRow(item.key)?.cited_by_count ?? null;
+  return getRow(item.libraryID, item.key)?.cited_by_count ?? null;
 }
 
 export function getCachedOpenAlexId(item: _ZoteroTypes.Item): string | null {
-  return getRow(item.key)?.open_alex_id ?? null;
+  return getRow(item.libraryID, item.key)?.open_alex_id ?? null;
 }
 
 export function getCachedData(item: _ZoteroTypes.Item): CachedData | null {
-  const row = getRow(item.key);
+  const row = getRow(item.libraryID, item.key);
   if (!row || !row.open_alex_id) return null;
   return {
     openAlexId: row.open_alex_id,
@@ -112,11 +112,11 @@ export function getCachedData(item: _ZoteroTypes.Item): CachedData | null {
 }
 
 export function isCacheStale(item: _ZoteroTypes.Item): boolean {
-  return isLastFetchedStaleRow(getRow(item.key));
+  return isLastFetchedStaleRow(getRow(item.libraryID, item.key));
 }
 
 export function getTitleMatchMeta(item: _ZoteroTypes.Item): TitleMatchMeta {
-  const row = getRow(item.key);
+  const row = getRow(item.libraryID, item.key);
   if (!row) {
     return {
       noMatch: false,
@@ -136,7 +136,7 @@ export function getTitleMatchMeta(item: _ZoteroTypes.Item): TitleMatchMeta {
 }
 
 export function isNoMatchSuppressed(item: _ZoteroTypes.Item, retryDays: number): boolean {
-  const row = getRow(item.key);
+  const row = getRow(item.libraryID, item.key);
   if (!row || row.no_match !== 1) return false;
   if (!row.no_match_timestamp) return true;
   const age = Date.now() - new Date(row.no_match_timestamp).getTime();
@@ -144,7 +144,7 @@ export function isNoMatchSuppressed(item: _ZoteroTypes.Item, retryDays: number):
 }
 
 export function getPendingSuggestion(item: _ZoteroTypes.Item): PendingSuggestion | null {
-  const row = getRow(item.key);
+  const row = getRow(item.libraryID, item.key);
   if (!row || !row.pending_open_alex_id) return null;
   return {
     openAlexId: row.pending_open_alex_id,

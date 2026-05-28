@@ -45,7 +45,7 @@ export async function cacheWorkData(
   work: OpenAlexWork,
   sourceStats?: OpenAlexSourceStats | null,
 ): Promise<void> {
-  const existing = getRow(item.key) ?? emptyRow(item.key);
+  const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
   const metrics = deriveCitationMetrics(work);
 
   const row: ItemCacheRow = {
@@ -79,11 +79,11 @@ export async function cacheWorkData(
  * line 447 reads "clearCache already wipes pendingSuggestion fields."
  */
 export async function clearCache(item: _ZoteroTypes.Item): Promise<void> {
-  await deleteRow(item.key);
+  await deleteRow(item.libraryID, item.key);
 }
 
 export async function writeNoMatch(item: _ZoteroTypes.Item): Promise<void> {
-  const existing = getRow(item.key) ?? emptyRow(item.key);
+  const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
   const row: ItemCacheRow = {
     ...existing,
     no_match: 1,
@@ -106,7 +106,7 @@ export async function writeNoMatch(item: _ZoteroTypes.Item): Promise<void> {
  * log and no-op rather than persist a malformed row.
  */
 export async function confirmTitleMatch(item: _ZoteroTypes.Item, tier: MatchTier): Promise<void> {
-  const existing = getRow(item.key) ?? emptyRow(item.key);
+  const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
   const pendingId = existing.pending_open_alex_id ?? existing.open_alex_id;
 
   if (!pendingId) {
@@ -142,7 +142,7 @@ export async function writePendingSuggestion(
   tier: MatchTier,
   confidence: number,
 ): Promise<void> {
-  const existing = getRow(item.key) ?? emptyRow(item.key);
+  const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
   const row: ItemCacheRow = {
     ...existing,
     pending_open_alex_id: work.id.replace("https://openalex.org/", ""),
@@ -158,7 +158,7 @@ export async function writePendingSuggestion(
 }
 
 export async function clearPendingSuggestion(item: _ZoteroTypes.Item): Promise<void> {
-  const existing = getRow(item.key);
+  const existing = getRow(item.libraryID, item.key);
   if (!existing) return;
   const row: ItemCacheRow = {
     ...existing,

@@ -176,6 +176,7 @@ declare namespace _ZoteroTypes {
 }
 
 declare const Zotero: {
+  version: string;
   debug(msg: string, level?: number): void;
   log(msg: string): void;
   getActiveZoteroPane(): {

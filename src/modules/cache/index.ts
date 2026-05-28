@@ -23,7 +23,7 @@ export type {
 } from "./types";
 
 // ── Lifecycle ──
-export { _resetForTesting, cacheReady, closeCache, initCache } from "./db";
+export { _resetForTesting, closeCache, initCache } from "./db";
 
 // ── Read ──
 export {

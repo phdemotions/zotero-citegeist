@@ -7,11 +7,12 @@
  * read functions can stay sync; writes update SQLite first, then the map.
  */
 
-import { COLUMNS, type ItemCacheRow, rowToParams } from "./types";
+import { COLUMNS, type ItemCacheRow, mirrorKey, rowToParams } from "./types";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS item_cache (
-  item_key                  TEXT PRIMARY KEY,
+  library_id                INTEGER NOT NULL,
+  item_key                  TEXT NOT NULL,
   open_alex_id              TEXT,
   cited_by_count            INTEGER,
   fwci                      REAL,
@@ -37,7 +38,8 @@ CREATE TABLE IF NOT EXISTS item_cache (
   pending_year              INTEGER,
   pending_tier              TEXT,
   pending_confidence        REAL,
-  pending_doi               TEXT
+  pending_doi               TEXT,
+  PRIMARY KEY (library_id, item_key)
 );
 `;
 
@@ -45,8 +47,10 @@ const CREATE_INDEX = `CREATE INDEX IF NOT EXISTS idx_item_cache_last_fetched ON 
 
 const CREATE_PROGRESS_TABLE = `
 CREATE TABLE IF NOT EXISTS migration_progress (
-  item_key    TEXT PRIMARY KEY,
-  migrated_at TEXT NOT NULL
+  library_id  INTEGER NOT NULL,
+  item_key    TEXT NOT NULL,
+  migrated_at TEXT NOT NULL,
+  PRIMARY KEY (library_id, item_key)
 );
 `;
 
@@ -67,7 +71,7 @@ export async function initCache(): Promise<void> {
   await db.queryAsync(CREATE_PROGRESS_TABLE);
 
   const rows = await db.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
-  mirror = new Map(rows.map((r) => [r.item_key, r]));
+  mirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
 
   initialized = true;
   Zotero.debug(`[Citegeist] cache initialized: ${mirror.size} rows`);
@@ -83,11 +87,6 @@ export async function closeCache(): Promise<void> {
   initialized = false;
 }
 
-/** True if `initCache()` has completed without throwing. */
-export function cacheReady(): boolean {
-  return initialized;
-}
-
 /**
  * Test-only: inject a fake DBConnection and reset the mirror.
  */
@@ -99,8 +98,8 @@ export function _resetForTesting(fakeDb?: _ZoteroTypes.DBConnection): void {
 
 /**
  * Returns the live DB connection. Throws if init hasn't completed —
- * callers should either guard with `cacheReady()` or accept the throw
- * as a signal that the cache layer is genuinely broken.
+ * callers should accept the throw as a signal that the cache layer is
+ * genuinely broken (e.g., disk full, locked DB).
  */
 export function requireDb(): _ZoteroTypes.DBConnection {
   if (!db || !initialized) {
@@ -109,15 +108,15 @@ export function requireDb(): _ZoteroTypes.DBConnection {
   return db;
 }
 
-export function getRow(itemKey: string): ItemCacheRow | undefined {
-  return mirror.get(itemKey);
+export function getRow(libraryID: number, itemKey: string): ItemCacheRow | undefined {
+  return mirror.get(mirrorKey(libraryID, itemKey));
 }
 
-export function mirrorKeys(): IterableIterator<string> {
-  return mirror.keys();
+export function mirrorEntries(): IterableIterator<[string, ItemCacheRow]> {
+  return mirror.entries();
 }
 
-export function deleteMirrorKeys(keys: Iterable<string>): void {
+export function deleteMirrorEntries(keys: Iterable<string>): void {
   for (const k of keys) mirror.delete(k);
 }
 
@@ -126,11 +125,14 @@ export async function upsertRow(row: ItemCacheRow): Promise<void> {
   const placeholders = COLUMNS.map(() => "?").join(", ");
   const sql = `INSERT OR REPLACE INTO item_cache (${COLUMNS.join(", ")}) VALUES (${placeholders})`;
   await conn.queryAsync(sql, rowToParams(row));
-  mirror.set(row.item_key, row);
+  mirror.set(mirrorKey(row.library_id, row.item_key), row);
 }
 
-export async function deleteRow(itemKey: string): Promise<void> {
+export async function deleteRow(libraryID: number, itemKey: string): Promise<void> {
   const conn = requireDb();
-  await conn.queryAsync(`DELETE FROM item_cache WHERE item_key = ?`, [itemKey]);
-  mirror.delete(itemKey);
+  await conn.queryAsync(`DELETE FROM item_cache WHERE library_id = ? AND item_key = ?`, [
+    libraryID,
+    itemKey,
+  ]);
+  mirror.delete(mirrorKey(libraryID, itemKey));
 }

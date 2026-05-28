@@ -82,8 +82,19 @@ export function isMatchMethod(v: unknown): v is MatchMethod {
  */
 export type DbBool = 0 | 1 | null;
 
+/**
+ * Composite mirror key. Zotero item keys are 8-character random strings that
+ * are unique *within* a library but NOT across libraries. Two items in
+ * different libraries can collide; using the library + key tuple eliminates
+ * the collision risk in the in-memory mirror and in the SQLite primary key.
+ */
+export function mirrorKey(libraryID: number, itemKey: string): string {
+  return `${libraryID}:${itemKey}`;
+}
+
 /** Internal row type mirroring the `item_cache` schema. */
 export interface ItemCacheRow {
+  library_id: number;
   item_key: string;
   // work data
   open_alex_id: string | null;
@@ -117,6 +128,7 @@ export interface ItemCacheRow {
 }
 
 export const COLUMNS = [
+  "library_id",
   "item_key",
   "open_alex_id",
   "cited_by_count",
@@ -146,8 +158,9 @@ export const COLUMNS = [
   "pending_doi",
 ] as const;
 
-export function emptyRow(itemKey: string): ItemCacheRow {
+export function emptyRow(libraryID: number, itemKey: string): ItemCacheRow {
   return {
+    library_id: libraryID,
     item_key: itemKey,
     open_alex_id: null,
     cited_by_count: null,

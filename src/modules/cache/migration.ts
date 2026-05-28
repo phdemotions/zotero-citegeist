@@ -21,7 +21,7 @@ import {
   SHOW_PROGRESS_UI_THRESHOLD,
 } from "../../constants";
 import { safeParseFloat, safeParseInt } from "../utils";
-import { deleteMirrorKeys, mirrorKeys, requireDb, upsertRow } from "./db";
+import { deleteMirrorEntries, mirrorEntries, requireDb, upsertRow } from "./db";
 import { setExtraConfirmedMatch } from "./write";
 import { emptyRow, isMatchMethod, isMatchTier, type ItemCacheRow, LEGACY_PREFIX } from "./types";
 
@@ -85,9 +85,13 @@ function verifyParseRoundTrip(extra: string, parse: LegacyParse): boolean {
   return true;
 }
 
-function buildRowFromLegacy(itemKey: string, fields: Map<string, string>): ItemCacheRow {
+function buildRowFromLegacy(
+  libraryID: number,
+  itemKey: string,
+  fields: Map<string, string>,
+): ItemCacheRow {
   const get = (k: string) => fields.get(`${LEGACY_PREFIX}${k}`);
-  const row = emptyRow(itemKey);
+  const row = emptyRow(libraryID, itemKey);
 
   const oid = get("openAlexId");
   if (oid) row.open_alex_id = oid;
@@ -188,94 +192,160 @@ function buildProgressUI(total: number): MigrationProgressUI | null {
 // ── Migration entry point ───────────────────────────────────────────────────
 
 /**
+ * Compares two semver-ish version strings (Zotero versions are dotted decimals).
+ * Returns true iff `a` >= `b`. Numeric segment comparison; non-numeric suffixes
+ * are treated as zero-prefixes so `7.0.10-beta` compares as `7.0.10`.
+ */
+function versionGTE(a: string, b: string): boolean {
+  const parse = (s: string) => s.split(".").map((p) => parseInt(p, 10) || 0);
+  const av = parse(a);
+  const bv = parse(b);
+  const len = Math.max(av.length, bv.length);
+  for (let i = 0; i < len; i++) {
+    const x = av[i] ?? 0;
+    const y = bv[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
+
+/** Minimum Zotero version that honors `item.saveTx({ skipDateModifiedUpdate: true })`. */
+const MIN_ZOTERO_VERSION_FOR_MIGRATION = "7.0.10";
+
+/**
  * Migrate per-item Citegeist data from Extra fields to SQLite.
  *
- * Runs once, gated by the `migrationV1Complete` pref. Idempotent and
- * crash-safe: each item goes through (1) SQLite write → (2) Extra strip
- * → (3) checkpoint write in that order. A crash between any two steps
- * is recovered on the next launch because `INSERT OR REPLACE` is a no-op
- * for completed items and `migration_progress` lets us skip ahead.
+ * Runs once, gated by the `migrationV1Complete` pref. Iterates **every**
+ * library the user has access to (personal + group), matching the scope
+ * of `garbageCollectOrphans` and the runtime write path.
  *
- * Wrapped in `Zotero.Sync.Runner.delaySync` to prevent the sync engine
- * from resurrecting stripped lines via a server merge mid-loop.
+ * **Idempotent and crash-safe.** Each item moves through (1) SQLite write
+ * → (2) Extra strip → (3) checkpoint write in that order. A crash between
+ * any two steps is recovered on the next launch:
+ *   • Between 1 and 2 → next run re-strips Extra; `INSERT OR REPLACE` is a no-op.
+ *   • Between 2 and 3 → next run sees empty parse, writes a checkpoint
+ *     anyway so the item is not retried indefinitely.
  *
- * Note on `item.saveTx({ skipDateModifiedUpdate: true })`: the option is
- * honored on Zotero 7.0.10+ and silently ignored on older builds. Older
- * builds bump `dateModified` on every migrated item; harmless but worth
- * knowing if a user reports unexpected modification timestamps.
+ * **Sync coordination.** Wrapped in `Zotero.Sync.Runner.delaySync` so the
+ * sync engine can't resurrect stripped lines via a server merge mid-loop.
+ *
+ * **Version gate.** `item.saveTx({ skipDateModifiedUpdate: true })` is only
+ * honored on Zotero 7.0.10+. On older builds the option is silently ignored,
+ * which would mark every migrated item as "locally modified" and trigger a
+ * full-library upload on the next Zotero Sync. We refuse to migrate on
+ * older builds — the user keeps their existing Extra data and an upgrade
+ * prompt appears.
  */
 export async function migrateFromExtraV1(): Promise<void> {
   if (Zotero.Prefs.get("extensions.zotero.citegeist.migrationV1Complete")) return;
+
   // Verify init even though we don't keep the connection — we want a clear
   // error here if a caller forgot to await initCache() first.
   requireDb();
 
-  Zotero.Prefs.set("extensions.zotero.citegeist.migrationV1InProgress", true);
+  // Version gate.
+  const zVersion = Zotero.version ?? "0.0.0";
+  if (!versionGTE(zVersion, MIN_ZOTERO_VERSION_FOR_MIGRATION)) {
+    Zotero.debug(
+      `[Citegeist] migration deferred: Zotero ${zVersion} < ${MIN_ZOTERO_VERSION_FOR_MIGRATION}. ` +
+        `saveTx({skipDateModifiedUpdate}) is not honored on this build; running migration would ` +
+        `trigger a full library re-sync. Update Zotero to enable migration.`,
+    );
+    return;
+  }
 
-  try {
-    await Zotero.Sync.Runner.delaySync(async () => {
-      const items = await Zotero.Items.getAll(Zotero.Libraries.userLibraryID, false);
-
-      // Pre-filter so the UI count reflects actual work, not library size.
-      const candidates: _ZoteroTypes.Item[] = [];
+  await Zotero.Sync.Runner.delaySync(async () => {
+    // Collect candidates across every library the user has access to.
+    const candidates: _ZoteroTypes.Item[] = [];
+    for (const lib of Zotero.Libraries.getAll()) {
+      const items = await Zotero.Items.getAll(lib.libraryID, false);
       for (const item of items) {
+        if (item.deleted) continue;
         const extra = item.getField("extra");
         if (extra && extra.includes(LEGACY_PREFIX)) candidates.push(item);
       }
+    }
 
-      const total = candidates.length;
-      const ui = buildProgressUI(total);
-      let done = 0;
+    const total = candidates.length;
+    const ui = buildProgressUI(total);
+    let done = 0;
 
-      for (const item of candidates) {
-        done++;
-        if (done % MIGRATION_PROGRESS_TICK === 0) ui?.update(done, total);
+    for (const item of candidates) {
+      done++;
+      if (done % MIGRATION_PROGRESS_TICK === 0) ui?.update(done, total);
 
-        // Skip items we've already migrated (idempotency)
-        const conn = requireDb();
-        const already = await conn.queryAsync<{ item_key: string }>(
-          `SELECT item_key FROM migration_progress WHERE item_key = ?`,
-          [item.key],
-        );
-        if (already.length > 0) continue;
+      const conn = requireDb();
 
-        const extra = item.getField("extra") ?? "";
-        const parse = parseExtraLegacy(extra);
-        if (parse.citegeistFields.size === 0) continue;
+      // Skip items we've already migrated (idempotency)
+      const already = await conn.queryAsync<{ item_key: string }>(
+        `SELECT item_key FROM migration_progress WHERE library_id = ? AND item_key = ?`,
+        [item.libraryID, item.key],
+      );
+      if (already.length > 0) continue;
 
-        if (!verifyParseRoundTrip(extra, parse)) {
-          Zotero.debug(`[Citegeist] migration: skipping ${item.key} — round-trip parse failed`);
-          continue;
-        }
+      const extra = item.getField("extra") ?? "";
+      const parse = parseExtraLegacy(extra);
 
-        const row = buildRowFromLegacy(item.key, parse.citegeistFields);
-
-        // Step 1: SQLite write
-        await upsertRow(row);
-
-        // Step 2: Extra strip — non-Citegeist lines preserved; the single
-        // surviving `Citegeist match ID:` line is re-emitted for confirmed
-        // matches so the user's manual curation survives downgrade.
-        const newLines = setExtraConfirmedMatch(parse.otherLines, row.confirmed_open_alex_id);
-        const newExtra = newLines.join("\n").replace(/\n+$/, "");
-        item.setField("extra", newExtra);
-        await item.saveTx({ skipDateModifiedUpdate: true });
-
-        // Step 3: checkpoint
-        await conn.queryAsync(
-          `INSERT OR REPLACE INTO migration_progress (item_key, migrated_at) VALUES (?, ?)`,
-          [item.key, new Date().toISOString()],
-        );
+      // Defensive checkpoint: zero Citegeist fields means either the item
+      // was already stripped by a prior partial migration, or the file once
+      // had Citegeist data and a user removed it manually. Checkpoint so we
+      // don't keep paying the parse cost on future runs.
+      if (parse.citegeistFields.size === 0) {
+        await checkpointItem(conn, item.libraryID, item.key);
+        continue;
       }
 
-      ui?.close();
-      Zotero.debug(`[Citegeist] migration complete: ${total} items processed`);
-    });
+      if (!verifyParseRoundTrip(extra, parse)) {
+        Zotero.debug(
+          `[Citegeist] migration: skipping ${item.libraryID}:${item.key} — round-trip parse failed`,
+        );
+        continue;
+      }
 
-    Zotero.Prefs.set("extensions.zotero.citegeist.migrationV1Complete", true);
-  } finally {
-    Zotero.Prefs.set("extensions.zotero.citegeist.migrationV1InProgress", false);
+      const row = buildRowFromLegacy(item.libraryID, item.key, parse.citegeistFields);
+
+      // Step 1: SQLite write
+      await upsertRow(row);
+
+      // Step 2 (must follow step 1): Extra strip — non-Citegeist content
+      // preserved; the single surviving `Citegeist match ID:` line is
+      // re-emitted for confirmed matches so the user's manual curation
+      // survives plugin downgrade. If we stripped Extra before SQLite has
+      // the row, a crash here loses the user's data.
+      const newLines = setExtraConfirmedMatch(parse.otherLines, row.confirmed_open_alex_id);
+      const newExtra = newLines.join("\n").replace(/\n+$/, "");
+      item.setField("extra", newExtra);
+      await item.saveTx({ skipDateModifiedUpdate: true });
+
+      // Step 3 (must follow step 2): checkpoint
+      await checkpointItem(conn, item.libraryID, item.key);
+    }
+
+    ui?.close();
+    Zotero.debug(`[Citegeist] migration complete: ${total} items processed`);
+  });
+
+  Zotero.Prefs.set("extensions.zotero.citegeist.migrationV1Complete", true);
+
+  // The checkpoint table has served its purpose; reclaim space.
+  // Wrap in try/catch so a cleanup failure doesn't unset the completion pref.
+  try {
+    const conn = requireDb();
+    await conn.queryAsync(`DELETE FROM migration_progress`);
+  } catch (e) {
+    Zotero.debug(`[Citegeist] migration_progress cleanup failed (non-fatal): ${String(e)}`);
   }
+}
+
+async function checkpointItem(
+  conn: _ZoteroTypes.DBConnection,
+  libraryID: number,
+  itemKey: string,
+): Promise<void> {
+  await conn.queryAsync(
+    `INSERT OR REPLACE INTO migration_progress (library_id, item_key, migrated_at) VALUES (?, ?, ?)`,
+    [libraryID, itemKey, new Date().toISOString()],
+  );
 }
 
 // ── Orphan garbage collection ───────────────────────────────────────────────
@@ -299,15 +369,20 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
 
   const conn = requireDb();
 
-  const liveKeys = new Set<string>();
-  const libraries = Zotero.Libraries.getAll();
-  for (const lib of libraries) {
+  // Build the live key set as (libraryID, itemKey) tuples so we don't
+  // mistake a same-named key in a different library for an orphan.
+  const liveComposites = new Set<string>();
+  for (const lib of Zotero.Libraries.getAll()) {
     const items = await Zotero.Items.getAll(lib.libraryID, false);
-    for (const i of items) liveKeys.add(i.key);
+    for (const i of items) liveComposites.add(`${i.libraryID}:${i.key}`);
   }
 
-  const orphans: string[] = [];
-  for (const key of mirrorKeys()) if (!liveKeys.has(key)) orphans.push(key);
+  const orphans: Array<{ libraryID: number; itemKey: string; composite: string }> = [];
+  for (const [composite, row] of mirrorEntries()) {
+    if (!liveComposites.has(composite)) {
+      orphans.push({ libraryID: row.library_id, itemKey: row.item_key, composite });
+    }
+  }
 
   if (orphans.length === 0) {
     Zotero.Prefs.set("extensions.zotero.citegeist.lastOrphanGcAt", Date.now());
@@ -316,13 +391,22 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
 
   for (let i = 0; i < orphans.length; i += ORPHAN_GC_CHUNK_SIZE) {
     const slice = orphans.slice(i, i + ORPHAN_GC_CHUNK_SIZE);
-    const placeholders = slice.map(() => "?").join(",");
-    await conn.queryAsync(`DELETE FROM item_cache WHERE item_key IN (${placeholders})`, slice);
+    // Two-param `WHERE (library_id, item_key) IN ((?,?), (?,?), …)` is the
+    // canonical SQLite shape for composite key lookups.
+    const tuplePlaceholders = slice.map(() => "(?, ?)").join(",");
+    const params: unknown[] = [];
+    for (const o of slice) {
+      params.push(o.libraryID, o.itemKey);
+    }
     await conn.queryAsync(
-      `DELETE FROM migration_progress WHERE item_key IN (${placeholders})`,
-      slice,
+      `DELETE FROM item_cache WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
+      params,
     );
-    deleteMirrorKeys(slice);
+    await conn.queryAsync(
+      `DELETE FROM migration_progress WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
+      params,
+    );
+    deleteMirrorEntries(slice.map((o) => o.composite));
   }
   Zotero.Prefs.set("extensions.zotero.citegeist.lastOrphanGcAt", Date.now());
   Zotero.debug(`[Citegeist] orphan GC removed ${orphans.length} rows`);
