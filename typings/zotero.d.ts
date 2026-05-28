@@ -159,12 +159,19 @@ declare namespace _ZoteroTypes {
    * Plugin-owned SQLite connection.
    * Created via `new Zotero.DBConnection('<name>')`.
    * Auto-creates `<profile>/<name>.sqlite` on first use.
+   *
+   * We deliberately expose only the surface Citegeist uses. Zotero's real
+   * `DBConnection` has more (transactions, table introspection); add them
+   * here when a caller actually needs them.
    */
   interface DBConnection {
     queryAsync<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
-    executeTransaction<T>(fn: () => Promise<T>): Promise<T>;
-    tableExists(name: string): Promise<boolean>;
     closeDatabase(permanent?: boolean): Promise<void>;
+  }
+
+  interface Library {
+    libraryID: number;
+    libraryType: string;
   }
 }
 
@@ -189,9 +196,9 @@ declare const Zotero: {
   };
   Libraries: {
     userLibraryID: number;
+    getAll(): _ZoteroTypes.Library[];
   };
   DBConnection: new (name: string) => _ZoteroTypes.DBConnection;
-  DB: _ZoteroTypes.DBConnection;
   Sync: {
     Runner: {
       delaySync<T>(fn: () => Promise<T>): Promise<T>;

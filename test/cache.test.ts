@@ -117,7 +117,10 @@ const mockZotero = {
     set: vi.fn(),
     clearUserPref: vi.fn(),
   },
-  Libraries: { userLibraryID: 1 },
+  Libraries: {
+    userLibraryID: 1,
+    getAll: vi.fn(() => [{ libraryID: 1, libraryType: "user" }] as _ZoteroTypes.Library[]),
+  },
   Items: {
     getAll: vi.fn(async () => [] as _ZoteroTypes.Item[]),
   },
@@ -454,7 +457,7 @@ describe("garbageCollectOrphans", () => {
     } as never);
     // Simulate the item no longer existing in the library.
     mockZotero.Items.getAll.mockResolvedValue([]);
-    await garbageCollectOrphans();
+    await garbageCollectOrphans({ force: true });
     expect(getCachedData(item)).toBeNull();
     expect(fakeDb.table.size).toBe(0);
   });
@@ -468,7 +471,7 @@ describe("garbageCollectOrphans", () => {
       is_retracted: false,
     } as never);
     mockZotero.Items.getAll.mockResolvedValue([item]);
-    await garbageCollectOrphans();
+    await garbageCollectOrphans({ force: true });
     expect(getCachedData(item)).not.toBeNull();
   });
 });
