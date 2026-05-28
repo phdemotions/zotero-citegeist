@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.4.0] — 2026-05-27
 
+### Breaking
+
+- **Zotero 7.0.10 or newer is now required.** `addon/manifest.json`'s
+  `strict_min_version` is raised from `6.999` to `7.0.10`. Older Zotero
+  builds silently ignore the `saveTx({ skipDateModifiedUpdate: true })`
+  option Citegeist relies on during migration, which would mark every
+  item as locally modified and trigger a full-library re-sync. The
+  manifest bump prevents the plugin from loading on builds where the
+  migration cannot run safely.
+
 ### Your library data is now untouched
 
 Citegeist no longer writes any citation metrics, FWCI values, journal rankings, or
@@ -46,10 +56,37 @@ If you uninstall Citegeist, your library is left exactly as it was.
   Extra so user-curated confirmations survive plugin downgrade and propagate
   across devices via Zotero Sync.
 
+### Hardening
+
+- Composite `(library_id, item_key)` SQLite primary key so two items in
+  different libraries with the same Zotero key never overwrite each other.
+- OpenAlex IDs validated against `/^W\d+$/` and `/^S\d+$/` before any cache
+  write. Defends against malformed or MITM'd responses that could otherwise
+  flow through the Extra-field mirror and spoof CSL metadata.
+- `Zotero.Sync.Runner.delaySync` wraps migration; post-migration spot check
+  verifies stripped Extra fields haven't been resurrected by a sync merge.
+- Per-key write serialization prevents mirror/SQLite divergence when a
+  background column refetch races with a manual user refresh.
+- `closeCache` drains pending writes with a 5-second timeout so a hung
+  SQLite write doesn't block Zotero shutdown indefinitely.
+- Migration's per-item loop is wrapped in try/catch — one corrupt item no
+  longer livelocks all future launches.
+- `shouldForceRerun` detects the silent-data-loss state where the
+  completion pref is set but SQLite is empty AND legacy data still lives in
+  Extra (e.g., antivirus quarantine, partial profile restore). Clears the
+  pref and re-runs migration.
+- Round-trip-skipped items now salvage their cached values to SQLite even
+  when Extra parsing is ambiguous; migration refuses to mark complete while
+  any items remain unresolved.
+- `MIGRATION_MAX_CANDIDATES = 200_000` caps candidate processing so a
+  malicious bulk-import can't wedge the sync engine for hours.
+
 ### Added
 
-- `_resetForTesting`, `initCache`, `closeCache`, `migrateFromExtraV1`, and
-  `garbageCollectOrphans` exports in `cache.ts`.
+- `initCache`, `closeCache`, `migrateFromExtraV1`, and
+  `garbageCollectOrphans` exports in `cache/index.ts`. `_resetForTesting`
+  is exposed only via the deep `cache/db` path so production callers
+  cannot accidentally nuke the cache via the public surface.
 - In-memory mirror (`Map<itemKey, ItemCacheRow>`) so column `dataProvider` reads
   stay synchronous despite SQLite being async-only.
 - Migration progress window (`Zotero.ProgressWindow`) shown for libraries with

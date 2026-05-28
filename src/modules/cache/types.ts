@@ -138,7 +138,7 @@ export interface ItemCacheRow {
   pending_doi: string | null;
 }
 
-export const COLUMNS = [
+export const COLUMNS = Object.freeze([
   "library_id",
   "item_key",
   "open_alex_id",
@@ -167,7 +167,7 @@ export const COLUMNS = [
   "pending_tier",
   "pending_confidence",
   "pending_doi",
-] as const;
+] as const) as readonly (keyof ItemCacheRow)[];
 
 export function emptyRow(libraryID: number, itemKey: string): ItemCacheRow {
   return {

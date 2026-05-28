@@ -24,8 +24,19 @@ import {
 } from "../../constants";
 import { safeParseFloat, safeParseInt } from "../utils";
 import { deleteMirrorEntries, mirrorSnapshot, requireDb, upsertRow } from "./db";
+// Note: `requireDb` is used in this sibling module because migration owns
+// the SQLite connection lifecycle alongside `db.ts`. The intra-`cache/`
+// cross-file dependency is intentional — both files are part of the same
+// module boundary, even though they're not re-exported through `index.ts`.
 import { setExtraConfirmedMatch } from "./write";
-import { emptyRow, isMatchMethod, isMatchTier, type ItemCacheRow, LEGACY_PREFIX } from "./types";
+import {
+  emptyRow,
+  isMatchMethod,
+  isMatchTier,
+  type ItemCacheRow,
+  LEGACY_PREFIX,
+  mirrorKey,
+} from "./types";
 
 // ── Legacy parser (private — kept until v1.5.x once migration is verified) ──
 
@@ -274,6 +285,7 @@ export async function migrateFromExtraV1(): Promise<void> {
   // decision below can see them.
   let truncated = false;
   let resurrectionDetected = false;
+  let unresolvedSkips = 0;
 
   await Zotero.Sync.Runner.delaySync(async () => {
     // Collect candidates across every library the user has access to.
@@ -322,7 +334,7 @@ export async function migrateFromExtraV1(): Promise<void> {
       const rows = await conn0.queryAsync<{ library_id: number; item_key: string }>(
         `SELECT library_id, item_key FROM migration_progress`,
       );
-      for (const r of rows) checkpointed.add(`${r.library_id}:${r.item_key}`);
+      for (const r of rows) checkpointed.add(mirrorKey(r.library_id, r.item_key));
     }
 
     // Each iteration is wrapped in its own try/catch. A single "poison"
@@ -348,7 +360,7 @@ export async function migrateFromExtraV1(): Promise<void> {
       try {
         const conn = requireDb();
 
-        if (checkpointed.has(`${item.libraryID}:${item.key}`)) continue;
+        if (checkpointed.has(mirrorKey(item.libraryID, item.key))) continue;
 
         const extra = item.getField("extra") ?? "";
         const parse = parseExtraLegacy(extra);
@@ -359,14 +371,32 @@ export async function migrateFromExtraV1(): Promise<void> {
         // don't keep paying the parse cost on future runs.
         if (parse.citegeistFields.size === 0) {
           await checkpointItem(conn, item.libraryID, item.key);
-          checkpointed.add(`${item.libraryID}:${item.key}`);
+          checkpointed.add(mirrorKey(item.libraryID, item.key));
           continue;
         }
 
         if (!verifyParseRoundTrip(extra, parse)) {
+          // Best-effort salvage: the parse identified Citegeist fields but
+          // the round-trip safety check refused (typically duplicate keys
+          // or ambiguous ordering). Persist the SQLite row anyway so the
+          // user keeps their cached metrics, but DO NOT strip Extra — the
+          // ambiguity may indicate the user's data we don't fully
+          // understand. We also don't checkpoint, so the next run revisits
+          // the item. Track the count and refuse to mark migration complete
+          // — round-trip skips must be investigated before we trust the
+          // legacy data is fully migrated.
+          unresolvedSkips++;
           logCapped(
-            `[Citegeist] migration: skipping ${item.libraryID}:${item.key} — round-trip parse failed`,
+            `[Citegeist] migration: salvaging ${item.libraryID}:${item.key} to SQLite but leaving Extra intact — round-trip parse ambiguous`,
           );
+          try {
+            const salvaged = buildRowFromLegacy(item.libraryID, item.key, parse.citegeistFields);
+            await upsertRow(salvaged);
+          } catch (salvageErr) {
+            logCapped(
+              `[Citegeist] migration: salvage write failed for ${item.libraryID}:${item.key} — ${String(salvageErr)}`,
+            );
+          }
           continue;
         }
 
@@ -390,6 +420,7 @@ export async function migrateFromExtraV1(): Promise<void> {
         checkpointed.add(`${item.libraryID}:${item.key}`);
       } catch (e) {
         failureCount++;
+        unresolvedSkips++;
         logCapped(
           `[Citegeist] migration: error on ${item.libraryID}:${item.key} — ${String(e)} (continuing)`,
         );
@@ -430,11 +461,19 @@ export async function migrateFromExtraV1(): Promise<void> {
     }
   });
 
-  // Only mark complete if the loop processed the full candidate set
-  // (no truncation, no resurrection). Otherwise the next launch picks up
-  // where we left off.
-  if (!truncated && !resurrectionDetected) {
+  // Only mark complete if the loop processed every candidate cleanly:
+  //   • not truncated by the candidate cap
+  //   • no items resurrected by mid-loop sync
+  //   • no items left unresolved (round-trip skip or per-item error)
+  // Otherwise the next launch picks up where we left off — symmetric with
+  // the resurrection gate.
+  if (!truncated && !resurrectionDetected && unresolvedSkips === 0) {
     trySetPref("extensions.zotero.citegeist.migrationV1Complete", true);
+  } else if (unresolvedSkips > 0) {
+    Zotero.debug(
+      `[Citegeist] migration: ${unresolvedSkips} items left unresolved; ` +
+        `migrationV1Complete will remain unset until they succeed on a future run`,
+    );
   }
 
   // The checkpoint table has served its purpose; reclaim space.
@@ -457,10 +496,10 @@ export async function migrateFromExtraV1(): Promise<void> {
  */
 async function shouldForceRerun(): Promise<boolean> {
   try {
-    const conn = requireDb();
-    const rows = await conn.queryAsync<{ n: number }>(`SELECT COUNT(*) AS n FROM item_cache`);
-    const cacheEmpty = rows.length === 0 || (rows[0]?.n ?? 0) === 0;
-    if (!cacheEmpty) return false;
+    // Use the in-memory mirror as the cache-emptiness probe — it's the
+    // source of truth for read-side state and avoids a parallel SQL query
+    // whose result has to be kept in sync with the mirror anyway.
+    if (mirrorSnapshot().length > 0) return false;
     // Cache is empty — is there still legacy data anywhere?
     for (const lib of Zotero.Libraries.getAll()) {
       const items = await Zotero.Items.getAll(lib.libraryID, false);
@@ -523,7 +562,7 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
   const liveComposites = new Set<string>();
   for (const lib of Zotero.Libraries.getAll()) {
     const items = await Zotero.Items.getAll(lib.libraryID, false);
-    for (const i of items) liveComposites.add(`${i.libraryID}:${i.key}`);
+    for (const i of items) liveComposites.add(mirrorKey(i.libraryID, i.key));
   }
 
   // Snapshot the mirror before iterating. Concurrent writes during GC could

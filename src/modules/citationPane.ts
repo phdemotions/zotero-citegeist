@@ -562,9 +562,10 @@ function renderSuggestion(
 
   const onConfirm = async (): Promise<void> => {
     try {
-      // confirmTitleMatch sets confirmedOpenAlexId from pendingSuggestionId before clearing
+      // confirmTitleMatch atomically promotes pending→confirmed and clears
+      // the pending block in a single upsert (see cache/write.ts), so no
+      // separate clearPendingSuggestion call is needed.
       await confirmTitleMatch(item, suggestion.tier);
-      await clearPendingSuggestion(item);
 
       // Fetch the full work using the now-confirmed ID
       container.innerHTML = `<div class="cg-loading">Loading\u2026</div>`;

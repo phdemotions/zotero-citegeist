@@ -184,6 +184,36 @@ Open Zotero's settings (**Zotero &rarr; Settings** on macOS, **Edit &rarr; Prefe
 
 ---
 
+## Multi-device behavior
+
+Starting with v1.4.0, Citegeist stores cached citation data in a plugin-owned
+SQLite file (`<profile>/citegeist.sqlite`) instead of writing to your items'
+Extra fields. This keeps your library completely clean: uninstalling
+Citegeist leaves no orphan data behind.
+
+**What this means for you:**
+
+- **Per-device cache.** Citation counts, FWCI, percentiles, and journal
+  metrics are stored locally per machine. The first time you open Zotero on
+  a new device, items refetch from OpenAlex automatically. Expect a brief
+  loading period; subsequent sessions are instant.
+- **Confirmed title matches survive sync.** When you manually confirm a
+  title match for an item without a DOI, Citegeist writes one line to that
+  item's Extra field: `Citegeist match ID: W12345678`. This single line
+  syncs via Zotero Sync so your confirmation propagates to every device.
+- **What you might see in the Extra field.** The only line Citegeist will
+  ever write to your items is the `Citegeist match ID:` line above. If you
+  see it, you confirmed a title match for that item; you can safely delete
+  the line if you want Citegeist to forget the confirmation.
+
+If you're upgrading from v1.3.x or earlier, a one-time migration moves any
+existing `Citegeist.*` fields out of your Extra fields and into the new
+local cache. Libraries with more than 500 cached items show a progress
+window; smaller migrations are instant. **A Zotero backup before the
+update is recommended.**
+
+---
+
 ## FAQ
 
 <details>

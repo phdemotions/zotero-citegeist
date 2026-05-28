@@ -55,8 +55,11 @@ const fetchQueue = new Set<number>();
 const fetchAttempted = new Set<number>();
 
 /**
- * Per-item metrics cache to avoid re-parsing the Extra field N times
- * (once per column) during a single render cycle.
+ * Per-render-tick memo so all 9 columns share one `queueFetch` decision and
+ * one `AllMetrics` object identity per item. The underlying `getCachedMetrics`
+ * is already O(1) against the in-memory mirror, but consolidating here
+ * ensures fetch queueing fires at most once per item per tick regardless of
+ * which column triggered the render.
  */
 const metricsCache = new Map<number, AllMetrics | null>();
 

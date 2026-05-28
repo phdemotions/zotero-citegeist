@@ -397,3 +397,103 @@ Implementation: query Zotero for all valid item keys, `DELETE FROM item_cache WH
 - Zotero sample plugin: <https://www.zotero.org/support/dev/sample_plugin>
 - Forum guidance: <https://forums.zotero.org/discussion/113117>
 - SQLite access docs: <https://www.zotero.org/support/dev/client_coding/direct_sqlite_database_access>
+
+---
+
+## v3 amendments (post-implementation, after 4 review rounds)
+
+The plan above describes the design as approved for implementation. The
+following behaviors were added during four iterative review rounds applied
+to commits 1–6 on `feat/sqlite-cache-migration`. Treat this section as the
+authoritative description of what actually ships in v1.4.0.
+
+### Schema
+
+- **Composite primary key.** `item_cache` and `migration_progress` both use
+  `PRIMARY KEY (library_id, item_key)` instead of `item_key` alone. Zotero
+  item keys are unique within a library but NOT across libraries; without
+  the composite key, same-key items in different libraries would silently
+  collide.
+- **`schema_meta` table** introduced (currently records `version='1'`).
+  Establishes the version-tracking convention for future schema changes.
+- **No `idx_item_cache_last_fetched` index.** The original plan declared
+  one; staleness checks happen against the in-memory mirror and never query
+  SQLite, so the index was pure write-amplification. Init now runs
+  `DROP INDEX IF EXISTS` to clean up any alpha-built database.
+
+### Concurrency
+
+- **`initCache` is race-safe.** Concurrent callers share an in-flight
+  promise so Zotero's update-restart sequence can't open two
+  `DBConnection`s.
+- **Per-key write serialization** via a small promise-tail map in `db.ts`.
+  Writes to different `(libraryID, itemKey)` keys run in parallel; same-key
+  writes queue. Prevents mirror/SQLite divergence under contention.
+- **`closeCache` drains pending writes** with a 5-second timeout. A hung
+  SQLite write can't block Zotero shutdown.
+- **`confirmTitleMatch` atomically promotes pending → confirmed** AND
+  clears the pending block in a single upsert. No window where a reader can
+  see both fields populated.
+
+### Migration hardening
+
+- **Zotero version gate.** Migration refuses to run on Zotero < 7.0.10
+  (where `saveTx({ skipDateModifiedUpdate: true })` is silently ignored).
+  `addon/manifest.json` also raises `strict_min_version` to `7.0.10` so the
+  plugin doesn't even load on older builds.
+- **Per-item try/catch** around the migration loop. One poison item logs and
+  is skipped; future launches retry it without re-attempting completed work.
+- **`MIGRATION_MAX_CANDIDATES = 200_000` cap** and `isRegularItem()` filter
+  defuse malicious-import explosions.
+- **Batch checkpoint load.** A single `SELECT library_id, item_key FROM
+  migration_progress` replaces N per-item SELECTs.
+- **Adaptive progress tick.** Scales with library size so 50k migrations
+  produce ~200 UI updates, not 1000.
+- **Throttled error logs** capped at `MIGRATION_LOG_CAP = 50`.
+- **Post-migration spot check** verifies a sample of items still have
+  stripped Extra fields. Detects hypothetical `delaySync` regression.
+- **REL-002 silent-data-loss guard.** `shouldForceRerun` detects the state
+  where the completion pref is set but SQLite is empty AND legacy data
+  still lives in Extra. Clears the pref and re-runs.
+- **Round-trip salvage.** Items whose Extra parse round-trip is ambiguous
+  now have their SQLite row written best-effort (cached metrics preserved)
+  but Extra is left intact and migration refuses to mark complete until the
+  ambiguity is resolved.
+- **`item.deleted` filter** in both migration AND `fetchAndCacheItem` so
+  trashed items don't get SQLite rows written for them.
+
+### Security
+
+- **OpenAlex ID validation** at every cache-write boundary (`/^W\d+$/`,
+  `/^S\d+$/`). Malformed IDs are rejected rather than persisted to the
+  Extra-field mirror where they could spoof CSL metadata.
+- **`sanitizeForDisplay` extended** to strip Unicode line separators
+  (U+0085, U+2028, U+2029) in addition to ASCII `\r\n`.
+
+### API & types
+
+- **`AllMetrics.suggestion`** typed via `SuggestionPreview` referencing the
+  canonical `MatchTier` instead of an inline literal union.
+- **Cache-owned input types** (`CacheWorkInput`, `CacheSourceStatsInput`,
+  `CachePendingSuggestionInput`). Cache module no longer imports OpenAlex
+  types — callers pass them, structural assignability handles the rest.
+- **Structural `CacheItemKey` type** replaces `_ZoteroTypes.Item` on
+  read-only signatures.
+- **Dead exports removed:** `mirrorEntries`, `_resetForTesting` from
+  `index.ts`, `cacheReady`, unused `executeTransaction`/`tableExists` from
+  typings.
+
+### Performance
+
+- **`UPSERT_SQL` constant** hoisted; no per-call string concatenation.
+- **WeakMap-cached `sourceISSNs` parsing.** The comma-joined string is
+  split once per row, cached against row identity.
+- **Pref memoization** on `cacheLifetimeDays` (1s TTL) so column rendering
+  doesn't call `Zotero.Prefs.get` thousands of times per tick.
+- **`writeTails` Map** now self-cleaning. Entries drop when no subsequent
+  writer chained on them.
+- **`Object.freeze(EMPTY_METRICS)`** + frozen inner `sourceISSNs` array.
+  Caller mutation throws instead of cascading across uncached items.
+- **`garbageCollectOrphans` rate-limited** to once per 7 days via
+  `lastOrphanGcAt` pref; `{ force: true }` overrides for explicit
+  rebuild flows.
