@@ -270,6 +270,24 @@ export async function migrateFromExtraV1(): Promise<void> {
     const ui = buildProgressUI(total);
     let done = 0;
 
+    // Adaptive progress tick: small libraries fire every 50 items (snappy);
+    // large libraries throttle to ~200 updates total so we don't thrash the
+    // UI with 1000+ paints during a 50k-item migration.
+    const progressTick = Math.max(MIGRATION_PROGRESS_TICK, Math.floor(total / 200) || 1);
+
+    // Load every already-migrated key into a Set once. Replaces N
+    // per-item SELECTs with one SELECT — order-of-magnitude win on first
+    // run of a 50k-item library where every candidate would otherwise pay
+    // a SQLite round trip just to confirm "not yet migrated."
+    const conn0 = requireDb();
+    const checkpointed = new Set<string>();
+    {
+      const rows = await conn0.queryAsync<{ library_id: number; item_key: string }>(
+        `SELECT library_id, item_key FROM migration_progress`,
+      );
+      for (const r of rows) checkpointed.add(`${r.library_id}:${r.item_key}`);
+    }
+
     // Each iteration is wrapped in its own try/catch. A single "poison"
     // item — corrupt Extra, locked metadata, transient saveTx rejection —
     // must not block the entire migration. We log and move on; the next
@@ -277,17 +295,12 @@ export async function migrateFromExtraV1(): Promise<void> {
     let failureCount = 0;
     for (const item of candidates) {
       done++;
-      if (done % MIGRATION_PROGRESS_TICK === 0) ui?.update(done, total);
+      if (done % progressTick === 0) ui?.update(done, total);
 
       try {
         const conn = requireDb();
 
-        // Skip items we've already migrated (idempotency)
-        const already = await conn.queryAsync<{ item_key: string }>(
-          `SELECT item_key FROM migration_progress WHERE library_id = ? AND item_key = ?`,
-          [item.libraryID, item.key],
-        );
-        if (already.length > 0) continue;
+        if (checkpointed.has(`${item.libraryID}:${item.key}`)) continue;
 
         const extra = item.getField("extra") ?? "";
         const parse = parseExtraLegacy(extra);
@@ -298,6 +311,7 @@ export async function migrateFromExtraV1(): Promise<void> {
         // don't keep paying the parse cost on future runs.
         if (parse.citegeistFields.size === 0) {
           await checkpointItem(conn, item.libraryID, item.key);
+          checkpointed.add(`${item.libraryID}:${item.key}`);
           continue;
         }
 
@@ -325,6 +339,7 @@ export async function migrateFromExtraV1(): Promise<void> {
 
         // Step 3 (must follow step 2): checkpoint
         await checkpointItem(conn, item.libraryID, item.key);
+        checkpointed.add(`${item.libraryID}:${item.key}`);
       } catch (e) {
         failureCount++;
         Zotero.debug(

@@ -18,6 +18,11 @@
 
 import { COLUMNS, type ItemCacheRow, mirrorKey, rowToParams } from "./types";
 
+/** Pre-computed UPSERT statement. COLUMNS is `as const` so this never changes. */
+const UPSERT_SQL = `INSERT OR REPLACE INTO item_cache (${COLUMNS.join(", ")}) VALUES (${COLUMNS.map(
+  () => "?",
+).join(", ")})`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS item_cache (
   library_id                INTEGER NOT NULL,
@@ -51,8 +56,6 @@ CREATE TABLE IF NOT EXISTS item_cache (
   PRIMARY KEY (library_id, item_key)
 );
 `;
-
-const CREATE_INDEX = `CREATE INDEX IF NOT EXISTS idx_item_cache_last_fetched ON item_cache (last_fetched)`;
 
 const CREATE_PROGRESS_TABLE = `
 CREATE TABLE IF NOT EXISTS migration_progress (
@@ -92,8 +95,11 @@ export function initCache(): Promise<void> {
 async function doInit(): Promise<void> {
   db = new Zotero.DBConnection("citegeist");
   await db.queryAsync(SCHEMA);
-  await db.queryAsync(CREATE_INDEX);
   await db.queryAsync(CREATE_PROGRESS_TABLE);
+  // Drop any index left behind by an earlier v1.4.0 alpha. Staleness queries
+  // happen against the in-memory mirror, never against SQLite, so the index
+  // is pure write-amplification overhead.
+  await db.queryAsync(`DROP INDEX IF EXISTS idx_item_cache_last_fetched`);
 
   const rows = await db.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
   mirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
@@ -145,13 +151,9 @@ export function getRow(libraryID: number, itemKey: string): ItemCacheRow | undef
   return mirror.get(mirrorKey(libraryID, itemKey));
 }
 
-export function mirrorEntries(): IterableIterator<[string, ItemCacheRow]> {
-  return mirror.entries();
-}
-
 /**
- * Snapshot of mirror keys. Returned as an array so callers can iterate
- * safely while concurrent writes mutate the underlying Map.
+ * Snapshot of mirror entries as an array — safe to iterate while concurrent
+ * writes mutate the underlying Map. Used by orphan GC.
  */
 export function mirrorSnapshot(): Array<[string, ItemCacheRow]> {
   return [...mirror.entries()];
@@ -192,17 +194,16 @@ async function withKeyLock<T>(
   const key = mirrorKey(libraryID, itemKey);
   const prev = writeTails.get(key) ?? Promise.resolve();
 
+  // Build the new tail once and capture its identity so we can detect when
+  // we're still the last writer in `finally` and drop the Map entry. Without
+  // this the writeTails Map grows monotonically with the count of distinct
+  // keys ever written, leaking memory under sustained refetch workloads.
   let release!: () => void;
   const ticket = new Promise<void>((res) => {
     release = res;
   });
-
-  // The new tail is whatever was queued before, plus our ticket. Subsequent
-  // writers chain on this tail.
-  writeTails.set(
-    key,
-    prev.then(() => ticket),
-  );
+  const newTail = prev.then(() => ticket);
+  writeTails.set(key, newTail);
 
   await prev;
 
@@ -219,10 +220,9 @@ async function withKeyLock<T>(
   } finally {
     release();
     pendingWrites.delete(tracker);
-    // If we are the current tail and the queue drained, GC the entry.
-    if (writeTails.get(key) === prev.then(() => ticket)) {
-      // Note: identity match is unreliable due to the new promise above; we
-      // simply allow stale tails to drop naturally as new writes replace them.
+    // If no new writer chained on us, drop the Map entry so it can be GC'd.
+    if (writeTails.get(key) === newTail) {
+      writeTails.delete(key);
     }
   }
 }
@@ -230,9 +230,7 @@ async function withKeyLock<T>(
 export async function upsertRow(row: ItemCacheRow): Promise<void> {
   await withKeyLock(row.library_id, row.item_key, async () => {
     const conn = requireDb();
-    const placeholders = COLUMNS.map(() => "?").join(", ");
-    const sql = `INSERT OR REPLACE INTO item_cache (${COLUMNS.join(", ")}) VALUES (${placeholders})`;
-    await conn.queryAsync(sql, rowToParams(row));
+    await conn.queryAsync(UPSERT_SQL, rowToParams(row));
     mirror.set(mirrorKey(row.library_id, row.item_key), row);
   });
 }

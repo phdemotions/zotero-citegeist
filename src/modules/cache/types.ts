@@ -38,7 +38,18 @@ export interface AllMetrics {
   /** All known ISSNs from OpenAlex (for ranking lookups) */
   sourceISSNs: string[];
   /** Pending unconfirmed title match, if any */
-  suggestion: { count: number; fwci: number | null; tier: "high" | "medium" } | null;
+  suggestion: SuggestionPreview | null;
+}
+
+/**
+ * Lightweight view of a pending suggestion exposed to column rendering.
+ * Strict subset of `PendingSuggestion` — uses `count` (derived) instead of
+ * `citedByCount` (raw) to match the rest of the `AllMetrics` shape.
+ */
+export interface SuggestionPreview {
+  count: number;
+  fwci: number | null;
+  tier: MatchTier;
 }
 
 export type MatchMethod = "doi" | "pmid" | "arxiv" | "isbn" | "title-match";
@@ -200,3 +211,54 @@ export const CONFIRMED_MATCH_EXTRA_PREFIX = "Citegeist match ID";
 
 /** Legacy Extra-field namespace; used only by the one-shot migration. */
 export const LEGACY_PREFIX = "Citegeist.";
+
+// ── Cache-owned input shapes ──────────────────────────────────────────────
+// Cache layer must not depend on the OpenAlex module's types — that would
+// couple storage to upstream API shapes. Callers pass `OpenAlexWork` /
+// `OpenAlexSourceStats`; both are structurally assignable to these inputs.
+
+/** Minimum fields the cache consumes from an OpenAlex work. */
+export interface CacheWorkInput {
+  id: string;
+  cited_by_count: number;
+  fwci?: number | null;
+  citation_normalized_percentile?: {
+    value: number;
+    is_in_top_1_percent: boolean;
+    is_in_top_10_percent: boolean;
+  } | null;
+  is_retracted?: boolean | null;
+  primary_location?: {
+    source?: {
+      id?: string;
+      issn_l?: string | null;
+    } | null;
+  } | null;
+}
+
+/** Minimum fields the cache consumes from a journal-source stats lookup. */
+export interface CacheSourceStatsInput {
+  citedness2yr: number;
+  hIndex: number;
+  issns: readonly string[];
+}
+
+/** Minimum fields the cache consumes from a pending title-match candidate. */
+export interface CachePendingSuggestionInput {
+  id: string;
+  display_name: string;
+  cited_by_count: number;
+  fwci: number | null;
+  publication_year: number;
+  doi: string | null;
+}
+
+/**
+ * Structural type for cache reads/writes — narrows from the full Zotero
+ * `Item` to just the fields the cache module needs. Real `_ZoteroTypes.Item`
+ * is structurally assignable; tests can pass plain object literals.
+ */
+export interface CacheItemKey {
+  libraryID: number;
+  key: string;
+}

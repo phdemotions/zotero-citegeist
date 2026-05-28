@@ -23,6 +23,8 @@ function makeFakeDb() {
     queryAsync: vi.fn(async (sql: string, params?: unknown[]) => {
       const s = sql.trim();
       if (/^CREATE\s+(TABLE|INDEX)/i.test(s)) return [];
+      if (/^DROP\s+INDEX/i.test(s)) return [];
+      if (/^SELECT\s+library_id,\s+item_key\s+FROM\s+migration_progress/i.test(s)) return [];
       if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+item_cache/i.test(s)) {
         const colsMatch = /\(([^)]+)\)\s+VALUES/i.exec(s);
         if (!colsMatch) throw new Error("bad INSERT: " + s);
@@ -126,7 +128,8 @@ import {
   getWorkByArxivId,
   getWorkByISBN,
 } from "../src/modules/openalex";
-import { _resetForTesting, initCache, cacheWorkData } from "../src/modules/cache";
+import { _resetForTesting } from "../src/modules/cache/db";
+import { initCache, cacheWorkData } from "../src/modules/cache";
 
 const mockedGetWorkByDOI = vi.mocked(getWorkByDOI);
 const mockedGetWorkByPMID = vi.mocked(getWorkByPMID);

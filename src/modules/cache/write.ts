@@ -7,8 +7,11 @@
  * title match) back to the item's Extra under a non-`Citegeist.` prefix.
  */
 
-import type { OpenAlexSourceStats, OpenAlexWork } from "../openalex";
 import {
+  type CacheItemKey,
+  type CachePendingSuggestionInput,
+  type CacheSourceStatsInput,
+  type CacheWorkInput,
   CONFIRMED_MATCH_EXTRA_PREFIX,
   emptyRow,
   type ItemCacheRow,
@@ -22,7 +25,7 @@ import { deleteRow, getRow, upsertRow } from "./db";
  * OpenAlex work. Works with zero citations have no metrics — that invariant
  * lives in one place so future writers can't accidentally diverge.
  */
-function deriveCitationMetrics(work: OpenAlexWork): {
+function deriveCitationMetrics(work: CacheWorkInput): {
   fwci: number | null;
   percentile: number | null;
   isTop1Percent: DbBool;
@@ -41,9 +44,9 @@ function deriveCitationMetrics(work: OpenAlexWork): {
 }
 
 export async function cacheWorkData(
-  item: _ZoteroTypes.Item,
-  work: OpenAlexWork,
-  sourceStats?: OpenAlexSourceStats | null,
+  item: CacheItemKey,
+  work: CacheWorkInput,
+  sourceStats: CacheSourceStatsInput | null,
 ): Promise<void> {
   const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
   const metrics = deriveCitationMetrics(work);
@@ -63,7 +66,7 @@ export async function cacheWorkData(
     journal_h_index: sourceStats ? sourceStats.hIndex : existing.journal_h_index,
     source_issns:
       sourceStats && sourceStats.issns.length > 0
-        ? sourceStats.issns.join(",")
+        ? [...sourceStats.issns].join(",")
         : existing.source_issns,
     issn_l: work.primary_location?.source?.issn_l ?? existing.issn_l,
   };
@@ -78,11 +81,11 @@ export async function cacheWorkData(
  * AND pending suggestion. `citationPane.ts` depends on this — comment at
  * line 447 reads "clearCache already wipes pendingSuggestion fields."
  */
-export async function clearCache(item: _ZoteroTypes.Item): Promise<void> {
+export async function clearCache(item: CacheItemKey): Promise<void> {
   await deleteRow(item.libraryID, item.key);
 }
 
-export async function writeNoMatch(item: _ZoteroTypes.Item): Promise<void> {
+export async function writeNoMatch(item: CacheItemKey): Promise<void> {
   const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
   const row: ItemCacheRow = {
     ...existing,
@@ -143,15 +146,8 @@ export async function confirmTitleMatch(item: _ZoteroTypes.Item, tier: MatchTier
 }
 
 export async function writePendingSuggestion(
-  item: _ZoteroTypes.Item,
-  work: {
-    id: string;
-    display_name: string;
-    cited_by_count: number;
-    fwci: number | null;
-    publication_year: number;
-    doi: string | null;
-  },
+  item: CacheItemKey,
+  work: CachePendingSuggestionInput,
   tier: MatchTier,
   confidence: number,
 ): Promise<void> {
@@ -170,7 +166,7 @@ export async function writePendingSuggestion(
   await upsertRow(row);
 }
 
-export async function clearPendingSuggestion(item: _ZoteroTypes.Item): Promise<void> {
+export async function clearPendingSuggestion(item: CacheItemKey): Promise<void> {
   const existing = getRow(item.libraryID, item.key);
   if (!existing) return;
   const row: ItemCacheRow = {

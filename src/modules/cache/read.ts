@@ -3,6 +3,16 @@
  *
  * All synchronous — reads hit the in-memory mirror only.
  * Zotero's column `dataProvider` calls these from a sync context.
+ *
+ * Two "missing data" conventions live side by side, deliberately:
+ *   • `getCachedMetrics` returns a frozen `EMPTY_METRICS` sentinel when no
+ *     row exists. Columns invoke this thousands of times per render tick;
+ *     avoiding the per-call allocation matters at scale.
+ *   • `getCachedData`, `getCachedCitationCount`, `getCachedOpenAlexId`,
+ *     `getPendingSuggestion` all return `null` when no row exists. Pane
+ *     code is the only caller and benefits from explicit null-checks.
+ * The split is documented here so consumers don't have to reason about it
+ * from the call site.
  */
 
 import { DEFAULT_CACHE_LIFETIME_DAYS } from "../../constants";
@@ -10,6 +20,7 @@ import { getRow } from "./db";
 import {
   type AllMetrics,
   type CachedData,
+  type CacheItemKey,
   isMatchMethod,
   isMatchTier,
   type ItemCacheRow,
@@ -66,7 +77,26 @@ function isLastFetchedStaleRow(row: ItemCacheRow | undefined): boolean {
   return Date.now() - fetchedTime > getCacheLifetimeMs();
 }
 
-export function getCachedCountAndStaleness(item: _ZoteroTypes.Item): {
+/**
+ * Per-row parsed-ISSN cache. Avoids re-splitting `source_issns` (a comma
+ * string in SQLite) on every column render. WeakMap keys on row identity,
+ * so when a row is replaced via upsertRow the old entry is GC'd naturally.
+ */
+const issnCache = new WeakMap<ItemCacheRow, string[]>();
+
+function getSourceISSNs(row: ItemCacheRow): string[] {
+  const cached = issnCache.get(row);
+  if (cached) return cached;
+  const parsed = row.source_issns
+    ? row.source_issns.split(",").filter(Boolean)
+    : row.issn_l
+      ? [row.issn_l]
+      : [];
+  issnCache.set(row, parsed);
+  return parsed;
+}
+
+export function getCachedCountAndStaleness(item: CacheItemKey): {
   count: number | null;
   isStale: boolean;
 } {
@@ -74,16 +104,11 @@ export function getCachedCountAndStaleness(item: _ZoteroTypes.Item): {
   return { count: row?.cited_by_count ?? null, isStale: isLastFetchedStaleRow(row) };
 }
 
-export function getCachedMetrics(item: _ZoteroTypes.Item): AllMetrics {
+export function getCachedMetrics(item: CacheItemKey): AllMetrics {
   const row = getRow(item.libraryID, item.key);
   if (!row) return EMPTY_METRICS;
 
   const count = row.cited_by_count;
-  const sourceISSNs = row.source_issns
-    ? row.source_issns.split(",").filter(Boolean)
-    : row.issn_l
-      ? [row.issn_l]
-      : [];
 
   // Pending suggestion surfaces only when no confirmed work data exists yet.
   let suggestion: AllMetrics["suggestion"] = null;
@@ -103,20 +128,20 @@ export function getCachedMetrics(item: _ZoteroTypes.Item): AllMetrics {
     sourceId: row.source_id,
     citedness2yr: row.citedness_2yr,
     journalHIndex: row.journal_h_index,
-    sourceISSNs,
+    sourceISSNs: getSourceISSNs(row),
     suggestion,
   };
 }
 
-export function getCachedCitationCount(item: _ZoteroTypes.Item): number | null {
+export function getCachedCitationCount(item: CacheItemKey): number | null {
   return getRow(item.libraryID, item.key)?.cited_by_count ?? null;
 }
 
-export function getCachedOpenAlexId(item: _ZoteroTypes.Item): string | null {
+export function getCachedOpenAlexId(item: CacheItemKey): string | null {
   return getRow(item.libraryID, item.key)?.open_alex_id ?? null;
 }
 
-export function getCachedData(item: _ZoteroTypes.Item): CachedData | null {
+export function getCachedData(item: CacheItemKey): CachedData | null {
   const row = getRow(item.libraryID, item.key);
   if (!row || !row.open_alex_id) return null;
   return {
@@ -134,11 +159,11 @@ export function getCachedData(item: _ZoteroTypes.Item): CachedData | null {
   };
 }
 
-export function isCacheStale(item: _ZoteroTypes.Item): boolean {
+export function isCacheStale(item: CacheItemKey): boolean {
   return isLastFetchedStaleRow(getRow(item.libraryID, item.key));
 }
 
-export function getTitleMatchMeta(item: _ZoteroTypes.Item): TitleMatchMeta {
+export function getTitleMatchMeta(item: CacheItemKey): TitleMatchMeta {
   const row = getRow(item.libraryID, item.key);
   if (!row) {
     return {
@@ -158,7 +183,7 @@ export function getTitleMatchMeta(item: _ZoteroTypes.Item): TitleMatchMeta {
   };
 }
 
-export function isNoMatchSuppressed(item: _ZoteroTypes.Item, retryDays: number): boolean {
+export function isNoMatchSuppressed(item: CacheItemKey, retryDays: number): boolean {
   const row = getRow(item.libraryID, item.key);
   if (!row || row.no_match !== 1) return false;
   if (!row.no_match_timestamp) return true;
@@ -166,7 +191,7 @@ export function isNoMatchSuppressed(item: _ZoteroTypes.Item, retryDays: number):
   return age < retryDays * 24 * 60 * 60 * 1000;
 }
 
-export function getPendingSuggestion(item: _ZoteroTypes.Item): PendingSuggestion | null {
+export function getPendingSuggestion(item: CacheItemKey): PendingSuggestion | null {
   const row = getRow(item.libraryID, item.key);
   if (!row || !row.pending_open_alex_id) return null;
   return {

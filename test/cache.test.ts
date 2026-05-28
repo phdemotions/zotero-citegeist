@@ -34,6 +34,7 @@ function makeFakeDb() {
       const s = sql.trim();
 
       if (/^CREATE\s+(TABLE|INDEX)/i.test(s)) return [];
+      if (/^DROP\s+INDEX/i.test(s)) return [];
 
       // INSERT OR REPLACE INTO item_cache (...) VALUES (?, ?, ...)
       if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+item_cache/i.test(s)) {
@@ -58,6 +59,16 @@ function makeFakeDb() {
 
       if (/^SELECT\s+\*\s+FROM\s+item_cache/i.test(s)) {
         return Array.from(table.values());
+      }
+
+      // SELECT library_id, item_key FROM migration_progress — batch load
+      if (/^SELECT\s+library_id,\s+item_key\s+FROM\s+migration_progress/i.test(s)) {
+        const rows: Array<{ library_id: number; item_key: string }> = [];
+        for (const composite of progress.keys()) {
+          const [lib, key] = composite.split(":");
+          rows.push({ library_id: Number(lib), item_key: key });
+        }
+        return rows;
       }
 
       // SELECT item_key FROM migration_progress WHERE library_id = ? AND item_key = ?
@@ -163,8 +174,8 @@ const mockZotero = {
 
 vi.stubGlobal("Zotero", mockZotero);
 
+import { _resetForTesting } from "../src/modules/cache/db";
 import {
-  _resetForTesting,
   initCache,
   cacheWorkData,
   clearCache,
