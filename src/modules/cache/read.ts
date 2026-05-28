@@ -42,9 +42,9 @@ const EMPTY_METRICS: AllMetrics = Object.freeze({
   sourceId: null,
   citedness2yr: null,
   journalHIndex: null,
-  sourceISSNs: Object.freeze([]) as unknown as string[],
+  sourceISSNs: Object.freeze<string[]>([]),
   suggestion: null,
-}) as AllMetrics;
+});
 
 /**
  * Tiny memoization for the cache-lifetime pref. Column rendering can call

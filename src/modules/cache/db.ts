@@ -16,7 +16,6 @@
  * • `closeCache` waits for all pending writes before closing the DB.
  */
 
-import { CLOSE_CACHE_DRAIN_TIMEOUT_MS } from "../../constants";
 import { COLUMNS, type ItemCacheRow, mirrorKey, rowToParams } from "./types";
 
 /** Pre-computed UPSERT statement. COLUMNS is `as const` so this never changes. */
@@ -67,21 +66,6 @@ CREATE TABLE IF NOT EXISTS migration_progress (
 );
 `;
 
-/**
- * Schema-version table. Establishes the convention now (empty in v1.4.0) so
- * future schema changes can ship an idempotent migration runner that reads
- * the recorded version, applies missing steps in order, and updates the row.
- */
-const CREATE_SCHEMA_META = `
-CREATE TABLE IF NOT EXISTS schema_meta (
-  key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-`;
-
-/** Current schema version. Bump and add a migration when changing the shape. */
-const SCHEMA_VERSION = "1";
-
 let db: _ZoteroTypes.DBConnection | null = null;
 let mirror: Map<string, ItemCacheRow> = new Map();
 let initialized = false;
@@ -112,40 +96,22 @@ async function doInit(): Promise<void> {
   db = new Zotero.DBConnection("citegeist");
   await db.queryAsync(SCHEMA);
   await db.queryAsync(CREATE_PROGRESS_TABLE);
-  await db.queryAsync(CREATE_SCHEMA_META);
   // Drop any index left behind by an earlier v1.4.0 alpha. Staleness queries
   // happen against the in-memory mirror, never against SQLite, so the index
   // is pure write-amplification overhead.
   await db.queryAsync(`DROP INDEX IF EXISTS idx_item_cache_last_fetched`);
-  // Record current schema version (idempotent — REPLACE keeps a single row).
-  await db.queryAsync(`INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', ?)`, [
-    SCHEMA_VERSION,
-  ]);
 
   const rows = await db.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
   mirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
 
   initialized = true;
-  Zotero.debug(`[Citegeist] cache initialized: ${mirror.size} rows (schema v${SCHEMA_VERSION})`);
+  Zotero.debug(`[Citegeist] cache initialized: ${mirror.size} rows`);
 }
 
-/**
- * Close the DB connection on shutdown. Drains pending writes first, with a
- * bounded timeout so a hung write (locked DB, antivirus stall) doesn't block
- * Zotero's shutdown sequence indefinitely.
- */
+/** Close the DB connection on shutdown. Drains pending writes first. */
 export async function closeCache(): Promise<void> {
   if (pendingWrites.size > 0) {
-    const drain = Promise.allSettled([...pendingWrites]);
-    const timeout = new Promise<"timeout">((resolve) => {
-      setTimeout(() => resolve("timeout"), CLOSE_CACHE_DRAIN_TIMEOUT_MS);
-    });
-    const result = await Promise.race([drain, timeout]);
-    if (result === "timeout") {
-      Zotero.debug(
-        `[Citegeist] closeCache: pending writes did not drain within ${CLOSE_CACHE_DRAIN_TIMEOUT_MS}ms; forcing close`,
-      );
-    }
+    await Promise.allSettled([...pendingWrites]);
   }
   if (db) {
     await db.closeDatabase(false);
@@ -198,20 +164,6 @@ export function deleteMirrorEntries(keys: Iterable<string>): void {
 }
 
 /**
- * Validate that a row's (libraryID, itemKey) pair looks safe to persist.
- * Defensive — Zotero's data model normally guarantees these, but a corrupt
- * item or in-memory transient could slip through.
- */
-function assertWritableKey(libraryID: number, itemKey: string): void {
-  if (!Number.isInteger(libraryID) || libraryID < 1) {
-    throw new Error(`[Citegeist] invalid libraryID for cache write: ${libraryID}`);
-  }
-  if (typeof itemKey !== "string" || itemKey.length === 0) {
-    throw new Error(`[Citegeist] invalid item key for cache write: ${itemKey}`);
-  }
-}
-
-/**
  * Run `fn` serialized against any prior write to the same `(libraryID,
  * itemKey)` pair. Different keys run in parallel; same keys queue.
  *
@@ -224,7 +176,6 @@ async function withKeyLock<T>(
   itemKey: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  assertWritableKey(libraryID, itemKey);
   const key = mirrorKey(libraryID, itemKey);
   const prev = writeTails.get(key) ?? Promise.resolve();
 
@@ -232,33 +183,51 @@ async function withKeyLock<T>(
   // we're still the last writer in `finally` and drop the Map entry. Without
   // this the writeTails Map grows monotonically with the count of distinct
   // keys ever written, leaking memory under sustained refetch workloads.
-  let release!: () => void;
-  const ticket = new Promise<void>((res) => {
-    release = res;
-  });
-  const newTail = prev.then(() => ticket);
+  const ticket = deferred<void>();
+  const newTail = prev.then(() => ticket.promise);
   writeTails.set(key, newTail);
 
   await prev;
 
   const work = fn();
-  // Track this write so closeCache can await it.
-  const tracker: Promise<void> = work.then(
-    () => {},
-    () => {},
-  );
-  pendingWrites.add(tracker);
+  // Track this write so closeCache can await it. The tracker's catch is
+  // intentional: errors propagate to the caller via the outer `await work`,
+  // but the tracker exists only for drain accounting and must not produce
+  // an unhandled-rejection warning when the original work rejects.
+  const tracker = trackForDrain(work);
 
   try {
     return await work;
   } finally {
-    release();
+    ticket.resolve();
     pendingWrites.delete(tracker);
     // If no new writer chained on us, drop the Map entry so it can be GC'd.
     if (writeTails.get(key) === newTail) {
       writeTails.delete(key);
     }
   }
+}
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+/** Minimal Promise wrapper that exposes its resolver. */
+function deferred<T>(): Deferred<T> {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/** Adds a swallowed-rejection mirror of `work` to `pendingWrites` and returns it. */
+function trackForDrain(work: Promise<unknown>): Promise<void> {
+  const noop = (): void => {};
+  const tracker: Promise<void> = work.then(noop, noop);
+  pendingWrites.add(tracker);
+  return tracker;
 }
 
 export async function upsertRow(row: ItemCacheRow): Promise<void> {

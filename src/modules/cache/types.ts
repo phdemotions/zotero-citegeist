@@ -35,8 +35,9 @@ export interface AllMetrics {
   sourceId: string | null;
   citedness2yr: number | null;
   journalHIndex: number | null;
-  /** All known ISSNs from OpenAlex (for ranking lookups) */
-  sourceISSNs: string[];
+  /** All known ISSNs from OpenAlex (for ranking lookups). Readonly so the
+   * frozen `EMPTY_METRICS` sentinel typechecks naturally without casts. */
+  sourceISSNs: readonly string[];
   /** Pending unconfirmed title match, if any */
   suggestion: SuggestionPreview | null;
 }
@@ -92,6 +93,13 @@ export function isMatchMethod(v: unknown): v is MatchMethod {
  * assignment of arbitrary integers.
  */
 export type DbBool = 0 | 1 | null;
+
+/** Coerce a tri-state boolean (true/false/null/undefined) to DbBool. */
+export function toDbBool(v: boolean | null | undefined): DbBool {
+  if (v === true) return 1;
+  if (v === false) return 0;
+  return null;
+}
 
 /**
  * Composite mirror key. Zotero item keys are 8-character random strings that
@@ -167,7 +175,14 @@ export const COLUMNS = Object.freeze([
   "pending_tier",
   "pending_confidence",
   "pending_doi",
-] as const) as readonly (keyof ItemCacheRow)[];
+] as const);
+
+// Compile-time exhaustiveness: if you add a column to `ItemCacheRow`
+// without adding it to `COLUMNS`, this line errors with a missing key.
+type _AllColumnsCovered =
+  Exclude<keyof ItemCacheRow, (typeof COLUMNS)[number]> extends never ? true : never;
+const _columnsExhaustive: _AllColumnsCovered = true;
+void _columnsExhaustive;
 
 export function emptyRow(libraryID: number, itemKey: string): ItemCacheRow {
   return {
@@ -202,8 +217,11 @@ export function emptyRow(libraryID: number, itemKey: string): ItemCacheRow {
   };
 }
 
-export function rowToParams(row: ItemCacheRow): unknown[] {
-  return COLUMNS.map((c) => row[c]);
+/** Value types SQLite's `queryAsync` parameter binding accepts in this codebase. */
+export type SqliteBindValue = string | number | null;
+
+export function rowToParams(row: ItemCacheRow): SqliteBindValue[] {
+  return COLUMNS.map((c) => row[c] as SqliteBindValue);
 }
 
 /** Marker used to mirror confirmed match IDs back to Extra for downgrade safety. */

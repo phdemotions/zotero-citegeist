@@ -19,6 +19,7 @@ import {
   type ItemCacheRow,
   type DbBool,
   type MatchTier,
+  toDbBool,
 } from "./types";
 import { deleteRow, getRow, upsertRow } from "./db";
 
@@ -82,7 +83,7 @@ export async function cacheWorkData(
     percentile: metrics.percentile,
     is_top_1_percent: metrics.isTop1Percent,
     is_top_10_percent: metrics.isTop10Percent,
-    is_retracted: work.is_retracted == null ? null : work.is_retracted ? 1 : 0,
+    is_retracted: toDbBool(work.is_retracted),
     last_fetched: new Date().toISOString(),
     source_id: sourceId,
     citedness_2yr: sourceStats ? sourceStats.citedness2yr : existing.citedness_2yr,
