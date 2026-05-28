@@ -21,7 +21,7 @@ import {
   SHOW_PROGRESS_UI_THRESHOLD,
 } from "../../constants";
 import { safeParseFloat, safeParseInt } from "../utils";
-import { deleteMirrorEntries, mirrorEntries, requireDb, upsertRow } from "./db";
+import { deleteMirrorEntries, mirrorSnapshot, requireDb, upsertRow } from "./db";
 import { setExtraConfirmedMatch } from "./write";
 import { emptyRow, isMatchMethod, isMatchTier, type ItemCacheRow, LEGACY_PREFIX } from "./types";
 
@@ -270,62 +270,77 @@ export async function migrateFromExtraV1(): Promise<void> {
     const ui = buildProgressUI(total);
     let done = 0;
 
+    // Each iteration is wrapped in its own try/catch. A single "poison"
+    // item — corrupt Extra, locked metadata, transient saveTx rejection —
+    // must not block the entire migration. We log and move on; the next
+    // launch will retry that item only (others already have checkpoints).
+    let failureCount = 0;
     for (const item of candidates) {
       done++;
       if (done % MIGRATION_PROGRESS_TICK === 0) ui?.update(done, total);
 
-      const conn = requireDb();
+      try {
+        const conn = requireDb();
 
-      // Skip items we've already migrated (idempotency)
-      const already = await conn.queryAsync<{ item_key: string }>(
-        `SELECT item_key FROM migration_progress WHERE library_id = ? AND item_key = ?`,
-        [item.libraryID, item.key],
-      );
-      if (already.length > 0) continue;
-
-      const extra = item.getField("extra") ?? "";
-      const parse = parseExtraLegacy(extra);
-
-      // Defensive checkpoint: zero Citegeist fields means either the item
-      // was already stripped by a prior partial migration, or the file once
-      // had Citegeist data and a user removed it manually. Checkpoint so we
-      // don't keep paying the parse cost on future runs.
-      if (parse.citegeistFields.size === 0) {
-        await checkpointItem(conn, item.libraryID, item.key);
-        continue;
-      }
-
-      if (!verifyParseRoundTrip(extra, parse)) {
-        Zotero.debug(
-          `[Citegeist] migration: skipping ${item.libraryID}:${item.key} — round-trip parse failed`,
+        // Skip items we've already migrated (idempotency)
+        const already = await conn.queryAsync<{ item_key: string }>(
+          `SELECT item_key FROM migration_progress WHERE library_id = ? AND item_key = ?`,
+          [item.libraryID, item.key],
         );
-        continue;
+        if (already.length > 0) continue;
+
+        const extra = item.getField("extra") ?? "";
+        const parse = parseExtraLegacy(extra);
+
+        // Defensive checkpoint: zero Citegeist fields means either the item
+        // was already stripped by a prior partial migration, or the file once
+        // had Citegeist data and a user removed it manually. Checkpoint so we
+        // don't keep paying the parse cost on future runs.
+        if (parse.citegeistFields.size === 0) {
+          await checkpointItem(conn, item.libraryID, item.key);
+          continue;
+        }
+
+        if (!verifyParseRoundTrip(extra, parse)) {
+          Zotero.debug(
+            `[Citegeist] migration: skipping ${item.libraryID}:${item.key} — round-trip parse failed`,
+          );
+          continue;
+        }
+
+        const row = buildRowFromLegacy(item.libraryID, item.key, parse.citegeistFields);
+
+        // Step 1: SQLite write
+        await upsertRow(row);
+
+        // Step 2 (must follow step 1): Extra strip — non-Citegeist content
+        // preserved; the single surviving `Citegeist match ID:` line is
+        // re-emitted for confirmed matches so the user's manual curation
+        // survives plugin downgrade. If we stripped Extra before SQLite has
+        // the row, a crash here loses the user's data.
+        const newLines = setExtraConfirmedMatch(parse.otherLines, row.confirmed_open_alex_id);
+        const newExtra = newLines.join("\n").replace(/\n+$/, "");
+        item.setField("extra", newExtra);
+        await item.saveTx({ skipDateModifiedUpdate: true });
+
+        // Step 3 (must follow step 2): checkpoint
+        await checkpointItem(conn, item.libraryID, item.key);
+      } catch (e) {
+        failureCount++;
+        Zotero.debug(
+          `[Citegeist] migration: error on ${item.libraryID}:${item.key} — ${String(e)} (continuing)`,
+        );
       }
-
-      const row = buildRowFromLegacy(item.libraryID, item.key, parse.citegeistFields);
-
-      // Step 1: SQLite write
-      await upsertRow(row);
-
-      // Step 2 (must follow step 1): Extra strip — non-Citegeist content
-      // preserved; the single surviving `Citegeist match ID:` line is
-      // re-emitted for confirmed matches so the user's manual curation
-      // survives plugin downgrade. If we stripped Extra before SQLite has
-      // the row, a crash here loses the user's data.
-      const newLines = setExtraConfirmedMatch(parse.otherLines, row.confirmed_open_alex_id);
-      const newExtra = newLines.join("\n").replace(/\n+$/, "");
-      item.setField("extra", newExtra);
-      await item.saveTx({ skipDateModifiedUpdate: true });
-
-      // Step 3 (must follow step 2): checkpoint
-      await checkpointItem(conn, item.libraryID, item.key);
+    }
+    if (failureCount > 0) {
+      Zotero.debug(`[Citegeist] migration: ${failureCount} items skipped due to errors`);
     }
 
     ui?.close();
     Zotero.debug(`[Citegeist] migration complete: ${total} items processed`);
   });
 
-  Zotero.Prefs.set("extensions.zotero.citegeist.migrationV1Complete", true);
+  trySetPref("extensions.zotero.citegeist.migrationV1Complete", true);
 
   // The checkpoint table has served its purpose; reclaim space.
   // Wrap in try/catch so a cleanup failure doesn't unset the completion pref.
@@ -334,6 +349,15 @@ export async function migrateFromExtraV1(): Promise<void> {
     await conn.queryAsync(`DELETE FROM migration_progress`);
   } catch (e) {
     Zotero.debug(`[Citegeist] migration_progress cleanup failed (non-fatal): ${String(e)}`);
+  }
+}
+
+/** `Zotero.Prefs.set` writes to `prefs.js` and can throw on a locked profile. */
+function trySetPref(name: string, value: unknown): void {
+  try {
+    Zotero.Prefs.set(name, value);
+  } catch (e) {
+    Zotero.debug(`[Citegeist] Prefs.set('${name}') failed (non-fatal): ${String(e)}`);
   }
 }
 
@@ -377,15 +401,18 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
     for (const i of items) liveComposites.add(`${i.libraryID}:${i.key}`);
   }
 
+  // Snapshot the mirror before iterating. Concurrent writes during GC could
+  // otherwise yield entries that didn't exist when `liveComposites` was
+  // built, leading to spurious orphan detection.
   const orphans: Array<{ libraryID: number; itemKey: string; composite: string }> = [];
-  for (const [composite, row] of mirrorEntries()) {
+  for (const [composite, row] of mirrorSnapshot()) {
     if (!liveComposites.has(composite)) {
       orphans.push({ libraryID: row.library_id, itemKey: row.item_key, composite });
     }
   }
 
   if (orphans.length === 0) {
-    Zotero.Prefs.set("extensions.zotero.citegeist.lastOrphanGcAt", Date.now());
+    trySetPref("extensions.zotero.citegeist.lastOrphanGcAt", Date.now());
     return;
   }
 
@@ -408,6 +435,6 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
     );
     deleteMirrorEntries(slice.map((o) => o.composite));
   }
-  Zotero.Prefs.set("extensions.zotero.citegeist.lastOrphanGcAt", Date.now());
+  trySetPref("extensions.zotero.citegeist.lastOrphanGcAt", Date.now());
   Zotero.debug(`[Citegeist] orphan GC removed ${orphans.length} rows`);
 }

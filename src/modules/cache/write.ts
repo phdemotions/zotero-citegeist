@@ -56,7 +56,7 @@ export async function cacheWorkData(
     percentile: metrics.percentile,
     is_top_1_percent: metrics.isTop1Percent,
     is_top_10_percent: metrics.isTop10Percent,
-    is_retracted: work.is_retracted ? 1 : 0,
+    is_retracted: work.is_retracted == null ? null : work.is_retracted ? 1 : 0,
     last_fetched: new Date().toISOString(),
     source_id: work.primary_location?.source?.id?.replace("https://openalex.org/", "") ?? null,
     citedness_2yr: sourceStats ? sourceStats.citedness2yr : existing.citedness_2yr,
@@ -116,6 +116,11 @@ export async function confirmTitleMatch(item: _ZoteroTypes.Item, tier: MatchTier
     return;
   }
 
+  // Atomically promote pending → confirmed AND clear the pending block.
+  // The two pieces of state must change in a single transaction so that no
+  // concurrent reader can observe a row where pending_* is still populated
+  // while confirmed_open_alex_id is already set (which would expose a stale
+  // suggestion to the user in the same render tick).
   const row: ItemCacheRow = {
     ...existing,
     no_match: null,
@@ -123,6 +128,14 @@ export async function confirmTitleMatch(item: _ZoteroTypes.Item, tier: MatchTier
     match_method: "title-match",
     match_confidence: tier,
     confirmed_open_alex_id: pendingId,
+    pending_open_alex_id: null,
+    pending_title: null,
+    pending_cited_by_count: null,
+    pending_fwci: null,
+    pending_year: null,
+    pending_tier: null,
+    pending_confidence: null,
+    pending_doi: null,
   };
 
   await upsertRow(row);

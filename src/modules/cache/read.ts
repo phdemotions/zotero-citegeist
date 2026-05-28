@@ -17,7 +17,13 @@ import {
   type PendingSuggestion,
 } from "./types";
 
-const EMPTY_METRICS: AllMetrics = {
+/**
+ * Frozen sentinel returned by `getCachedMetrics` when no row exists. Sharing
+ * a single reference is fine because the object is frozen — any caller that
+ * tries to mutate it will throw in strict mode (and silently fail otherwise),
+ * surfacing the bug instead of cascading the mutation across uncached items.
+ */
+const EMPTY_METRICS: AllMetrics = Object.freeze({
   count: null,
   fwci: null,
   percentile: null,
@@ -25,22 +31,39 @@ const EMPTY_METRICS: AllMetrics = {
   sourceId: null,
   citedness2yr: null,
   journalHIndex: null,
-  sourceISSNs: [],
+  sourceISSNs: Object.freeze([]) as unknown as string[],
   suggestion: null,
-};
+}) as AllMetrics;
 
-function isLastFetchedStaleRow(row: ItemCacheRow | undefined): boolean {
-  if (!row || !row.last_fetched) return true;
+/**
+ * Tiny memoization for the cache-lifetime pref. Column rendering can call
+ * `isLastFetchedStaleRow` thousands of times per tick (one per visible row
+ * per column); a 1-second TTL collapses that to a single `Zotero.Prefs.get`.
+ */
+let cachedLifetimeMs = 0;
+let cachedLifetimeReadAt = 0;
+const LIFETIME_MEMO_TTL_MS = 1000;
 
+function getCacheLifetimeMs(): number {
+  const now = Date.now();
+  if (now - cachedLifetimeReadAt < LIFETIME_MEMO_TTL_MS && cachedLifetimeMs > 0) {
+    return cachedLifetimeMs;
+  }
   const rawLifetime = Zotero.Prefs.get("extensions.zotero.citegeist.cacheLifetimeDays");
   const lifetimeDays =
     typeof rawLifetime === "number" && Number.isFinite(rawLifetime) && rawLifetime > 0
       ? rawLifetime
       : DEFAULT_CACHE_LIFETIME_DAYS;
+  cachedLifetimeMs = lifetimeDays * 24 * 60 * 60 * 1000;
+  cachedLifetimeReadAt = now;
+  return cachedLifetimeMs;
+}
+
+function isLastFetchedStaleRow(row: ItemCacheRow | undefined): boolean {
+  if (!row || !row.last_fetched) return true;
   const fetchedTime = new Date(row.last_fetched).getTime();
   if (Number.isNaN(fetchedTime)) return true;
-  const ageMs = Date.now() - fetchedTime;
-  return ageMs > lifetimeDays * 24 * 60 * 60 * 1000;
+  return Date.now() - fetchedTime > getCacheLifetimeMs();
 }
 
 export function getCachedCountAndStaleness(item: _ZoteroTypes.Item): {
