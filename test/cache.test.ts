@@ -35,6 +35,10 @@ function makeFakeDb() {
 
       if (/^CREATE\s+(TABLE|INDEX)/i.test(s)) return [];
       if (/^DROP\s+INDEX/i.test(s)) return [];
+      if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+schema_meta/i.test(s)) return [];
+      if (/^SELECT\s+COUNT\(\*\)\s+AS\s+n\s+FROM\s+item_cache/i.test(s)) {
+        return [{ n: 0 }];
+      }
 
       // INSERT OR REPLACE INTO item_cache (...) VALUES (?, ?, ...)
       if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+item_cache/i.test(s)) {
@@ -367,7 +371,7 @@ describe("title-match flow", () => {
     await writePendingSuggestion(
       item,
       {
-        id: "https://openalex.org/Wcand",
+        id: "https://openalex.org/W90001",
         display_name: "Candidate Title",
         cited_by_count: 12,
         fwci: 1.2,
@@ -378,7 +382,7 @@ describe("title-match flow", () => {
       0.81,
     );
     const s = getPendingSuggestion(item)!;
-    expect(s.openAlexId).toBe("Wcand");
+    expect(s.openAlexId).toBe("W90001");
     expect(s.title).toBe("Candidate Title");
     expect(s.tier).toBe("medium");
     expect(s.confidence).toBeCloseTo(0.81);
@@ -389,7 +393,7 @@ describe("title-match flow", () => {
     await writePendingSuggestion(
       item,
       {
-        id: "https://openalex.org/Wcand",
+        id: "https://openalex.org/W90001",
         display_name: "X",
         cited_by_count: 3,
         fwci: null,
@@ -416,7 +420,7 @@ describe("title-match flow", () => {
     await writePendingSuggestion(
       item,
       {
-        id: "https://openalex.org/Wconfirm",
+        id: "https://openalex.org/W90002",
         display_name: "X",
         cited_by_count: 3,
         fwci: null,
@@ -427,9 +431,9 @@ describe("title-match flow", () => {
       0.95,
     );
     await confirmTitleMatch(item, "high");
-    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("Wconfirm");
+    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("W90002");
     expect(getTitleMatchMeta(item).matchMethod).toBe("title-match");
-    expect(items.get("A")!.extra).toContain("Citegeist match ID: Wconfirm");
+    expect(items.get("A")!.extra).toContain("Citegeist match ID: W90002");
   });
 
   it("clearPendingSuggestion zeros only pending fields", async () => {
@@ -443,7 +447,7 @@ describe("title-match flow", () => {
     await writePendingSuggestion(
       item,
       {
-        id: "https://openalex.org/Wcand",
+        id: "https://openalex.org/W90001",
         display_name: "X",
         cited_by_count: 3,
         fwci: null,
@@ -561,20 +565,20 @@ describe("composite (libraryID, itemKey) keying", () => {
     const itemGroup = libItem(2, "ABC");
 
     await cacheWorkData(itemUser, {
-      id: "https://openalex.org/Wuser",
+      id: "https://openalex.org/W90003",
       cited_by_count: 5,
       fwci: null,
       is_retracted: false,
     } as never);
     await cacheWorkData(itemGroup, {
-      id: "https://openalex.org/Wgroup",
+      id: "https://openalex.org/W90004",
       cited_by_count: 7,
       fwci: null,
       is_retracted: false,
     } as never);
 
-    expect(getCachedOpenAlexId(itemUser)).toBe("Wuser");
-    expect(getCachedOpenAlexId(itemGroup)).toBe("Wgroup");
+    expect(getCachedOpenAlexId(itemUser)).toBe("W90003");
+    expect(getCachedOpenAlexId(itemGroup)).toBe("W90004");
     expect(fakeDb.table.size).toBe(2);
   });
 
@@ -582,13 +586,13 @@ describe("composite (libraryID, itemKey) keying", () => {
     const itemA = libItem(1, "X");
     const itemB = libItem(2, "X");
     await cacheWorkData(itemA, {
-      id: "https://openalex.org/Wa",
+      id: "https://openalex.org/W90005",
       cited_by_count: 1,
       fwci: null,
       is_retracted: false,
     } as never);
     await cacheWorkData(itemB, {
-      id: "https://openalex.org/Wb",
+      id: "https://openalex.org/W90006",
       cited_by_count: 2,
       fwci: null,
       is_retracted: false,
@@ -604,14 +608,14 @@ describe("composite (libraryID, itemKey) keying", () => {
 
 describe("migration crash recovery", () => {
   function legacyExtra(): string {
-    return "Citegeist.openAlexId: Wrec\nCitegeist.citedByCount: 9";
+    return "Citegeist.openAlexId: W90007\nCitegeist.citedByCount: 9";
   }
 
   it("resumes after step 1 (SQLite written, Extra not yet stripped)", async () => {
     // Seed SQLite as if step 1 completed but the process died before step 2.
     const item = mockItem("R", legacyExtra());
     await cacheWorkData(item, {
-      id: "https://openalex.org/Wrec",
+      id: "https://openalex.org/W90007",
       cited_by_count: 9,
       fwci: null,
       is_retracted: false,
@@ -633,7 +637,7 @@ describe("migration crash recovery", () => {
     const item = mockItem("S", "Some unrelated note");
     // Pre-populate SQLite row to simulate a prior step-1 success.
     await cacheWorkData(item, {
-      id: "https://openalex.org/Ws",
+      id: "https://openalex.org/W90008",
       cited_by_count: 4,
       fwci: null,
       is_retracted: false,
@@ -703,7 +707,7 @@ describe("garbageCollectOrphans rate limit", () => {
   it("skips when lastOrphanGcAt is within the interval (and no force)", async () => {
     const item = mockItem("L");
     await cacheWorkData(item, {
-      id: "https://openalex.org/Wl",
+      id: "https://openalex.org/W90009",
       cited_by_count: 1,
       fwci: null,
       is_retracted: false,
@@ -725,7 +729,7 @@ describe("garbageCollectOrphans rate limit", () => {
   it("runs when called with { force: true } regardless of interval", async () => {
     const item = mockItem("F");
     await cacheWorkData(item, {
-      id: "https://openalex.org/Wf",
+      id: "https://openalex.org/W90010",
       cited_by_count: 1,
       fwci: null,
       is_retracted: false,
@@ -750,7 +754,7 @@ describe("confirmTitleMatch precedence", () => {
   it("prefers pending_open_alex_id over existing open_alex_id", async () => {
     const item = mockItem("P");
     await cacheWorkData(item, {
-      id: "https://openalex.org/Wexisting",
+      id: "https://openalex.org/W90011",
       cited_by_count: 1,
       fwci: null,
       is_retracted: false,
@@ -758,7 +762,7 @@ describe("confirmTitleMatch precedence", () => {
     await writePendingSuggestion(
       item,
       {
-        id: "https://openalex.org/Wpending",
+        id: "https://openalex.org/W90012",
         display_name: "Pending",
         cited_by_count: 3,
         fwci: null,
@@ -771,8 +775,8 @@ describe("confirmTitleMatch precedence", () => {
 
     await confirmTitleMatch(item, "high");
 
-    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("Wpending");
-    expect(items.get("P")!.extra).toContain("Citegeist match ID: Wpending");
+    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("W90012");
+    expect(items.get("P")!.extra).toContain("Citegeist match ID: W90012");
   });
 
   it("is a no-op when neither pending nor existing ID is set", async () => {
@@ -881,15 +885,52 @@ describe("migrateFromExtraV1", () => {
     expect(getCachedData(item)!.openAlexId).toBe("W7");
   });
 
-  it("respects the migrationV1Complete pref", async () => {
+  it("respects the migrationV1Complete pref when SQLite already has data", async () => {
+    // Pre-seed the cache so the REL-002 force-rerun guard finds SQLite
+    // non-empty and trusts the completion pref.
+    const item = mockItem("A", legacyExtra());
+    await cacheWorkData(item, {
+      id: "https://openalex.org/W12345",
+      cited_by_count: 1,
+      fwci: null,
+      is_retracted: false,
+    } as never);
+    // Override the COUNT(*) handler to reflect the seeded row.
+    const originalQuery = fakeDb.queryAsync;
+    fakeDb.queryAsync = vi.fn(async (sql: string, params?: unknown[]) => {
+      if (/^SELECT\s+COUNT\(\*\)\s+AS\s+n\s+FROM\s+item_cache/i.test(sql.trim())) {
+        return [{ n: fakeDb.table.size }];
+      }
+      return originalQuery(sql, params);
+    }) as typeof fakeDb.queryAsync;
+
     mockZotero.Prefs.get.mockImplementation((pref: string) => {
       if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
       return null;
     });
-    const item = mockItem("A", legacyExtra());
     mockZotero.Items.getAll.mockResolvedValue([item]);
+
     await migrateFromExtraV1();
+    // Migration did NOT run — Extra still has legacy data, only the
+    // pre-seeded row exists (no new ones from migration).
     expect(items.get("A")!.extra).toContain("Citegeist.");
-    expect(fakeDb.table.size).toBe(0);
+  });
+
+  it("force-reruns when pref is set but SQLite is empty AND legacy data exists (REL-002)", async () => {
+    // Pref says complete, but SQLite is empty (fake DB COUNT(*) defaults to 0)
+    // and the user's library still has Citegeist data in Extra.
+    // shouldForceRerun should clear the pref and re-run.
+    mockZotero.Prefs.get.mockImplementation((pref: string) => {
+      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
+      return null;
+    });
+    const item = mockItem("R", legacyExtra());
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+
+    await migrateFromExtraV1();
+
+    // Force-rerun cleared the pref and ran migration: Extra now stripped.
+    expect(items.get("R")!.extra).not.toContain("Citegeist.");
+    expect(fakeDb.table.size).toBe(1);
   });
 });

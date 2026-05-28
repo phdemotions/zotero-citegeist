@@ -120,7 +120,7 @@ export function extractIdentifier(item: _ZoteroTypes.Item): ItemIdentifier | nul
  * Returns the work data on success so callers can use it without a second API call.
  */
 export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchResult> {
-  if (!item.isRegularItem()) {
+  if (!item.isRegularItem() || item.deleted) {
     return { status: "error", error: "invalid-item" };
   }
 

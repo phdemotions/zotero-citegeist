@@ -14,6 +14,8 @@ import {
   type CacheWorkInput,
   CONFIRMED_MATCH_EXTRA_PREFIX,
   emptyRow,
+  isValidSourceId,
+  isValidWorkId,
   type ItemCacheRow,
   type DbBool,
   type MatchTier,
@@ -51,9 +53,30 @@ export async function cacheWorkData(
   const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
   const metrics = deriveCitationMetrics(work);
 
+  // Validate the OpenAlex work ID before persisting. A malformed value —
+  // typically a malicious / MITM'd response with newlines embedded — would
+  // later flow into Zotero's Extra field via writeConfirmedMatchToExtra and
+  // could spoof CSL metadata read by other plugins.
+  const rawWorkId = work.id.replace("https://openalex.org/", "");
+  if (!isValidWorkId(rawWorkId)) {
+    Zotero.debug(
+      `[Citegeist] cacheWorkData rejecting malformed work ID: ${JSON.stringify(rawWorkId)}`,
+    );
+    return;
+  }
+
+  const rawSourceId =
+    work.primary_location?.source?.id?.replace("https://openalex.org/", "") ?? null;
+  const sourceId = rawSourceId && isValidSourceId(rawSourceId) ? rawSourceId : null;
+  if (rawSourceId && !sourceId) {
+    Zotero.debug(
+      `[Citegeist] cacheWorkData dropping malformed source ID: ${JSON.stringify(rawSourceId)}`,
+    );
+  }
+
   const row: ItemCacheRow = {
     ...existing,
-    open_alex_id: work.id.replace("https://openalex.org/", ""),
+    open_alex_id: rawWorkId,
     cited_by_count: work.cited_by_count,
     fwci: metrics.fwci,
     percentile: metrics.percentile,
@@ -61,7 +84,7 @@ export async function cacheWorkData(
     is_top_10_percent: metrics.isTop10Percent,
     is_retracted: work.is_retracted == null ? null : work.is_retracted ? 1 : 0,
     last_fetched: new Date().toISOString(),
-    source_id: work.primary_location?.source?.id?.replace("https://openalex.org/", "") ?? null,
+    source_id: sourceId,
     citedness_2yr: sourceStats ? sourceStats.citedness2yr : existing.citedness_2yr,
     journal_h_index: sourceStats ? sourceStats.hIndex : existing.journal_h_index,
     source_issns:
@@ -151,10 +174,17 @@ export async function writePendingSuggestion(
   tier: MatchTier,
   confidence: number,
 ): Promise<void> {
+  const rawId = work.id.replace("https://openalex.org/", "");
+  if (!isValidWorkId(rawId)) {
+    Zotero.debug(
+      `[Citegeist] writePendingSuggestion rejecting malformed work ID: ${JSON.stringify(rawId)}`,
+    );
+    return;
+  }
   const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
   const row: ItemCacheRow = {
     ...existing,
-    pending_open_alex_id: work.id.replace("https://openalex.org/", ""),
+    pending_open_alex_id: rawId,
     pending_title: sanitizeForDisplay(work.display_name),
     pending_cited_by_count: work.cited_by_count,
     pending_fwci: work.fwci,
@@ -207,6 +237,15 @@ async function writeConfirmedMatchToExtra(
   item: _ZoteroTypes.Item,
   openAlexId: string,
 ): Promise<void> {
+  // Defensive double-check: a row mutated outside our control could in principle
+  // carry a malformed ID that bypassed the cacheWorkData validation. Refuse to
+  // emit anything that doesn't match the OpenAlex shape.
+  if (!isValidWorkId(openAlexId)) {
+    Zotero.debug(
+      `[Citegeist] writeConfirmedMatchToExtra refusing malformed ID: ${JSON.stringify(openAlexId)}`,
+    );
+    return;
+  }
   const extra = item.getField("extra") ?? "";
   const newLines = setExtraConfirmedMatch(extra.split("\n"), openAlexId);
   const cleaned = newLines.join("\n").replace(/\n+$/, "");
@@ -214,7 +253,12 @@ async function writeConfirmedMatchToExtra(
   await item.saveTx();
 }
 
-/** Strip characters that would render badly in UI strings. */
+/**
+ * Strip line-breaking characters that would render badly in UI strings or
+ * split into spurious lines if the value ever round-trips through a
+ * newline-sensitive sink (Extra field, BibTeX export, log line). Covers
+ * ASCII `\r\n` plus Unicode line separators (U+0085, U+2028, U+2029).
+ */
 function sanitizeForDisplay(s: string): string {
-  return s.replace(/[\r\n]/g, " ").trim();
+  return s.replace(/[\r\n\u0085\u2028\u2029]/g, " ").trim();
 }

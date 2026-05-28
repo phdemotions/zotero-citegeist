@@ -58,6 +58,12 @@ export const MIGRATION_PROGRESS_TICK = 50;
 export const ORPHAN_GC_CHUNK_SIZE = 200;
 /** Minimum interval between orphan-GC sweeps at startup. */
 export const ORPHAN_GC_MIN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+/** Max wall time `closeCache` will wait for pending writes before forcing close. */
+export const CLOSE_CACHE_DRAIN_TIMEOUT_MS = 5000;
+/** Hard cap on migration candidates — defends against malicious-import explosion. */
+export const MIGRATION_MAX_CANDIDATES = 200_000;
+/** Max distinct error lines to log per migration run before summarizing. */
+export const MIGRATION_LOG_CAP = 50;
 
 // ── Title-based metadata matching ──
 /** Score threshold for high-confidence title match (data shown with ~ prefix). */

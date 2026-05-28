@@ -16,6 +16,7 @@
  * • `closeCache` waits for all pending writes before closing the DB.
  */
 
+import { CLOSE_CACHE_DRAIN_TIMEOUT_MS } from "../../constants";
 import { COLUMNS, type ItemCacheRow, mirrorKey, rowToParams } from "./types";
 
 /** Pre-computed UPSERT statement. COLUMNS is `as const` so this never changes. */
@@ -66,6 +67,21 @@ CREATE TABLE IF NOT EXISTS migration_progress (
 );
 `;
 
+/**
+ * Schema-version table. Establishes the convention now (empty in v1.4.0) so
+ * future schema changes can ship an idempotent migration runner that reads
+ * the recorded version, applies missing steps in order, and updates the row.
+ */
+const CREATE_SCHEMA_META = `
+CREATE TABLE IF NOT EXISTS schema_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+`;
+
+/** Current schema version. Bump and add a migration when changing the shape. */
+const SCHEMA_VERSION = "1";
+
 let db: _ZoteroTypes.DBConnection | null = null;
 let mirror: Map<string, ItemCacheRow> = new Map();
 let initialized = false;
@@ -96,22 +112,40 @@ async function doInit(): Promise<void> {
   db = new Zotero.DBConnection("citegeist");
   await db.queryAsync(SCHEMA);
   await db.queryAsync(CREATE_PROGRESS_TABLE);
+  await db.queryAsync(CREATE_SCHEMA_META);
   // Drop any index left behind by an earlier v1.4.0 alpha. Staleness queries
   // happen against the in-memory mirror, never against SQLite, so the index
   // is pure write-amplification overhead.
   await db.queryAsync(`DROP INDEX IF EXISTS idx_item_cache_last_fetched`);
+  // Record current schema version (idempotent — REPLACE keeps a single row).
+  await db.queryAsync(`INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', ?)`, [
+    SCHEMA_VERSION,
+  ]);
 
   const rows = await db.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
   mirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
 
   initialized = true;
-  Zotero.debug(`[Citegeist] cache initialized: ${mirror.size} rows`);
+  Zotero.debug(`[Citegeist] cache initialized: ${mirror.size} rows (schema v${SCHEMA_VERSION})`);
 }
 
-/** Close the DB connection on shutdown. Drains pending writes first. */
+/**
+ * Close the DB connection on shutdown. Drains pending writes first, with a
+ * bounded timeout so a hung write (locked DB, antivirus stall) doesn't block
+ * Zotero's shutdown sequence indefinitely.
+ */
 export async function closeCache(): Promise<void> {
   if (pendingWrites.size > 0) {
-    await Promise.allSettled([...pendingWrites]);
+    const drain = Promise.allSettled([...pendingWrites]);
+    const timeout = new Promise<"timeout">((resolve) => {
+      setTimeout(() => resolve("timeout"), CLOSE_CACHE_DRAIN_TIMEOUT_MS);
+    });
+    const result = await Promise.race([drain, timeout]);
+    if (result === "timeout") {
+      Zotero.debug(
+        `[Citegeist] closeCache: pending writes did not drain within ${CLOSE_CACHE_DRAIN_TIMEOUT_MS}ms; forcing close`,
+      );
+    }
   }
   if (db) {
     await db.closeDatabase(false);

@@ -212,6 +212,27 @@ export const CONFIRMED_MATCH_EXTRA_PREFIX = "Citegeist match ID";
 /** Legacy Extra-field namespace; used only by the one-shot migration. */
 export const LEGACY_PREFIX = "Citegeist.";
 
+// ── Validation regexes for untrusted upstream data ────────────────────────
+// OpenAlex IDs follow a strict alphanumeric shape. We reject anything else
+// rather than sanitize — a value that doesn't look like a valid OpenAlex ID
+// is either corrupt or hostile, and persisting it (e.g., back to a Zotero
+// item's Extra field) would let a malicious response inject newlines that
+// CSL processors and other plugins interpret as authoritative metadata.
+
+/** OpenAlex work ID: literal `W` followed by digits. */
+export const OPEN_ALEX_WORK_ID_RE = /^W\d+$/;
+
+/** OpenAlex source (journal/venue) ID: literal `S` followed by digits. */
+export const OPEN_ALEX_SOURCE_ID_RE = /^S\d+$/;
+
+export function isValidWorkId(v: string | null | undefined): v is string {
+  return typeof v === "string" && OPEN_ALEX_WORK_ID_RE.test(v);
+}
+
+export function isValidSourceId(v: string | null | undefined): v is string {
+  return typeof v === "string" && OPEN_ALEX_SOURCE_ID_RE.test(v);
+}
+
 // ── Cache-owned input shapes ──────────────────────────────────────────────
 // Cache layer must not depend on the OpenAlex module's types — that would
 // couple storage to upstream API shapes. Callers pass `OpenAlexWork` /

@@ -15,6 +15,8 @@
  */
 
 import {
+  MIGRATION_LOG_CAP,
+  MIGRATION_MAX_CANDIDATES,
   MIGRATION_PROGRESS_TICK,
   ORPHAN_GC_CHUNK_SIZE,
   ORPHAN_GC_MIN_INTERVAL_MS,
@@ -237,7 +239,21 @@ const MIN_ZOTERO_VERSION_FOR_MIGRATION = "7.0.10";
  * prompt appears.
  */
 export async function migrateFromExtraV1(): Promise<void> {
-  if (Zotero.Prefs.get("extensions.zotero.citegeist.migrationV1Complete")) return;
+  // REL-002 silent-data-loss guard: the pref says "we already migrated", but
+  // if SQLite is empty AND any library still contains legacy Citegeist data
+  // in Extra, something went wrong (manual SQLite deletion, antivirus
+  // quarantine, partial profile restore). Clear the pref and re-run rather
+  // than silently leaving the user with stripped Extra and no cache.
+  if (Zotero.Prefs.get("extensions.zotero.citegeist.migrationV1Complete")) {
+    if (await shouldForceRerun()) {
+      Zotero.debug(
+        "[Citegeist] migration pref says complete but state mismatch detected — re-running",
+      );
+      trySetPref("extensions.zotero.citegeist.migrationV1Complete", false);
+    } else {
+      return;
+    }
+  }
 
   // Verify init even though we don't keep the connection — we want a clear
   // error here if a caller forgot to await initCache() first.
@@ -254,16 +270,37 @@ export async function migrateFromExtraV1(): Promise<void> {
     return;
   }
 
+  // Outcome flags hoisted above the delaySync closure so the pref-completion
+  // decision below can see them.
+  let truncated = false;
+  let resurrectionDetected = false;
+
   await Zotero.Sync.Runner.delaySync(async () => {
     // Collect candidates across every library the user has access to.
+    // Filter to regular items only — notes and attachments are not the
+    // things Citegeist ever wrote data for, and skipping them defuses a
+    // potential malicious-import explosion via crafted `.bib` files.
     const candidates: _ZoteroTypes.Item[] = [];
-    for (const lib of Zotero.Libraries.getAll()) {
+    outer: for (const lib of Zotero.Libraries.getAll()) {
       const items = await Zotero.Items.getAll(lib.libraryID, false);
       for (const item of items) {
         if (item.deleted) continue;
+        if (!item.isRegularItem()) continue;
         const extra = item.getField("extra");
-        if (extra && extra.includes(LEGACY_PREFIX)) candidates.push(item);
+        if (extra && extra.includes(LEGACY_PREFIX)) {
+          candidates.push(item);
+          if (candidates.length >= MIGRATION_MAX_CANDIDATES) {
+            truncated = true;
+            break outer;
+          }
+        }
       }
+    }
+    if (truncated) {
+      Zotero.debug(
+        `[Citegeist] migration: candidate cap (${MIGRATION_MAX_CANDIDATES}) hit; remaining items will migrate on next launch`,
+      );
+      // Leave migrationV1Complete unset so the next launch picks up the rest.
     }
 
     const total = candidates.length;
@@ -292,7 +329,18 @@ export async function migrateFromExtraV1(): Promise<void> {
     // item — corrupt Extra, locked metadata, transient saveTx rejection —
     // must not block the entire migration. We log and move on; the next
     // launch will retry that item only (others already have checkpoints).
+    //
+    // Per-item logs are capped at MIGRATION_LOG_CAP. On a library where
+    // thousands of items hit the same failure, the summary line at the end
+    // is more useful than an unbounded debug spam.
     let failureCount = 0;
+    let loggedCount = 0;
+    const logCapped = (msg: string): void => {
+      if (loggedCount < MIGRATION_LOG_CAP) {
+        Zotero.debug(msg);
+        loggedCount++;
+      }
+    };
     for (const item of candidates) {
       done++;
       if (done % progressTick === 0) ui?.update(done, total);
@@ -316,7 +364,7 @@ export async function migrateFromExtraV1(): Promise<void> {
         }
 
         if (!verifyParseRoundTrip(extra, parse)) {
-          Zotero.debug(
+          logCapped(
             `[Citegeist] migration: skipping ${item.libraryID}:${item.key} — round-trip parse failed`,
           );
           continue;
@@ -342,20 +390,52 @@ export async function migrateFromExtraV1(): Promise<void> {
         checkpointed.add(`${item.libraryID}:${item.key}`);
       } catch (e) {
         failureCount++;
-        Zotero.debug(
+        logCapped(
           `[Citegeist] migration: error on ${item.libraryID}:${item.key} — ${String(e)} (continuing)`,
         );
       }
     }
     if (failureCount > 0) {
-      Zotero.debug(`[Citegeist] migration: ${failureCount} items skipped due to errors`);
+      const suppressed = Math.max(0, failureCount - loggedCount);
+      Zotero.debug(
+        `[Citegeist] migration: ${failureCount} items skipped due to errors` +
+          (suppressed > 0 ? ` (${suppressed} log lines suppressed)` : ""),
+      );
     }
 
     ui?.close();
     Zotero.debug(`[Citegeist] migration complete: ${total} items processed`);
+
+    // Post-migration spot check: pick a few migrated items and verify their
+    // Extra fields no longer contain `Citegeist.` lines. Defends against a
+    // hypothetical future Zotero release that releases delaySync mid-loop;
+    // if we detect resurrected legacy lines, leave the pref unset so the
+    // next launch retries.
+    if (!truncated && candidates.length > 0) {
+      const sampleSize = Math.min(5, candidates.length);
+      const stride = Math.max(1, Math.floor(candidates.length / sampleSize));
+      let resurrected = 0;
+      for (let i = 0; i < candidates.length && i / stride < sampleSize; i += stride) {
+        const stillHas = candidates[i].getField("extra")?.includes(LEGACY_PREFIX);
+        if (stillHas) resurrected++;
+      }
+      if (resurrected > 0) {
+        Zotero.debug(
+          `[Citegeist] migration: ${resurrected}/${sampleSize} sampled items still contain ` +
+            `legacy data — sync engine may have resurrected stripped lines. Leaving ` +
+            `migrationV1Complete unset; next launch will retry.`,
+        );
+        resurrectionDetected = true;
+      }
+    }
   });
 
-  trySetPref("extensions.zotero.citegeist.migrationV1Complete", true);
+  // Only mark complete if the loop processed the full candidate set
+  // (no truncation, no resurrection). Otherwise the next launch picks up
+  // where we left off.
+  if (!truncated && !resurrectionDetected) {
+    trySetPref("extensions.zotero.citegeist.migrationV1Complete", true);
+  }
 
   // The checkpoint table has served its purpose; reclaim space.
   // Wrap in try/catch so a cleanup failure doesn't unset the completion pref.
@@ -364,6 +444,36 @@ export async function migrateFromExtraV1(): Promise<void> {
     await conn.queryAsync(`DELETE FROM migration_progress`);
   } catch (e) {
     Zotero.debug(`[Citegeist] migration_progress cleanup failed (non-fatal): ${String(e)}`);
+  }
+}
+
+/**
+ * REL-002 helper: detects the state where the completion pref is set but
+ * SQLite is empty AND legacy `Citegeist.*` data still lives in Extra. This
+ * happens when the SQLite file is deleted (antivirus quarantine, manual
+ * cleanup, partial profile restore) but `prefs.js` survives. Without this
+ * guard the user would see stripped Extra fields AND empty cache columns
+ * — silent total data loss.
+ */
+async function shouldForceRerun(): Promise<boolean> {
+  try {
+    const conn = requireDb();
+    const rows = await conn.queryAsync<{ n: number }>(`SELECT COUNT(*) AS n FROM item_cache`);
+    const cacheEmpty = rows.length === 0 || (rows[0]?.n ?? 0) === 0;
+    if (!cacheEmpty) return false;
+    // Cache is empty — is there still legacy data anywhere?
+    for (const lib of Zotero.Libraries.getAll()) {
+      const items = await Zotero.Items.getAll(lib.libraryID, false);
+      for (const item of items) {
+        if (item.deleted || !item.isRegularItem()) continue;
+        const extra = item.getField("extra");
+        if (extra && extra.includes(LEGACY_PREFIX)) return true;
+      }
+    }
+    return false;
+  } catch (e) {
+    Zotero.debug(`[Citegeist] shouldForceRerun probe failed (non-fatal): ${String(e)}`);
+    return false;
   }
 }
 

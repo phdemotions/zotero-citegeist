@@ -30,6 +30,7 @@ export async function onStartup(data: PluginData): Promise<void> {
   // Initialize the plugin-owned SQLite cache and warm the in-memory mirror
   // BEFORE any reader (pane, column) registers. Column dataProvider is
   // synchronous and assumes the mirror is populated.
+  let cacheInitFailed = false;
   try {
     await initCache();
     await migrateFromExtraV1();
@@ -38,8 +39,30 @@ export async function onStartup(data: PluginData): Promise<void> {
     await garbageCollectOrphans().catch((e) => logError("orphan GC", e));
   } catch (e) {
     logError("cache init", e);
+    cacheInitFailed = true;
     // Continue startup: read functions will return empty metrics; users still
     // see the UI and can refetch. Better than refusing to load entirely.
+  }
+
+  if (cacheInitFailed) {
+    // Surface ONE alert so the user knows their column data and pane fetches
+    // are disabled until Zotero is restarted (and ideally the citegeist.sqlite
+    // file investigated — typically antivirus quarantine or a locked profile).
+    // We use setTimeout so this fires after the main window finishes loading.
+    Zotero.getMainWindow()?.setTimeout(() => {
+      try {
+        Services.prompt.alert(
+          Zotero.getMainWindow(),
+          "Citegeist: cache unavailable",
+          "Citegeist could not open its local cache database. Citation columns " +
+            "and the citation pane will not function until you restart Zotero. " +
+            "If the problem persists, check that <profile>/citegeist.sqlite is " +
+            "not locked or quarantined by antivirus.",
+        );
+      } catch (alertErr) {
+        logError("cache alert", alertErr);
+      }
+    }, 2000);
   }
 
   // Register preference pane so users can access settings
