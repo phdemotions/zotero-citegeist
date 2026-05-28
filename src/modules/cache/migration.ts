@@ -31,6 +31,8 @@ import {
   emptyRow,
   isMatchMethod,
   isMatchTier,
+  isValidSourceId,
+  isValidWorkId,
   type ItemCacheRow,
   LEGACY_PREFIX,
   mirrorKey,
@@ -104,8 +106,13 @@ function buildRowFromLegacy(
   const get = (k: string) => fields.get(`${LEGACY_PREFIX}${k}`);
   const row = emptyRow(libraryID, itemKey);
 
+  // Validate IDs at the legacy trust boundary, symmetric with v1.4.0 runtime
+  // writes (cacheWorkData, writePendingSuggestion). A malformed legacy value
+  // — hand-edited Extra, corrupted v1.3.x write, or a future downgrade-and-
+  // -re-upgrade scenario — must not flow into SQLite where downstream readers
+  // would treat it as a real OpenAlex ID.
   const oid = get("openAlexId");
-  if (oid) row.open_alex_id = oid;
+  if (oid && isValidWorkId(oid)) row.open_alex_id = oid;
 
   const cbc = get("citedByCount");
   if (cbc !== undefined) row.cited_by_count = safeParseInt(cbc);
@@ -126,7 +133,8 @@ function buildRowFromLegacy(
     row.is_retracted = get("isRetracted") === "true" ? 1 : 0;
   }
   row.last_fetched = get("lastFetched") ?? null;
-  row.source_id = get("sourceId") ?? null;
+  const sid = get("sourceId");
+  row.source_id = sid && isValidSourceId(sid) ? sid : null;
   const c2y = get("citedness2yr");
   if (c2y) row.citedness_2yr = safeParseFloat(c2y);
   const hidx = get("journalHIndex");
@@ -140,10 +148,11 @@ function buildRowFromLegacy(
   if (mm && isMatchMethod(mm)) row.match_method = mm;
   const mc = get("matchConfidence");
   if (mc && isMatchTier(mc)) row.match_confidence = mc;
-  row.confirmed_open_alex_id = get("confirmedOpenAlexId") ?? null;
+  const cid = get("confirmedOpenAlexId");
+  row.confirmed_open_alex_id = cid && isValidWorkId(cid) ? cid : null;
 
   const psid = get("pendingSuggestionId");
-  if (psid) {
+  if (psid && isValidWorkId(psid)) {
     row.pending_open_alex_id = psid;
     row.pending_title = get("pendingSuggestionTitle") ?? null;
     const pcbc = get("pendingSuggestionCount");

@@ -102,10 +102,12 @@ export function toDbBool(v: boolean | null | undefined): DbBool {
 }
 
 /**
- * Composite mirror key. Zotero item keys are 8-character random strings that
- * are unique *within* a library but NOT across libraries. Two items in
- * different libraries can collide; using the library + key tuple eliminates
- * the collision risk in the in-memory mirror and in the SQLite primary key.
+ * Composite mirror key. Zotero item keys are 8-character alphanumeric strings
+ * (documented invariant) so the `:` separator never collides with key
+ * content; library IDs are positive integers from `Zotero.Libraries.getAll()`.
+ * The trust here is Zotero's data model — NOT the SQLite schema, which would
+ * happily accept `libraryID=0` or `itemKey=""`. Synthetic callers that
+ * bypass Zotero's APIs are responsible for honoring those invariants.
  */
 export function mirrorKey(libraryID: number, itemKey: string): string {
   return `${libraryID}:${itemKey}`;

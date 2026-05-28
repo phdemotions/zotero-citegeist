@@ -35,10 +35,6 @@ function makeFakeDb() {
 
       if (/^CREATE\s+(TABLE|INDEX)/i.test(s)) return [];
       if (/^DROP\s+INDEX/i.test(s)) return [];
-      if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+schema_meta/i.test(s)) return [];
-      if (/^SELECT\s+COUNT\(\*\)\s+AS\s+n\s+FROM\s+item_cache/i.test(s)) {
-        return [{ n: 0 }];
-      }
 
       // INSERT OR REPLACE INTO item_cache (...) VALUES (?, ?, ...)
       if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+item_cache/i.test(s)) {
@@ -671,6 +667,41 @@ describe("verifyParseRoundTrip negative cases", () => {
     await migrateFromExtraV1();
     // Item is skipped; Extra unmodified.
     expect(items.get("D")!.extra).toBe(extra);
+  });
+});
+
+// ── Legacy migration: ID validation ────────────────────────────────────────
+
+describe("migration legacy ID validation", () => {
+  it("drops malformed openAlexId from legacy Extra rather than persisting it", async () => {
+    const extra = ["Citegeist.openAlexId: not-a-valid-id", "Citegeist.citedByCount: 5"].join("\n");
+    const item = mockItem("X", extra);
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+
+    await migrateFromExtraV1();
+
+    // Row is written but with open_alex_id null — the cited_by_count salvages.
+    const data = getCachedData(item);
+    expect(data).toBeNull(); // openAlexId null → getCachedData returns null
+    // Confirm the row WAS persisted (cited_by_count survived)
+    const metrics = getCachedMetrics(item);
+    expect(metrics.count).toBe(5);
+  });
+
+  it("drops malformed sourceId from legacy Extra", async () => {
+    const extra = [
+      "Citegeist.openAlexId: W42",
+      "Citegeist.citedByCount: 3",
+      "Citegeist.sourceId: ../../etc/passwd",
+    ].join("\n");
+    const item = mockItem("Y", extra);
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+
+    await migrateFromExtraV1();
+
+    const metrics = getCachedMetrics(item);
+    expect(metrics.sourceId).toBeNull();
+    expect(metrics.count).toBe(3);
   });
 });
 
