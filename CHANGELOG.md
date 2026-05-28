@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-05-27
+
+### Your library data is now untouched
+
+Citegeist no longer writes any citation metrics, FWCI values, journal rankings, or
+match metadata to the "Extra" field of your Zotero items. All cached data lives in
+a plugin-owned SQLite file (`<profile>/citegeist.sqlite`) that doesn't touch your
+bibliographic records.
+
+If you uninstall Citegeist, your library is left exactly as it was.
+
+### What this means for you
+
+- **First launch after update**: a one-time migration moves existing Citegeist
+  data out of Extra fields and into the new cache. Libraries with more than 500
+  Citegeist-tagged items see a progress window; smaller migrations are instant.
+  **A Zotero backup before the update is recommended.**
+- **Confirmed title matches are preserved across devices.** When you manually
+  confirm a title match, the OpenAlex ID is written back to Extra under
+  `Citegeist match ID: …` (no leading namespace). This line syncs via Zotero Sync
+  so you don't have to re-confirm on every device.
+- **Other metrics are local per device.** Citation counts, FWCI, percentile, and
+  journal data re-fetch automatically from OpenAlex on first view per machine.
+  Expect a brief loading period when you first open Zotero on a new device.
+  See README → "Multi-device behavior" for details.
+
+### Changed
+
+- Storage layer rewritten from Zotero Extra-field namespace (`Citegeist.*`) to
+  plugin-owned SQLite (`citegeist.sqlite`), following the documented Zotero 7+
+  pattern used by Better BibTeX.
+- `onStartup` now initializes the SQLite cache, runs the one-shot migration, and
+  garbage-collects orphan rows before registering the column and pane.
+- `clearCache(item)` retains its v1.3.x wide-clear semantics (work data + match
+  meta + pending suggestion all cleared in one call).
+- `confirmTitleMatch` now also writes a `Citegeist match ID: …` line back to
+  Extra so user-curated confirmations survive plugin downgrade and propagate
+  across devices via Zotero Sync.
+
+### Added
+
+- `_resetForTesting`, `initCache`, `closeCache`, `migrateFromExtraV1`, and
+  `garbageCollectOrphans` exports in `cache.ts`.
+- In-memory mirror (`Map<itemKey, ItemCacheRow>`) so column `dataProvider` reads
+  stay synchronous despite SQLite being async-only.
+- Migration progress window (`Zotero.ProgressWindow`) shown for libraries with
+  more than 500 legacy-formatted items.
+- Crash-safe migration ordering: per-item SQLite write → Extra strip → checkpoint,
+  with `INSERT OR REPLACE` and a `migration_progress` table making retries safe.
+- Round-trip parse invariant: items whose legacy Extra cannot be parsed and
+  reassembled byte-for-byte are skipped (not corrupted) with a debug log.
+- Migration wrapped in `Zotero.Sync.Runner.delaySync` to prevent server-side
+  merges from resurrecting stripped lines mid-loop.
+- TypeScript declarations for `Zotero.DBConnection`, `Zotero.DB`, and
+  `Zotero.Sync.Runner` in `typings/zotero.d.ts`.
+- Constants `SHOW_PROGRESS_UI_THRESHOLD` and `MIGRATION_PROGRESS_TICK`.
+
+### Removed
+
+- All public writes to per-item Extra fields under the `Citegeist.*` namespace.
+  The lone surviving Extra write is `Citegeist match ID: …` (no leading
+  namespace), used exclusively for cross-device confirmation continuity.
+
+### Out of scope (deferred to 1.5.x)
+
+- Group library migration. v1.4.0 migrates the user library only; group library
+  items lazily refetch from OpenAlex when viewed.
+- Export / import of the SQLite cache as JSON.
+
 ## [1.3.0] — 2026-04-19
 
 ### Changed
@@ -161,6 +230,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[1.4.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/phdemotions/zotero-citegeist/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.1.2...v1.2.0

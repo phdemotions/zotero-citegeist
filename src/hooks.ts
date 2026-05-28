@@ -7,6 +7,8 @@ import { registerCitationColumn, unregisterCitationColumn } from "./modules/cita
 import { registerCitationPane, unregisterCitationPane } from "./modules/citationPane";
 import { registerMenus, unregisterMenus } from "./modules/menu";
 import { clearSourceStatsCache } from "./modules/openalex";
+import { initCache, closeCache, migrateFromExtraV1, garbageCollectOrphans } from "./modules/cache";
+import { logError } from "./modules/utils";
 
 const FTL_LINK_ID = "citegeist-ftl-link";
 
@@ -24,6 +26,21 @@ export async function onStartup(data: PluginData): Promise<void> {
   pluginID = data.id;
   rootURI = data.rootURI;
   Zotero.debug(`[Citegeist] Starting v${data.version}`);
+
+  // Initialize the plugin-owned SQLite cache and warm the in-memory mirror
+  // BEFORE any reader (pane, column) registers. Column dataProvider is
+  // synchronous and assumes the mirror is populated.
+  try {
+    await initCache();
+    await migrateFromExtraV1();
+    // Best-effort GC of orphan rows from prior installs / library snapshots.
+    // Failure here must not block startup.
+    await garbageCollectOrphans().catch((e) => logError("orphan GC", e));
+  } catch (e) {
+    logError("cache init", e);
+    // Continue startup: read functions will return empty metrics; users still
+    // see the UI and can refetch. Better than refusing to load entirely.
+  }
 
   // Register preference pane so users can access settings
   Zotero.PreferencePanes.register({
@@ -50,12 +67,13 @@ export async function onStartup(data: PluginData): Promise<void> {
   Zotero.debug("[Citegeist] Startup complete");
 }
 
-export function onShutdown(_data: PluginData): void {
+export async function onShutdown(_data: PluginData): Promise<void> {
   Zotero.debug("[Citegeist] Shutting down");
 
   unregisterCitationColumn();
   unregisterCitationPane();
   clearSourceStatsCache();
+  await closeCache().catch((e) => logError("cache close", e));
 
   Zotero.debug("[Citegeist] Shutdown complete");
 }

@@ -15,15 +15,64 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// In-memory fake DB for the SQLite-backed cache the service writes to.
+function makeFakeDb() {
+  const table = new Map<string, Record<string, unknown>>();
+  return {
+    table,
+    queryAsync: vi.fn(async (sql: string, params?: unknown[]) => {
+      const s = sql.trim();
+      if (/^CREATE\s+(TABLE|INDEX)/i.test(s)) return [];
+      if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+item_cache/i.test(s)) {
+        const colsMatch = /\(([^)]+)\)\s+VALUES/i.exec(s);
+        if (!colsMatch) throw new Error("bad INSERT: " + s);
+        const cols = colsMatch[1].split(",").map((c) => c.trim());
+        const row: Record<string, unknown> = {};
+        cols.forEach((c, i) => (row[c] = params?.[i] ?? null));
+        table.set(row.item_key as string, row);
+        return [];
+      }
+      if (/^SELECT\s+\*\s+FROM\s+item_cache/i.test(s)) return Array.from(table.values());
+      if (/^SELECT\s+item_key\s+FROM\s+migration_progress/i.test(s)) return [];
+      if (/^DELETE\s+FROM\s+item_cache/i.test(s)) {
+        for (const k of (params ?? []) as string[]) table.delete(k);
+        return [];
+      }
+      if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+migration_progress/i.test(s)) return [];
+      if (/^DELETE\s+FROM\s+migration_progress/i.test(s)) return [];
+      throw new Error("unhandled SQL in fake DB: " + s);
+    }),
+    executeTransaction: vi.fn(async (fn: () => Promise<unknown>) => await fn()),
+    tableExists: vi.fn(async () => false),
+    closeDatabase: vi.fn(async () => {}),
+  };
+}
+
+let fakeDb: ReturnType<typeof makeFakeDb> = makeFakeDb();
+
 // Mock Zotero global
 const mockZotero = {
   Prefs: {
-    get: vi.fn().mockReturnValue(7),
+    get: vi.fn().mockImplementation((pref: string) => {
+      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
+      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
+      return 7;
+    }),
+    set: vi.fn(),
+    clearUserPref: vi.fn(),
   },
   HTTP: {
     request: vi.fn(),
   },
   debug: vi.fn(),
+  DBConnection: vi.fn(function (this: unknown) {
+    return fakeDb;
+  }),
+  Items: { getAll: vi.fn(async () => [] as _ZoteroTypes.Item[]) },
+  Libraries: { userLibraryID: 1 },
+  Sync: {
+    Runner: { delaySync: vi.fn(async (fn: () => Promise<unknown>) => await fn()) },
+  },
 };
 vi.stubGlobal("Zotero", mockZotero);
 
@@ -77,6 +126,7 @@ import {
   getWorkByArxivId,
   getWorkByISBN,
 } from "../src/modules/openalex";
+import { _resetForTesting, initCache, cacheWorkData } from "../src/modules/cache";
 
 const mockedGetWorkByDOI = vi.mocked(getWorkByDOI);
 const mockedGetWorkByPMID = vi.mocked(getWorkByPMID);
@@ -106,6 +156,8 @@ function mockItem(
 
   return {
     id: 1,
+    key: "TEST",
+    libraryID: 1,
     itemType,
     isRegularItem: vi.fn().mockReturnValue(isRegular),
     getField: vi.fn((field: string) => {
@@ -254,9 +306,16 @@ describe("extractIdentifier", () => {
 // ── fetchAndCacheItem ─────────────────────────────────────────────────────────
 
 describe("fetchAndCacheItem", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    mockZotero.Prefs.get.mockReturnValue(7);
+    mockZotero.Prefs.get.mockImplementation((pref: string) => {
+      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
+      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
+      return 7;
+    });
+    fakeDb = makeFakeDb();
+    _resetForTesting();
+    await initCache();
   });
 
   it("skips non-regular items (notes, attachments)", async () => {
@@ -276,11 +335,10 @@ describe("fetchAndCacheItem", () => {
   });
 
   it("skips fetch when cache is fresh", async () => {
-    const recentTimestamp = new Date().toISOString();
-    const item = mockItem({
-      doi: "10.1234/test",
-      extra: `Citegeist.lastFetched: ${recentTimestamp}\nCitegeist.openAlexId: W999`,
-    });
+    const item = mockItem({ doi: "10.1234/test" });
+    // Seed the cache via the public write path so this test matches the
+    // post-migration storage model (SQLite, not Extra-field).
+    await cacheWorkData(item, makeFakeWork());
     const result = await fetchAndCacheItem(item);
     expect(result.status).toBe("cached");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
@@ -307,7 +365,8 @@ describe("fetchAndCacheItem", () => {
     expect(result.status).toBe("ok");
     expect(mockedGetWorkByPMID).toHaveBeenCalledWith("12345678");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
-    expect(item.saveTx).toHaveBeenCalled();
+    // v1.4.0+: cache writes go to SQLite, not the item's Extra field —
+    // so saveTx is no longer triggered by a normal fetch.
   });
 
   it("fetches via arXiv when no DOI or PMID", async () => {
@@ -319,7 +378,8 @@ describe("fetchAndCacheItem", () => {
     expect(result.status).toBe("ok");
     expect(mockedGetWorkByArxivId).toHaveBeenCalledWith("2205.01833");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
-    expect(item.saveTx).toHaveBeenCalled();
+    // v1.4.0+: cache writes go to SQLite, not the item's Extra field —
+    // so saveTx is no longer triggered by a normal fetch.
   });
 
   it("fetches via arXiv from archiveID field", async () => {
@@ -369,7 +429,8 @@ describe("fetchAndCacheItem", () => {
     expect(result.status).toBe("ok");
     expect(mockedGetWorkByISBN).toHaveBeenCalledWith("9780262046309");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
-    expect(item.saveTx).toHaveBeenCalled();
+    // v1.4.0+: cache writes go to SQLite, not the item's Extra field —
+    // so saveTx is no longer triggered by a normal fetch.
   });
 
   it("returns no-match when ISBN lookup returns null (falls through to title search, which also fails)", async () => {

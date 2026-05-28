@@ -49,6 +49,12 @@ export const MAX_ABSTRACT_POSITION = 10_000;
 /** Max reconstructed abstract length (characters). */
 export const MAX_ABSTRACT_LENGTH = 100_000;
 
+// ── SQLite cache + migration ──
+/** Library size threshold above which migration shows progress UI. */
+export const SHOW_PROGRESS_UI_THRESHOLD = 500;
+/** Update progress UI every N items during migration. */
+export const MIGRATION_PROGRESS_TICK = 50;
+
 // ── Title-based metadata matching ──
 /** Score threshold for high-confidence title match (data shown with ~ prefix). */
 export const TITLE_MATCH_HIGH_THRESHOLD = 0.92;

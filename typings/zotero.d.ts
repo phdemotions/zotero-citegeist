@@ -154,6 +154,20 @@ declare namespace _ZoteroTypes {
   }
 }
 
+declare namespace _ZoteroTypes {
+  /**
+   * Plugin-owned SQLite connection.
+   * Created via `new Zotero.DBConnection('<name>')`.
+   * Auto-creates `<profile>/<name>.sqlite` on first use.
+   */
+  interface DBConnection {
+    queryAsync<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+    executeTransaction<T>(fn: () => Promise<T>): Promise<T>;
+    tableExists(name: string): Promise<boolean>;
+    closeDatabase(permanent?: boolean): Promise<void>;
+  }
+}
+
 declare const Zotero: {
   debug(msg: string, level?: number): void;
   log(msg: string): void;
@@ -175,6 +189,13 @@ declare const Zotero: {
   };
   Libraries: {
     userLibraryID: number;
+  };
+  DBConnection: new (name: string) => _ZoteroTypes.DBConnection;
+  DB: _ZoteroTypes.DBConnection;
+  Sync: {
+    Runner: {
+      delaySync<T>(fn: () => Promise<T>): Promise<T>;
+    };
   };
   Collections: {
     getByLibrary(libraryID: number): _ZoteroTypes.Collection[];
