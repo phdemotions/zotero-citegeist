@@ -22,23 +22,19 @@ import {
 } from "../../constants";
 import { safeParseFloat, safeParseInt } from "../utils";
 import { deleteMirrorEntries, mirrorSnapshot, requireDb, upsertRow } from "./db";
-// Note: `requireDb` is used in this sibling module because migration owns
-// the SQLite connection lifecycle alongside `db.ts`. The intra-`cache/`
-// cross-file dependency is intentional — both files are part of the same
-// module boundary, even though they're not re-exported through `index.ts`.
 import { setExtraConfirmedMatch } from "./write";
 import {
   emptyRow,
   isMatchMethod,
   isMatchTier,
-  isValidSourceId,
-  isValidWorkId,
   type ItemCacheRow,
   LEGACY_PREFIX,
   mirrorKey,
+  parseSourceId,
+  parseWorkId,
 } from "./types";
 
-// ── Legacy parser (private — kept until v1.5.x once migration is verified) ──
+// ── Legacy parser ──────────────────────────────────────────────────────────
 
 interface LegacyParse {
   citegeistFields: Map<string, string>;
@@ -75,13 +71,9 @@ function parseExtraLegacy(extra: string): LegacyParse {
 /**
  * Round-trip invariant: every line of the original Extra (including duplicates)
  * must appear in the parsed-then-reassembled output. Ordering is allowed to
- * change because the legacy writer always pushed `Citegeist.*` lines to the
- * end. What we defend against is *silent line loss or mutation* — a parser
- * bug that eats user content or transforms it.
- *
- * Implementation: sorted multiset comparison preserves duplicate counts so
- * a repeated user line (real-world case: BibTeX round-trips can leave
- * duplicate `PMID:` lines) is detected if the parser collapses it.
+ * change because the v1.3.x writer always pushed `Citegeist.*` lines to the
+ * end. The guard catches silent line loss or mutation — sorted-multiset
+ * comparison preserves duplicate counts so a collapsed duplicate trips the check.
  */
 function verifyParseRoundTrip(extra: string, parse: LegacyParse): boolean {
   const cgLines: string[] = [];
@@ -107,12 +99,9 @@ function buildRowFromLegacy(
   const row = emptyRow(libraryID, itemKey);
 
   // Validate IDs at the legacy trust boundary, symmetric with v1.4.0 runtime
-  // writes (cacheWorkData, writePendingSuggestion). A malformed legacy value
-  // — hand-edited Extra, corrupted v1.3.x write, or a future downgrade-and-
-  // -re-upgrade scenario — must not flow into SQLite where downstream readers
-  // would treat it as a real OpenAlex ID.
-  const oid = get("openAlexId");
-  if (oid && isValidWorkId(oid)) row.open_alex_id = oid;
+  // writes. Malformed values (hand-edited Extra, corrupted v1.3.x write) must
+  // not flow into SQLite where readers would treat them as real OpenAlex IDs.
+  row.open_alex_id = parseWorkId(get("openAlexId"));
 
   const cbc = get("citedByCount");
   if (cbc !== undefined) row.cited_by_count = safeParseInt(cbc);
@@ -133,8 +122,7 @@ function buildRowFromLegacy(
     row.is_retracted = get("isRetracted") === "true" ? 1 : 0;
   }
   row.last_fetched = get("lastFetched") ?? null;
-  const sid = get("sourceId");
-  row.source_id = sid && isValidSourceId(sid) ? sid : null;
+  row.source_id = parseSourceId(get("sourceId"));
   const c2y = get("citedness2yr");
   if (c2y) row.citedness_2yr = safeParseFloat(c2y);
   const hidx = get("journalHIndex");
@@ -148,11 +136,10 @@ function buildRowFromLegacy(
   if (mm && isMatchMethod(mm)) row.match_method = mm;
   const mc = get("matchConfidence");
   if (mc && isMatchTier(mc)) row.match_confidence = mc;
-  const cid = get("confirmedOpenAlexId");
-  row.confirmed_open_alex_id = cid && isValidWorkId(cid) ? cid : null;
+  row.confirmed_open_alex_id = parseWorkId(get("confirmedOpenAlexId"));
 
-  const psid = get("pendingSuggestionId");
-  if (psid && isValidWorkId(psid)) {
+  const psid = parseWorkId(get("pendingSuggestionId"));
+  if (psid) {
     row.pending_open_alex_id = psid;
     row.pending_title = get("pendingSuggestionTitle") ?? null;
     const pcbc = get("pendingSuggestionCount");
@@ -495,15 +482,11 @@ async function checkpointItem(
 
 /**
  * Remove SQLite rows whose `item_key` no longer exists in *any* library
- * the user has access to (personal + group libraries).
+ * the user has access to (personal + group libraries). Rate-limited via
+ * `ORPHAN_GC_MIN_INTERVAL_MS`; pass `{ force: true }` to bypass the gate.
  *
- * Gated by `ORPHAN_GC_MIN_INTERVAL_MS` so we don't pay the per-library
- * scan cost on every launch. Pass `{ force: true }` to override the gate
- * (e.g., from a future "Citegeist → Rebuild cache" menu).
- *
- * Note: queries every library because the runtime write path (`cacheWorkData`)
- * is library-agnostic — group-library items get SQLite rows too, and we
- * must not purge them as "orphans."
+ * Queries every library because the runtime write path is library-agnostic
+ * — group-library items get SQLite rows too, and we must not purge them.
  */
 export async function garbageCollectOrphans(options: { force?: boolean } = {}): Promise<void> {
   const lastRunRaw = Zotero.Prefs.get("extensions.zotero.citegeist.lastOrphanGcAt");

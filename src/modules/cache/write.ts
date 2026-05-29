@@ -14,14 +14,26 @@ import {
   type CacheWorkInput,
   CONFIRMED_MATCH_EXTRA_PREFIX,
   emptyRow,
-  isValidSourceId,
-  isValidWorkId,
   type ItemCacheRow,
   type DbBool,
   type MatchTier,
+  parseSourceId,
+  parseWorkId,
   toDbBool,
 } from "./types";
 import { deleteRow, getRow, upsertRow } from "./db";
+
+/** Pending-suggestion fields cleared together on confirm/dismiss. */
+const PENDING_CLEARED = {
+  pending_open_alex_id: null,
+  pending_title: null,
+  pending_cited_by_count: null,
+  pending_fwci: null,
+  pending_year: null,
+  pending_tier: null,
+  pending_confidence: null,
+  pending_doi: null,
+} as const satisfies Partial<ItemCacheRow>;
 
 /**
  * Pure helper deriving the four citation-derived metric fields from an
@@ -54,30 +66,21 @@ export async function cacheWorkData(
   const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
   const metrics = deriveCitationMetrics(work);
 
-  // Validate the OpenAlex work ID before persisting. A malformed value —
-  // typically a malicious / MITM'd response with newlines embedded — would
-  // later flow into Zotero's Extra field via writeConfirmedMatchToExtra and
-  // could spoof CSL metadata read by other plugins.
-  const rawWorkId = work.id.replace("https://openalex.org/", "");
-  if (!isValidWorkId(rawWorkId)) {
+  // Validate IDs at the trust boundary. A malformed value would otherwise
+  // flow into Zotero's Extra field via writeConfirmedMatchToExtra and could
+  // spoof CSL metadata read by other plugins.
+  const openAlexId = parseWorkId(work.id);
+  if (!openAlexId) {
     Zotero.debug(
-      `[Citegeist] cacheWorkData rejecting malformed work ID: ${JSON.stringify(rawWorkId)}`,
+      `[Citegeist] cacheWorkData rejecting malformed work ID: ${JSON.stringify(work.id)}`,
     );
     return;
   }
-
-  const rawSourceId =
-    work.primary_location?.source?.id?.replace("https://openalex.org/", "") ?? null;
-  const sourceId = rawSourceId && isValidSourceId(rawSourceId) ? rawSourceId : null;
-  if (rawSourceId && !sourceId) {
-    Zotero.debug(
-      `[Citegeist] cacheWorkData dropping malformed source ID: ${JSON.stringify(rawSourceId)}`,
-    );
-  }
+  const sourceId = parseSourceId(work.primary_location?.source?.id);
 
   const row: ItemCacheRow = {
     ...existing,
-    open_alex_id: rawWorkId,
+    open_alex_id: openAlexId,
     cited_by_count: work.cited_by_count,
     fwci: metrics.fwci,
     percentile: metrics.percentile,
@@ -102,8 +105,8 @@ export async function cacheWorkData(
  * Clear all Citegeist-managed data for an item.
  *
  * Wide semantics (preserved from v1.3.0): removes work data, match meta,
- * AND pending suggestion. `citationPane.ts` depends on this — comment at
- * line 447 reads "clearCache already wipes pendingSuggestion fields."
+ * AND pending suggestion in one call. `citationPane.ts` depends on this
+ * coupling — don't narrow the semantics without auditing pane refresh paths.
  */
 export async function clearCache(item: CacheItemKey): Promise<void> {
   await deleteRow(item.libraryID, item.key);
@@ -143,11 +146,9 @@ export async function confirmTitleMatch(item: _ZoteroTypes.Item, tier: MatchTier
     return;
   }
 
-  // Atomically promote pending → confirmed AND clear the pending block.
-  // The two pieces of state must change in a single transaction so that no
-  // concurrent reader can observe a row where pending_* is still populated
-  // while confirmed_open_alex_id is already set (which would expose a stale
-  // suggestion to the user in the same render tick).
+  // Atomically promote pending → confirmed AND clear the pending block in
+  // one upsert, so no concurrent reader can observe a row where both states
+  // are populated and surface a stale suggestion in the same render tick.
   const row: ItemCacheRow = {
     ...existing,
     no_match: null,
@@ -155,14 +156,7 @@ export async function confirmTitleMatch(item: _ZoteroTypes.Item, tier: MatchTier
     match_method: "title-match",
     match_confidence: tier,
     confirmed_open_alex_id: pendingId,
-    pending_open_alex_id: null,
-    pending_title: null,
-    pending_cited_by_count: null,
-    pending_fwci: null,
-    pending_year: null,
-    pending_tier: null,
-    pending_confidence: null,
-    pending_doi: null,
+    ...PENDING_CLEARED,
   };
 
   await upsertRow(row);
@@ -175,17 +169,17 @@ export async function writePendingSuggestion(
   tier: MatchTier,
   confidence: number,
 ): Promise<void> {
-  const rawId = work.id.replace("https://openalex.org/", "");
-  if (!isValidWorkId(rawId)) {
+  const pendingId = parseWorkId(work.id);
+  if (!pendingId) {
     Zotero.debug(
-      `[Citegeist] writePendingSuggestion rejecting malformed work ID: ${JSON.stringify(rawId)}`,
+      `[Citegeist] writePendingSuggestion rejecting malformed work ID: ${JSON.stringify(work.id)}`,
     );
     return;
   }
   const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
   const row: ItemCacheRow = {
     ...existing,
-    pending_open_alex_id: rawId,
+    pending_open_alex_id: pendingId,
     pending_title: sanitizeForDisplay(work.display_name),
     pending_cited_by_count: work.cited_by_count,
     pending_fwci: work.fwci,
@@ -200,18 +194,7 @@ export async function writePendingSuggestion(
 export async function clearPendingSuggestion(item: CacheItemKey): Promise<void> {
   const existing = getRow(item.libraryID, item.key);
   if (!existing) return;
-  const row: ItemCacheRow = {
-    ...existing,
-    pending_open_alex_id: null,
-    pending_title: null,
-    pending_cited_by_count: null,
-    pending_fwci: null,
-    pending_year: null,
-    pending_tier: null,
-    pending_confidence: null,
-    pending_doi: null,
-  };
-  await upsertRow(row);
+  await upsertRow({ ...existing, ...PENDING_CLEARED });
 }
 
 // ── Extra-field downgrade mirror ───────────────────────────────────────────
@@ -238,15 +221,8 @@ async function writeConfirmedMatchToExtra(
   item: _ZoteroTypes.Item,
   openAlexId: string,
 ): Promise<void> {
-  // Defensive double-check: a row mutated outside our control could in principle
-  // carry a malformed ID that bypassed the cacheWorkData validation. Refuse to
-  // emit anything that doesn't match the OpenAlex shape.
-  if (!isValidWorkId(openAlexId)) {
-    Zotero.debug(
-      `[Citegeist] writeConfirmedMatchToExtra refusing malformed ID: ${JSON.stringify(openAlexId)}`,
-    );
-    return;
-  }
+  // openAlexId is already validated by cacheWorkData / writePendingSuggestion /
+  // buildRowFromLegacy at the row's write boundary — no re-check here.
   const extra = item.getField("extra") ?? "";
   const newLines = setExtraConfirmedMatch(extra.split("\n"), openAlexId);
   const cleaned = newLines.join("\n").replace(/\n+$/, "");

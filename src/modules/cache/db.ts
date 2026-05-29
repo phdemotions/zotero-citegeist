@@ -18,7 +18,7 @@
 
 import { COLUMNS, type ItemCacheRow, mirrorKey, rowToParams } from "./types";
 
-/** Pre-computed UPSERT statement. COLUMNS is `as const` so this never changes. */
+/** Pre-computed UPSERT statement. `COLUMNS` is frozen, so this stays valid. */
 const UPSERT_SQL = `INSERT OR REPLACE INTO item_cache (${COLUMNS.join(", ")}) VALUES (${COLUMNS.map(
   () => "?",
 ).join(", ")})`;
@@ -96,10 +96,6 @@ async function doInit(): Promise<void> {
   db = new Zotero.DBConnection("citegeist");
   await db.queryAsync(SCHEMA);
   await db.queryAsync(CREATE_PROGRESS_TABLE);
-  // Drop any index left behind by an earlier v1.4.0 alpha. Staleness queries
-  // happen against the in-memory mirror, never against SQLite, so the index
-  // is pure write-amplification overhead.
-  await db.queryAsync(`DROP INDEX IF EXISTS idx_item_cache_last_fetched`);
 
   const rows = await db.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
   mirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
@@ -163,13 +159,17 @@ export function deleteMirrorEntries(keys: Iterable<string>): void {
   for (const k of keys) mirror.delete(k);
 }
 
+const noop = (): void => {};
+
 /**
- * Run `fn` serialized against any prior write to the same `(libraryID,
- * itemKey)` pair. Different keys run in parallel; same keys queue.
+ * Serialize `fn` against any prior write to the same `(libraryID, itemKey)`.
+ * Different keys run in parallel; same keys queue. Prevents mirror/SQLite
+ * divergence when, e.g., a column refetch races a manual refresh.
  *
- * This is the contract that prevents mirror/SQLite divergence under
- * concurrent writes to the same item (e.g., column refetch racing with
- * a manual user refresh).
+ * Tail-tracking note: each call appends a fresh tail and, in `finally`,
+ * drops its Map entry if no later writer chained on it. Without that the
+ * Map would grow monotonically with the count of distinct keys ever
+ * written, leaking memory under sustained workloads.
  */
 async function withKeyLock<T>(
   libraryID: number,
@@ -179,55 +179,29 @@ async function withKeyLock<T>(
   const key = mirrorKey(libraryID, itemKey);
   const prev = writeTails.get(key) ?? Promise.resolve();
 
-  // Build the new tail once and capture its identity so we can detect when
-  // we're still the last writer in `finally` and drop the Map entry. Without
-  // this the writeTails Map grows monotonically with the count of distinct
-  // keys ever written, leaking memory under sustained refetch workloads.
-  const ticket = deferred<void>();
-  const newTail = prev.then(() => ticket.promise);
+  let releaseTicket: () => void = noop;
+  const ticket = new Promise<void>((r) => {
+    releaseTicket = r;
+  });
+  const newTail = prev.then(() => ticket);
   writeTails.set(key, newTail);
 
   await prev;
 
   const work = fn();
-  // Track this write so closeCache can await it. The tracker's catch is
-  // intentional: errors propagate to the caller via the outer `await work`,
-  // but the tracker exists only for drain accounting and must not produce
-  // an unhandled-rejection warning when the original work rejects.
-  const tracker = trackForDrain(work);
+  // Track for closeCache drain. Errors propagate to caller via outer await;
+  // the tracker swallows rejections only to avoid an unhandled-rejection
+  // warning on the bookkeeping promise.
+  const tracker: Promise<void> = work.then(noop, noop);
+  pendingWrites.add(tracker);
 
   try {
     return await work;
   } finally {
-    ticket.resolve();
+    releaseTicket();
     pendingWrites.delete(tracker);
-    // If no new writer chained on us, drop the Map entry so it can be GC'd.
-    if (writeTails.get(key) === newTail) {
-      writeTails.delete(key);
-    }
+    if (writeTails.get(key) === newTail) writeTails.delete(key);
   }
-}
-
-interface Deferred<T> {
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-}
-
-/** Minimal Promise wrapper that exposes its resolver. */
-function deferred<T>(): Deferred<T> {
-  let resolve: (value: T) => void = () => {};
-  const promise = new Promise<T>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-}
-
-/** Adds a swallowed-rejection mirror of `work` to `pendingWrites` and returns it. */
-function trackForDrain(work: Promise<unknown>): Promise<void> {
-  const noop = (): void => {};
-  const tracker: Promise<void> = work.then(noop, noop);
-  pendingWrites.add(tracker);
-  return tracker;
 }
 
 export async function upsertRow(row: ItemCacheRow): Promise<void> {

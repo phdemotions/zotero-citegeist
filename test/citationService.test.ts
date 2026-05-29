@@ -14,43 +14,9 @@
  * - arXiv from Extra field, archiveID field, and URL field
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { makeFakeDb } from "./_helpers/fakeDb";
 
-// In-memory fake DB for the SQLite-backed cache the service writes to.
-function makeFakeDb() {
-  const table = new Map<string, Record<string, unknown>>();
-  return {
-    table,
-    queryAsync: vi.fn(async (sql: string, params?: unknown[]) => {
-      const s = sql.trim();
-      if (/^CREATE\s+(TABLE|INDEX)/i.test(s)) return [];
-      if (/^DROP\s+INDEX/i.test(s)) return [];
-      if (/^SELECT\s+library_id,\s+item_key\s+FROM\s+migration_progress/i.test(s)) return [];
-      if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+item_cache/i.test(s)) {
-        const colsMatch = /\(([^)]+)\)\s+VALUES/i.exec(s);
-        if (!colsMatch) throw new Error("bad INSERT: " + s);
-        const cols = colsMatch[1].split(",").map((c) => c.trim());
-        const row: Record<string, unknown> = {};
-        cols.forEach((c, i) => (row[c] = params?.[i] ?? null));
-        table.set(row.item_key as string, row);
-        return [];
-      }
-      if (/^SELECT\s+\*\s+FROM\s+item_cache/i.test(s)) return Array.from(table.values());
-      if (/^SELECT\s+item_key\s+FROM\s+migration_progress/i.test(s)) return [];
-      if (/^DELETE\s+FROM\s+item_cache/i.test(s)) {
-        for (const k of (params ?? []) as string[]) table.delete(k);
-        return [];
-      }
-      if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+migration_progress/i.test(s)) return [];
-      if (/^DELETE\s+FROM\s+migration_progress/i.test(s)) return [];
-      throw new Error("unhandled SQL in fake DB: " + s);
-    }),
-    executeTransaction: vi.fn(async (fn: () => Promise<unknown>) => await fn()),
-    tableExists: vi.fn(async () => false),
-    closeDatabase: vi.fn(async () => {}),
-  };
-}
-
-let fakeDb: ReturnType<typeof makeFakeDb> = makeFakeDb();
+let fakeDb = makeFakeDb();
 
 // Mock Zotero global
 const mockZotero = {

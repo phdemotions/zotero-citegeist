@@ -6,119 +6,7 @@
  * public read/write API end-to-end.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-
-// ── Fake DB ────────────────────────────────────────────────────────────────
-//
-// Records every queryAsync call. For INSERT/REPLACE and SELECT * FROM
-// item_cache we maintain a Map<string, Record<string, unknown>> keyed on
-// item_key so SELECT returns rows in insertion order. Everything else is
-// a no-op (CREATE TABLE, CREATE INDEX, etc).
-
-interface FakeRow {
-  [col: string]: unknown;
-}
-
-function compositeKey(libraryID: number | string, itemKey: string): string {
-  return `${libraryID}:${itemKey}`;
-}
-
-function makeFakeDb() {
-  // Keys are composite `${library_id}:${item_key}` strings.
-  const table = new Map<string, FakeRow>();
-  const progress = new Map<string, string>();
-
-  return {
-    table,
-    progress,
-    queryAsync: vi.fn(async (sql: string, params?: unknown[]) => {
-      const s = sql.trim();
-
-      if (/^CREATE\s+(TABLE|INDEX)/i.test(s)) return [];
-      if (/^DROP\s+INDEX/i.test(s)) return [];
-
-      // INSERT OR REPLACE INTO item_cache (...) VALUES (?, ?, ...)
-      if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+item_cache/i.test(s)) {
-        const colsMatch = /\(([^)]+)\)\s+VALUES/i.exec(s);
-        if (!colsMatch) throw new Error("bad INSERT statement: " + s);
-        const cols = colsMatch[1].split(",").map((c) => c.trim());
-        const row: FakeRow = {};
-        cols.forEach((c, i) => {
-          row[c] = params?.[i] ?? null;
-        });
-        const key = compositeKey(row.library_id as number, row.item_key as string);
-        table.set(key, row);
-        return [];
-      }
-
-      // INSERT OR REPLACE INTO migration_progress (library_id, item_key, migrated_at) VALUES (?, ?, ?)
-      if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+migration_progress/i.test(s)) {
-        const [libId, key, at] = params as [number, string, string];
-        progress.set(compositeKey(libId, key), at);
-        return [];
-      }
-
-      if (/^SELECT\s+\*\s+FROM\s+item_cache/i.test(s)) {
-        return Array.from(table.values());
-      }
-
-      // SELECT library_id, item_key FROM migration_progress — batch load
-      if (/^SELECT\s+library_id,\s+item_key\s+FROM\s+migration_progress/i.test(s)) {
-        const rows: Array<{ library_id: number; item_key: string }> = [];
-        for (const composite of progress.keys()) {
-          const [lib, key] = composite.split(":");
-          rows.push({ library_id: Number(lib), item_key: key });
-        }
-        return rows;
-      }
-
-      // SELECT item_key FROM migration_progress WHERE library_id = ? AND item_key = ?
-      if (/^SELECT\s+item_key\s+FROM\s+migration_progress/i.test(s)) {
-        const [libId, key] = params as [number, string];
-        return progress.has(compositeKey(libId, key)) ? [{ item_key: key }] : [];
-      }
-
-      // DELETE FROM item_cache WHERE library_id = ? AND item_key = ?
-      if (
-        /^DELETE\s+FROM\s+item_cache\s+WHERE\s+library_id\s+=\s+\?\s+AND\s+item_key\s+=\s+\?/i.test(
-          s,
-        )
-      ) {
-        const [libId, key] = params as [number, string];
-        table.delete(compositeKey(libId, key));
-        return [];
-      }
-
-      // DELETE FROM item_cache WHERE (library_id, item_key) IN ((?, ?), (?, ?), …)
-      if (/^DELETE\s+FROM\s+item_cache\s+WHERE\s+\(library_id,\s+item_key\)\s+IN/i.test(s)) {
-        const p = (params ?? []) as Array<number | string>;
-        for (let i = 0; i < p.length; i += 2) {
-          table.delete(compositeKey(p[i] as number, p[i + 1] as string));
-        }
-        return [];
-      }
-
-      // DELETE FROM migration_progress WHERE (library_id, item_key) IN (…)
-      if (
-        /^DELETE\s+FROM\s+migration_progress\s+WHERE\s+\(library_id,\s+item_key\)\s+IN/i.test(s)
-      ) {
-        const p = (params ?? []) as Array<number | string>;
-        for (let i = 0; i < p.length; i += 2) {
-          progress.delete(compositeKey(p[i] as number, p[i + 1] as string));
-        }
-        return [];
-      }
-
-      // DELETE FROM migration_progress (no WHERE — post-migration cleanup)
-      if (/^DELETE\s+FROM\s+migration_progress\s*$/i.test(s)) {
-        progress.clear();
-        return [];
-      }
-
-      throw new Error("unhandled SQL in fake DB: " + s);
-    }),
-    closeDatabase: vi.fn(async () => {}),
-  };
-}
+import { makeFakeDb } from "./_helpers/fakeDb";
 
 // ── Test fixtures ──────────────────────────────────────────────────────────
 
@@ -917,7 +805,7 @@ describe("migrateFromExtraV1", () => {
   });
 
   it("respects the migrationV1Complete pref when SQLite already has data", async () => {
-    // Pre-seed the cache so the REL-002 force-rerun guard finds SQLite
+    // Pre-seed the cache so the REL-002 force-rerun guard finds the mirror
     // non-empty and trusts the completion pref.
     const item = mockItem("A", legacyExtra());
     await cacheWorkData(item, {
@@ -926,14 +814,6 @@ describe("migrateFromExtraV1", () => {
       fwci: null,
       is_retracted: false,
     } as never);
-    // Override the COUNT(*) handler to reflect the seeded row.
-    const originalQuery = fakeDb.queryAsync;
-    fakeDb.queryAsync = vi.fn(async (sql: string, params?: unknown[]) => {
-      if (/^SELECT\s+COUNT\(\*\)\s+AS\s+n\s+FROM\s+item_cache/i.test(sql.trim())) {
-        return [{ n: fakeDb.table.size }];
-      }
-      return originalQuery(sql, params);
-    }) as typeof fakeDb.queryAsync;
 
     mockZotero.Prefs.get.mockImplementation((pref: string) => {
       if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
@@ -947,10 +827,10 @@ describe("migrateFromExtraV1", () => {
     expect(items.get("A")!.extra).toContain("Citegeist.");
   });
 
-  it("force-reruns when pref is set but SQLite is empty AND legacy data exists (REL-002)", async () => {
-    // Pref says complete, but SQLite is empty (fake DB COUNT(*) defaults to 0)
-    // and the user's library still has Citegeist data in Extra.
-    // shouldForceRerun should clear the pref and re-run.
+  it("force-reruns when pref is set but mirror is empty AND legacy data exists (REL-002)", async () => {
+    // Pref says complete, but the mirror is empty (no prior cacheWorkData
+    // calls this test) and the user's library still has Citegeist data in
+    // Extra. shouldForceRerun should clear the pref and re-run.
     mockZotero.Prefs.get.mockImplementation((pref: string) => {
       if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
       return null;

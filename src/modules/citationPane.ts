@@ -47,6 +47,52 @@ function citationSummary(count: number, item: _ZoteroTypes.Item): string {
   return `${count.toLocaleString()} citations`;
 }
 
+/**
+ * Canonical empty-state copy. Centralizes the body text + section summary
+ * for every "nothing to render" path so the two text shards never drift
+ * between `onRender`, `onAsyncRender`, and the refresh button.
+ */
+const EMPTY_STATES = {
+  noIdentifier: {
+    html: "No recognized identifier found. Add a DOI, PMID, arXiv ID, or ISBN to enable citation data.",
+    summary: "No identifier",
+    cls: "cg-no-identifier",
+  },
+  loading: { html: "Fetching citation data…", summary: "Loading…", cls: "cg-loading" },
+  refreshing: { html: "Refreshing…", summary: "Refreshing…", cls: "cg-loading" },
+  unavailable: {
+    html: "OpenAlex is currently unavailable. Try again in a few minutes.",
+    summary: "Unavailable",
+    cls: "cg-no-identifier",
+  },
+  notFoundTitle: {
+    html: "Not found on OpenAlex. We also searched by title and found no confident match.",
+    summary: "Not found",
+    cls: "cg-no-identifier",
+  },
+  notFound: {
+    html: "This work was not found on OpenAlex.",
+    summary: "Not found",
+    cls: "cg-no-identifier",
+  },
+  dismissed: {
+    html: "Match dismissed. Add a DOI to get citation data, or we’ll search again in 30 days.",
+    summary: "Not found",
+    cls: "cg-no-identifier",
+  },
+  confirmLoading: { html: "Loading…", summary: "Loading…", cls: "cg-loading" },
+} as const;
+
+function renderEmptyState(
+  container: HTMLElement,
+  setSummary: (s: string) => void,
+  key: keyof typeof EMPTY_STATES,
+): void {
+  const s = EMPTY_STATES[key];
+  container.innerHTML = `<div class="${s.cls}">${s.html}</div>`;
+  setSummary(s.summary);
+}
+
 export function registerCitationPane(pluginID: string): void {
   Zotero.ItemPaneManager.registerSection({
     paneID: PANE_ID,
@@ -427,13 +473,11 @@ export function registerCitationPane(pluginID: string): void {
       }
 
       if (!extractIdentifier(item)) {
-        container.innerHTML = `<div class="cg-no-identifier">No recognized identifier found. Add a DOI, PMID, arXiv ID, or ISBN to enable citation data.</div>`;
-        setSectionSummary("No identifier");
+        renderEmptyState(container, setSectionSummary, "noIdentifier");
         return;
       }
 
-      container.innerHTML = `<div class="cg-loading">Fetching citation data…</div>`;
-      setSectionSummary("Loading…");
+      renderEmptyState(container, setSectionSummary, "loading");
     },
     onAsyncRender: async ({ body, item, setSectionSummary }) => {
       const container = body.querySelector("#citegeist-content") as HTMLElement;
@@ -462,16 +506,13 @@ export function registerCitationPane(pluginID: string): void {
           invalidateColumnCache(item.id);
         }
       } else if (result.status === "error" && !alreadyCached) {
-        if (result.error === "network") {
-          container.innerHTML = `<div class="cg-no-identifier">OpenAlex is currently unavailable. Try again in a few minutes.</div>`;
-          setSectionSummary("Unavailable");
-        } else if (result.error === "no-match") {
-          container.innerHTML = `<div class="cg-no-identifier">Not found on OpenAlex. We also searched by title and found no confident match.</div>`;
-          setSectionSummary("Not found");
-        } else {
-          container.innerHTML = `<div class="cg-no-identifier">This work was not found on OpenAlex.</div>`;
-          setSectionSummary("Not found");
-        }
+        const key =
+          result.error === "network"
+            ? "unavailable"
+            : result.error === "no-match"
+              ? "notFoundTitle"
+              : "notFound";
+        renderEmptyState(container, setSectionSummary, key);
       }
     },
     sectionButtons: [
@@ -484,10 +525,8 @@ export function registerCitationPane(pluginID: string): void {
           refreshing = true;
           try {
             const container = body.querySelector("#citegeist-content") as HTMLElement;
-            if (container) {
-              container.innerHTML = `<div class="cg-loading">Refreshing\u2026</div>`;
-            }
-            await clearCache(item); // clearCache already wipes pendingSuggestion fields
+            if (container) renderEmptyState(container, setSectionSummary, "refreshing");
+            await clearCache(item); // wide-clear: also nukes pending suggestion
             const result = await fetchAndCacheItem(item);
             const cached = getCachedData(item);
             if (container) {
@@ -506,12 +545,14 @@ export function registerCitationPane(pluginID: string): void {
                   renderSuggestion(container, suggestion, item, setSectionSummary);
                   invalidateColumnCache(item.id);
                 }
-              } else if (result.status === "error" && result.error === "network") {
-                container.innerHTML = `<div class="cg-no-identifier">OpenAlex is currently unavailable. Try again in a few minutes.</div>`;
-                setSectionSummary("Unavailable");
               } else {
-                container.innerHTML = `<div class="cg-no-identifier">This work was not found on OpenAlex.</div>`;
-                setSectionSummary("Not found");
+                renderEmptyState(
+                  container,
+                  setSectionSummary,
+                  result.status === "error" && result.error === "network"
+                    ? "unavailable"
+                    : "notFound",
+                );
               }
             }
           } finally {
@@ -530,12 +571,7 @@ export function registerCitationPane(pluginID: string): void {
  * If the researcher accepts, the DOI is written to the item field, graduating it out of
  * the title-search pipeline permanently.
  */
-function renderDoiPrompt(
-  container: HTMLElement,
-  item: _ZoteroTypes.Item,
-  doi: string,
-  cached: CachedData,
-): void {
+function renderDoiPrompt(container: HTMLElement, item: _ZoteroTypes.Item, doi: string): void {
   const doc = container.ownerDocument;
 
   const prompt = doc.createElement("div");
@@ -576,8 +612,6 @@ function renderDoiPrompt(
   promptActions.appendChild(noBtn);
   prompt.appendChild(promptActions);
   container.appendChild(prompt);
-
-  void cached; // referenced to keep the parameter for future use
 }
 
 /**
@@ -611,7 +645,7 @@ function renderSuggestion(
       await confirmTitleMatch(item, suggestion.tier);
 
       // Fetch the full work using the now-confirmed ID
-      container.innerHTML = `<div class="cg-loading">Loading\u2026</div>`;
+      renderEmptyState(container, setSectionSummary, "confirmLoading");
       const result = await fetchAndCacheItem(item);
       const fresh = getCachedData(item);
       if (fresh) {
@@ -623,7 +657,7 @@ function renderSuggestion(
       // DOI population bonus: if matched work has a DOI and item doesn't, offer to add it
       const itemDoi = (item.getField("DOI") as string) || "";
       if (suggestion.doi && !itemDoi.trim() && fresh) {
-        renderDoiPrompt(container, item, suggestion.doi, fresh);
+        renderDoiPrompt(container, item, suggestion.doi);
       }
     } catch (e) {
       logError("renderSuggestion confirm", e);
@@ -634,8 +668,7 @@ function renderSuggestion(
     try {
       await clearPendingSuggestion(item);
       await writeNoMatch(item);
-      container.innerHTML = `<div class="cg-no-identifier">Match dismissed. Add a DOI to get citation data, or we\u2019ll search again in 30 days.</div>`;
-      setSectionSummary("Not found");
+      renderEmptyState(container, setSectionSummary, "dismissed");
       invalidateColumnCache(item.id);
     } catch (e) {
       logError("renderSuggestion dismiss", e);
@@ -746,33 +779,31 @@ function renderPane(
     const grid = doc.createElement("div");
     grid.className = "cg-metric-grid";
 
-    // Citations tile
+    // All values are escapeHTML'd or static; safe to set via innerHTML.
+    const makeTile = (label: string, value: string, extraHTML = ""): HTMLElement => {
+      const tile = doc.createElement("div");
+      tile.className = "cg-metric-tile";
+      tile.innerHTML =
+        `<span class="cg-metric-label">${label}</span>` +
+        `<span class="cg-metric-value" title="${value}">${value}</span>` +
+        extraHTML;
+      return tile;
+    };
+
     const citCount = escapeHTML(data.citedByCount.toLocaleString());
-    const citTile = doc.createElement("div");
-    citTile.className = "cg-metric-tile";
-    citTile.innerHTML = `<span class="cg-metric-label">CITATIONS</span><span class="cg-metric-value" title="${citCount}">${citCount}</span>`;
-    grid.appendChild(citTile);
+    grid.appendChild(makeTile("CITATIONS", citCount));
 
-    // FWCI tile
     const fwciVal = data.fwci !== null ? escapeHTML(data.fwci.toFixed(2)) : "—";
-    const fwciTile = doc.createElement("div");
-    fwciTile.className = "cg-metric-tile";
-    fwciTile.innerHTML = `<span class="cg-metric-label">FWCI</span><span class="cg-metric-value" title="${fwciVal}">${fwciVal}</span>`;
-    grid.appendChild(fwciTile);
+    grid.appendChild(makeTile("FWCI", fwciVal));
 
-    // Percentile tile
     const pctVal =
       data.percentile !== null ? escapeHTML(toOrdinal(Math.round(data.percentile))) : "—";
-    let pctHTML = `<span class="cg-metric-label">PERCENTILE</span><span class="cg-metric-value" title="${pctVal}">${pctVal}</span>`;
-    if (data.isTop1Percent) {
-      pctHTML += `<span class="cg-metric-badge"><span class="cg-badge cg-badge-top1">Top 1%</span></span>`;
-    } else if (data.isTop10Percent) {
-      pctHTML += `<span class="cg-metric-badge"><span class="cg-badge cg-badge-top10">Top 10%</span></span>`;
-    }
-    const pctTile = doc.createElement("div");
-    pctTile.className = "cg-metric-tile";
-    pctTile.innerHTML = pctHTML;
-    grid.appendChild(pctTile);
+    const pctBadge = data.isTop1Percent
+      ? `<span class="cg-metric-badge"><span class="cg-badge cg-badge-top1">Top 1%</span></span>`
+      : data.isTop10Percent
+        ? `<span class="cg-metric-badge"><span class="cg-badge cg-badge-top10">Top 10%</span></span>`
+        : "";
+    grid.appendChild(makeTile("PERCENTILE", pctVal, pctBadge));
 
     container.appendChild(grid);
   } else {

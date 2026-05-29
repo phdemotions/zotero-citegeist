@@ -7,12 +7,11 @@
  * Two "missing data" conventions live side by side, deliberately:
  *   • `getCachedMetrics` returns a frozen `EMPTY_METRICS` sentinel when no
  *     row exists. Columns invoke this thousands of times per render tick;
- *     avoiding the per-call allocation matters at scale.
+ *     the shared frozen sentinel avoids per-call allocation.
  *   • `getCachedData`, `getCachedCitationCount`, `getCachedOpenAlexId`,
- *     `getPendingSuggestion` all return `null` when no row exists. Pane
- *     code is the only caller and benefits from explicit null-checks.
- * The split is documented here so consumers don't have to reason about it
- * from the call site.
+ *     `getPendingSuggestion` all return `null` when no row exists, so
+ *     consumers branch explicitly on presence rather than reading sentinel
+ *     fields back out.
  */
 
 import { DEFAULT_CACHE_LIFETIME_DAYS } from "../../constants";

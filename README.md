@@ -313,6 +313,32 @@ No. Citegeist requires Zotero 7 or later (including Zotero 8). You can [upgrade 
 ## Troubleshooting
 
 <details>
+<summary><strong>Upgrading from v1.3.x — what changed, and what to do if something looks wrong</strong></summary>
+
+v1.4.0 moved cached citation data out of Zotero's `Extra` field and into a plugin-owned SQLite database (`<profile>/citegeist.sqlite`). A one-time migration on first launch strips the old `Citegeist.*` lines from your items and rewrites them into the new cache. After migration:
+
+- **Your library is left clean.** Removing Citegeist no longer leaves orphan data behind.
+- **One line survives in Extra by design.** `Citegeist match ID: W12345678` (no leading namespace) appears only on items where you manually confirmed a title match. It's the only piece of user-curated state that needs to survive plugin downgrade and propagate across devices via Zotero Sync.
+- **Citation counts and journal metrics are now per-device.** Open Zotero on a new machine and items refetch from OpenAlex automatically; expect a brief loading period the first time.
+
+**Recommended before upgrading:**
+
+1. **Back up your Zotero data directory.** Right-click anywhere in the library → **Show Data Directory**. Quit Zotero. Copy that folder somewhere safe (Time Machine, Dropbox version history, or just a `Zotero.backup` next to it). Restart Zotero and continue with the upgrade.
+2. **Make sure you're on Zotero 7.0.10 or newer.** Citegeist v1.4.0's manifest requires it, and the migration uses an API call that older builds silently ignore. Older versions will refuse to load the plugin — install Zotero from [zotero.org/downloads](https://www.zotero.org/downloads/) and try again.
+3. **Expect a one-time progress window** if your library has more than ~500 items with Citegeist data. Smaller migrations are instant.
+
+**If something looks wrong after upgrading:**
+
+- _"All my citation columns are empty."_ Open `Help → Debug Output Logging → View Output` and look for `[Citegeist] cache initialized: N rows`. If `N` is 0 but you had data before, the migration may have been blocked. Check the surrounding log lines for `migration deferred` (Zotero version too old) or `cache not initialized` (DB couldn't open — usually antivirus quarantine of `<profile>/citegeist.sqlite`). Once unblocked, restart Zotero and the migration retries automatically.
+- _"My confirmed title matches are gone."_ Look at one of those items' Extra field — there should be a `Citegeist match ID: W…` line. If it's there, the cache will rediscover the work on next fetch. If it's missing, the migration didn't reach that item; restart Zotero and Citegeist will refetch and prompt you to re-confirm.
+- _"My library still has `Citegeist.openAlexId:` and similar lines."_ These are leftover from before migration. Restart Zotero — if `migrationV1Complete` is `false` in `about:config` (search for `extensions.zotero.citegeist`), migration will retry. If it stays `true` but the lines persist, file an issue with debug log.
+- _"I want to roll back to v1.3.x."_ Reinstall the older XPI from [GitHub Releases](https://github.com/phdemotions/zotero-citegeist/releases). The `Citegeist match ID:` lines we wrote will be ignored by v1.3.x but won't break anything. Your `citegeist.sqlite` file will sit unused until you upgrade again.
+
+If you're stuck, file an issue with the relevant `[Citegeist]` debug lines pasted in.
+
+</details>
+
+<details>
 <summary><strong>My columns are empty / stuck on "…"</strong></summary>
 
 Citegeist needs at least one recognized identifier per item — DOI, PubMed ID, arXiv ID, or ISBN. If a column stays blank:

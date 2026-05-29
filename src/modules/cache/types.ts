@@ -240,10 +240,13 @@ export const LEGACY_PREFIX = "Citegeist.";
 // CSL processors and other plugins interpret as authoritative metadata.
 
 /** OpenAlex work ID: literal `W` followed by digits. */
-export const OPEN_ALEX_WORK_ID_RE = /^W\d+$/;
+const OPEN_ALEX_WORK_ID_RE = /^W\d+$/;
 
 /** OpenAlex source (journal/venue) ID: literal `S` followed by digits. */
-export const OPEN_ALEX_SOURCE_ID_RE = /^S\d+$/;
+const OPEN_ALEX_SOURCE_ID_RE = /^S\d+$/;
+
+/** Prefix prepended by OpenAlex to every entity ID it returns. */
+const OPEN_ALEX_URL_PREFIX = "https://openalex.org/";
 
 export function isValidWorkId(v: string | null | undefined): v is string {
   return typeof v === "string" && OPEN_ALEX_WORK_ID_RE.test(v);
@@ -251,6 +254,25 @@ export function isValidWorkId(v: string | null | undefined): v is string {
 
 export function isValidSourceId(v: string | null | undefined): v is string {
   return typeof v === "string" && OPEN_ALEX_SOURCE_ID_RE.test(v);
+}
+
+/**
+ * Strip the OpenAlex URL prefix and validate the resulting work ID.
+ * Returns null for anything that doesn't match `/^W\d+$/` — callers should
+ * treat null as "reject this row" since a malformed ID would otherwise flow
+ * through to Zotero's Extra field and could spoof CSL metadata.
+ */
+export function parseWorkId(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const id = raw.replace(OPEN_ALEX_URL_PREFIX, "");
+  return isValidWorkId(id) ? id : null;
+}
+
+/** Same shape as `parseWorkId` but for OpenAlex source (journal) IDs. */
+export function parseSourceId(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const id = raw.replace(OPEN_ALEX_URL_PREFIX, "");
+  return isValidSourceId(id) ? id : null;
 }
 
 // ── Cache-owned input shapes ──────────────────────────────────────────────
