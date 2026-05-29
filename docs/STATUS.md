@@ -1,27 +1,28 @@
 # Citegeist — Status
 
-> **Last Updated:** 2026-04-09
-> **Phase:** Post-v1.0.3 — Identifier Coverage & Rankings Refresh
+> **Last Updated:** 2026-05-29
+> **Phase:** v2.0.0 release candidate — SQLite cache migration on `feat/sqlite-cache-migration`, awaiting 24h personal Zotero test
 > **Build:** Clean
 
 ---
 
 ## Current State
 
-| Attribute        | Value                                                    |
-| ---------------- | -------------------------------------------------------- |
-| **Version**      | 1.0.3                                                    |
-| **Build Status** | Clean (159 tests passing, typecheck clean, XPI 66.9 KB)  |
-| **Open Issues**  | P0: 0, P1: 3, P2: 4, P3: 2                               |
-| **Stack**        | TypeScript, esbuild, vitest, Zotero 7/8 bootstrap API    |
-| **Data Source**  | OpenAlex (free, unauthenticated, CC0)                    |
-| **Distribution** | GitHub Releases → auto-update via `release` floating tag |
+| Attribute        | Value                                                                          |
+| ---------------- | ------------------------------------------------------------------------------ |
+| **Version**      | 2.0.0 (unreleased)                                                             |
+| **Build Status** | Clean (231 tests passing, typecheck clean, XPI 77.0 KB)                        |
+| **Open Issues**  | P0: 0, P1: 0, P2: 0 (post-Iter J review sweep clean of behavior-bug findings)  |
+| **Stack**        | TypeScript, esbuild, vitest, Zotero 7/8 bootstrap API, plugin-owned SQLite     |
+| **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                          |
+| **Distribution** | GitHub Releases → auto-update via `release` floating tag                       |
 
 ---
 
 ## In Progress
 
-_None currently._
+- **v2.0.0 — SQLite cache migration epic.** Storage moved from per-item `Extra` field to plugin-owned `<profile>/citegeist.sqlite`. Crash-safe three-step migration (SQLite write → Extra strip → checkpoint), pre-migration JSON backup safety net, REL-002 force-rerun guard for partial profile restores, ADV-001 confirmed-match recovery from downgrade-mirror lines, ADV-002 user-curated-state protection in orphan GC, per-item saveTx timeout, bounded close-cache drain. Eleven review iterations applied (correctness, security, performance, maintainability, data integrity, frontend races, TS hygiene, reliability, simplicity, adversarial, patterns, project standards).
+- Awaiting Josh's 24h personal Zotero test before tagging v2.0.0.
 
 ---
 

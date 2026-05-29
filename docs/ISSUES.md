@@ -1,6 +1,6 @@
 # Citegeist — Open Issues
 
-> **Last Updated:** 2026-04-09 (v1.1.2)
+> **Last Updated:** 2026-05-29 (v2.0.0-rc, post-Iter J sweep)
 
 ---
 

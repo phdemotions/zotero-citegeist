@@ -44,6 +44,7 @@ vi.stubGlobal("IOUtils", {
   remove: vi.fn(async () => {}),
   move: vi.fn(async () => {}),
   exists: vi.fn(async () => false),
+  makeDirectory: vi.fn(async () => {}),
   setPermissions: vi.fn(async () => {}),
 });
 
@@ -1357,16 +1358,18 @@ describe("atomic backup write", () => {
     expect(dest).toBe((src as string).replace(/\.tmp$/, ""));
   });
 
-  it("chmod 0600 applies to the .tmp before the rename", async () => {
+  it("chmod 0600 applies to the .tmp before the rename, and 0700 to the parent dir", async () => {
     const permSpy = (IOUtils as unknown as { setPermissions: ReturnType<typeof vi.fn> })
       .setPermissions;
     permSpy.mockClear();
     mockZotero.Items.getAll.mockResolvedValue([mockItem("PM", legacyExtraSmall())]);
     await migrateFromExtraV1();
-    expect(permSpy).toHaveBeenCalledTimes(1);
-    const [path, opts] = permSpy.mock.calls[0];
-    expect(path).toMatch(/\.json\.tmp$/);
-    expect(opts).toEqual({ unixMode: 0o600 });
+    // Two calls: dir (0700) + file tmp (0600).
+    const calls = permSpy.mock.calls;
+    const dirCall = calls.find(([p]) => /citegeist-backups$/.test(p as string));
+    const fileCall = calls.find(([p]) => /\.json\.tmp$/.test(p as string));
+    expect(dirCall?.[1]).toEqual({ unixMode: 0o700 });
+    expect(fileCall?.[1]).toEqual({ unixMode: 0o600 });
   });
 
   it("sweeps stranded .tmp files from prior crashes during prune", async () => {

@@ -287,6 +287,8 @@ declare const IOUtils: {
   /** Atomic rename. Used to swap a `.tmp` write into its final filename. */
   move(source: string, dest: string): Promise<void>;
   exists(path: string): Promise<boolean>;
+  /** Create a directory if it doesn't exist. */
+  makeDirectory(path: string, options?: { permissions?: number; ignoreExisting?: boolean }): Promise<void>;
   /** Optional on builds that don't expose the chmod helper. POSIX-only effect. */
   setPermissions?(path: string, options: { unixMode?: number }): Promise<void>;
 };

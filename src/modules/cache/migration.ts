@@ -25,7 +25,7 @@ import {
   PREF_MIGRATION_COMPLETE,
   SHOW_PROGRESS_UI_THRESHOLD,
 } from "../../constants";
-import { safeParseFloat, safeParseIntOrNull } from "../utils";
+import { logError, normalizeError, safeParseFloat, safeParseIntOrNull } from "../utils";
 import { deleteMirrorEntries, mirrorSnapshot, requireDb, upsertRow } from "./db";
 import { setExtraConfirmedMatch } from "./write";
 import {
@@ -303,7 +303,7 @@ function buildProgressUI(total: number): MigrationProgressUI | null {
     );
     win.show();
   } catch (e) {
-    Zotero.debug(`[Citegeist] migration progress UI unavailable: ${String(e)}`);
+    logError("migration progress UI unavailable", e);
     return null;
   }
   return {
@@ -553,7 +553,7 @@ export async function migrateFromExtraV1(): Promise<void> {
               await upsertRow(salvaged);
             } catch (salvageErr) {
               Zotero.debug(
-                `[Citegeist] migration: salvage write failed for ${item.libraryID}:${item.key} — ${String(salvageErr)}`,
+                `[Citegeist] migration: salvage write failed for ${item.libraryID}:${item.key} — ${normalizeError(salvageErr)}`,
               );
             }
             continue;
@@ -599,14 +599,14 @@ export async function migrateFromExtraV1(): Promise<void> {
             await checkpointItem(conn, item.libraryID, item.key);
           } catch (cpErr) {
             Zotero.debug(
-              `[Citegeist] migration: checkpoint INSERT failed for ${item.libraryID}:${item.key} — ${String(cpErr)} (item is fully migrated; next launch will re-checkpoint)`,
+              `[Citegeist] migration: checkpoint INSERT failed for ${item.libraryID}:${item.key} — ${normalizeError(cpErr)} (item is fully migrated; next launch will re-checkpoint)`,
             );
           }
         } catch (e) {
           failureCount++;
           unresolvedSkips++;
           Zotero.debug(
-            `[Citegeist] migration: error on ${item.libraryID}:${item.key} — ${String(e)} (continuing)`,
+            `[Citegeist] migration: error on ${item.libraryID}:${item.key} — ${normalizeError(e)} (continuing)`,
           );
         }
       }
@@ -641,7 +641,7 @@ export async function migrateFromExtraV1(): Promise<void> {
       const conn = requireDb();
       await conn.queryAsync(`DELETE FROM migration_progress`);
     } catch (e) {
-      Zotero.debug(`[Citegeist] migration_progress cleanup failed (non-fatal): ${String(e)}`);
+      logError("migration_progress cleanup (non-fatal)", e);
     }
   }
 }
@@ -671,7 +671,7 @@ async function shouldForceRerun(): Promise<boolean> {
     }
     return false;
   } catch (e) {
-    Zotero.debug(`[Citegeist] shouldForceRerun probe failed (non-fatal): ${String(e)}`);
+    logError("shouldForceRerun probe (non-fatal)", e);
     return false;
   }
 }
@@ -706,23 +706,33 @@ async function writeExtraBackup(candidates: _ZoteroTypes.Item[]): Promise<void> 
         extra: item.getField("extra") ?? "",
       })),
     };
+    // Defense-in-depth for shared multi-user POSIX systems: place backups
+    // inside a per-plugin subdir created with mode 0700 so even if a single
+    // file lands at the umask default (0644) before chmod runs, the parent
+    // directory denies traversal. On Windows the chmod is a no-op but the
+    // ACL inheritance follows the parent dir, so the same protection holds
+    // in spirit.
+    const backupDir = PathUtils.join(Zotero.DataDirectory.dir, "citegeist-backups");
+    try {
+      await IOUtils.makeDirectory(backupDir, { permissions: 0o700, ignoreExisting: true });
+      await IOUtils.setPermissions?.(backupDir, { unixMode: 0o700 });
+    } catch (dirErr) {
+      logError("backup directory creation (non-fatal)", dirErr);
+    }
     const filename = `citegeist-migration-backup-${payload.timestamp.replace(/[:.]/g, "-")}.json`;
-    const path = PathUtils.join(Zotero.DataDirectory.dir, filename);
+    const path = PathUtils.join(backupDir, filename);
     // Atomic write: stage to `.tmp`, then rename onto the final path.
     // A crash between the write and the rename leaves the partial `.tmp`
-    // file behind (cleaned up on next migration via pruneOldBackups's
-    // pattern check would NOT catch it — we explicitly drop `.tmp` files
-    // here too) but never a half-written final file that a recovery script
-    // would parse as authoritative.
+    // file behind, which pruneOldBackups sweeps on next migration.
     const tmpPath = `${path}.tmp`;
     await Zotero.File.putContentsAsync(tmpPath, JSON.stringify(payload, null, 2));
-    // Chmod the .tmp BEFORE the rename so the final file is created with
-    // restricted permissions in one atomic transition — no window where a
-    // world-readable copy exists at the final path.
+    // Chmod the .tmp BEFORE the rename so the final file inherits the
+    // restricted mode in one atomic transition. The parent-dir 0700 above
+    // provides defense-in-depth for builds lacking setPermissions.
     try {
       await IOUtils.setPermissions?.(tmpPath, { unixMode: 0o600 });
     } catch (permErr) {
-      Zotero.debug(`[Citegeist] could not chmod backup file (non-fatal): ${String(permErr)}`);
+      logError("chmod backup file (non-fatal)", permErr);
     }
     await IOUtils.move(tmpPath, path);
     Zotero.debug(
@@ -731,7 +741,7 @@ async function writeExtraBackup(candidates: _ZoteroTypes.Item[]): Promise<void> 
     trySetPref(PREF_LAST_BACKUP_PATH, path);
     await pruneOldBackups();
   } catch (e) {
-    Zotero.debug(`[Citegeist] FAILED to write pre-migration Extra backup: ${String(e)}`);
+    logError("FAILED to write pre-migration Extra backup", e);
   }
 }
 
@@ -744,7 +754,8 @@ async function writeExtraBackup(candidates: _ZoteroTypes.Item[]): Promise<void> 
  */
 async function pruneOldBackups(): Promise<void> {
   try {
-    const entries = await IOUtils.getChildren(Zotero.DataDirectory.dir);
+    const backupDir = PathUtils.join(Zotero.DataDirectory.dir, "citegeist-backups");
+    const entries = await IOUtils.getChildren(backupDir).catch(() => [] as string[]);
     // Sweep stranded `.tmp` files from prior crashes — they'd otherwise
     // accumulate across migration retries. Drop unconditionally; a `.tmp`
     // is by definition mid-write and never authoritative.
@@ -761,11 +772,11 @@ async function pruneOldBackups(): Promise<void> {
         await IOUtils.remove(oldPath);
         Zotero.debug(`[Citegeist] pruned old backup: ${oldPath}`);
       } catch (e) {
-        Zotero.debug(`[Citegeist] prune-old-backup failed for ${oldPath}: ${String(e)}`);
+        logError(`prune-old-backup failed for ${oldPath}`, e);
       }
     }
   } catch (e) {
-    Zotero.debug(`[Citegeist] backup pruning skipped (non-fatal): ${String(e)}`);
+    logError("backup pruning skipped (non-fatal)", e);
   }
 }
 
@@ -774,7 +785,7 @@ function trySetPref(name: string, value: unknown): void {
   try {
     Zotero.Prefs.set(name, value);
   } catch (e) {
-    Zotero.debug(`[Citegeist] Prefs.set('${name}') failed (non-fatal): ${String(e)}`);
+    logError(`Prefs.set('${name}') (non-fatal)`, e);
   }
 }
 
