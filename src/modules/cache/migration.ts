@@ -181,6 +181,52 @@ function verifyParseRoundTrip(extra: string, parse: LegacyParse): boolean {
 }
 
 /**
+ * Run `item.saveTx({ skipDateModifiedUpdate: true })` against a deadline.
+ *
+ * Two failure modes must be distinguished:
+ *   • Synchronous / fast rejection → propagate so the per-item try/catch
+ *     increments `unresolvedSkips` and the item is NOT checkpointed. Without
+ *     this, a saveTx that rejects in the first event-loop tick (locked
+ *     metadata, validation throw, read-only profile) would be silently
+ *     swallowed and the item would be marked complete with stale Extra.
+ *   • Late rejection (after the timeout has already fired and the outer
+ *     catch incremented unresolvedSkips) → swallow + log, so Zotero's
+ *     error console doesn't surface an unhandled-rejection warning that
+ *     the user has no way to act on.
+ *
+ * Also clears the timer on the success path so we don't leak a closure
+ * per loop iteration on large libraries.
+ */
+async function saveTxWithDeadline(item: _ZoteroTypes.Item): Promise<void> {
+  let finished = false;
+  const saveTxPromise = item.saveTx({ skipDateModifiedUpdate: true });
+  // Attach the late-rejection swallow AFTER the race-winner is decided —
+  // catches only rejections arriving once `finished === true`.
+  saveTxPromise.catch((late) => {
+    if (finished) {
+      Zotero.debug(
+        `[Citegeist] late saveTx rejection for ${item.libraryID}:${item.key} (already timed out): ${normalizeError(late)}`,
+      );
+    }
+  });
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      saveTxPromise,
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`saveTx timed out after ${MIGRATION_ITEM_TIMEOUT_MS}ms`)),
+          MIGRATION_ITEM_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    finished = true;
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  }
+}
+
+/**
  * Extract a v2.0.0-runtime `Citegeist match ID: Wxxx` line and build a
  * minimal row carrying just the confirmed match. Returns null when no such
  * line exists OR the work ID fails validation. Used by the migration loop's
@@ -529,7 +575,11 @@ export async function migrateFromExtraV1(): Promise<void> {
                 .replace(/\n+$/, "");
               if (stripped !== rawExtra) {
                 item.setField("extra", stripped);
-                await item.saveTx({ skipDateModifiedUpdate: true });
+                // Race against deadline — recovery-branch items get the
+                // same hung-item protection the main path does. Without
+                // it, one locked item in this branch could stall every
+                // subsequent candidate (REL-M-001).
+                await saveTxWithDeadline(item);
               }
             }
             await checkpointItem(conn, item.libraryID, item.key);
@@ -575,39 +625,10 @@ export async function migrateFromExtraV1(): Promise<void> {
           const newLines = setExtraConfirmedMatch(parse.otherLines, row.confirmed_open_alex_id);
           const newExtra = newLines.join("\n").replace(/\n+$/, "");
           item.setField("extra", newExtra);
-          // Race the saveTx against a deadline — a single locked / hung
-          // item must not stall the entire migration loop. The per-item
-          // try/catch absorbs the throw and bumps unresolvedSkips so the
-          // next launch retries.
-          //
-          // Two pieces of hygiene baked in:
-          //   • clearTimeout on the success path so the timer + closure
-          //     don't accumulate (perf-1). Migrations on large libraries
-          //     would otherwise hold ~3000 live timers + closures at
-          //     steady state.
-          //   • `.catch(noop)` on the saveTx promise BEFORE handing it to
-          //     Promise.race so a late-arriving rejection (after timeout)
-          //     can't surface as an unhandled rejection in Zotero's error
-          //     console (ADV-L-004).
-          const saveTxPromise = item.saveTx({ skipDateModifiedUpdate: true }).catch((late) => {
-            Zotero.debug(
-              `[Citegeist] late saveTx rejection for ${item.libraryID}:${item.key} (already timed out): ${normalizeError(late)}`,
-            );
-          });
-          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-          try {
-            await Promise.race([
-              saveTxPromise,
-              new Promise<never>((_, reject) => {
-                timeoutHandle = setTimeout(
-                  () => reject(new Error(`saveTx timed out after ${MIGRATION_ITEM_TIMEOUT_MS}ms`)),
-                  MIGRATION_ITEM_TIMEOUT_MS,
-                );
-              }),
-            ]);
-          } finally {
-            if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
-          }
+          // Race saveTx against a deadline. Fast rejections propagate so
+          // the outer try/catch increments unresolvedSkips and the item
+          // is NOT checkpointed. See `saveTxWithDeadline`.
+          await saveTxWithDeadline(item);
 
           // Step 3 (must follow step 2): checkpoint. Mark the in-memory
           // `checkpointed` Set BEFORE the SQL write — a successful

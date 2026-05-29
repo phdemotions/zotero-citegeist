@@ -1388,6 +1388,37 @@ describe("atomic backup write", () => {
   });
 });
 
+describe("saveTx fast rejection propagation (C-M-001)", () => {
+  it("does NOT checkpoint when saveTx rejects immediately during migration step 2", async () => {
+    // Iter L's `.catch(noop)`-before-Promise.race regressed: a saveTx
+    // that rejected fast (lock contention, validation throw, read-only
+    // profile) was silently swallowed and the item was checkpointed
+    // with both legacy Extra AND a new SQLite row.
+    const extra = ["Citegeist.openAlexId: W777", "Citegeist.citedByCount: 3"].join("\n");
+    const item = mockItem("REJ", extra);
+    // Fast-reject saveTx synchronously.
+    (item.saveTx as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      throw new Error("simulated locked metadata");
+    });
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+    mockZotero.Prefs.set.mockClear();
+
+    await migrateFromExtraV1();
+
+    // SQLite row exists (Step 1 ran before the failed Step 2).
+    expect(fakeDb.table.has("1:REJ")).toBe(true);
+    // Migration did NOT checkpoint the item — fast rejection must
+    // propagate to the per-item catch and bump unresolvedSkips.
+    expect(fakeDb.progress.has("1:REJ")).toBe(false);
+    // Completion pref stays unset because unresolvedSkips > 0.
+    const completionCalls = mockZotero.Prefs.set.mock.calls.filter(
+      ([k, v]: [string, unknown]) =>
+        k === "extensions.zotero.citegeist.migrationV1Complete" && v === true,
+    );
+    expect(completionCalls).toHaveLength(0);
+  });
+});
+
 describe("dismissAsNoMatch atomicity (T-L-1)", () => {
   it("clears pending block and sets no_match in a single mutateRow call", async () => {
     const item = mockItem("DISM", "");
