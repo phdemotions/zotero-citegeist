@@ -1,10 +1,10 @@
 # Migrating from v1.3.x to v1.4.0
 
-> Citegeist v1.4.0 moves cached citation data out of Zotero item `Extra` fields and into a plugin-owned SQLite database. This is the largest internal change since v1.0 and the biggest user-visible change in plugin behavior.
+> v1.4.0 moves cached citation data out of Zotero item `Extra` fields into a plugin-owned SQLite database. Storage format changed; UI and feature set didn't.
 
 ## Why this change
 
-Until v1.3.x, Citegeist stored cached metrics in each item's `Extra` field as namespaced lines:
+v1.3.x stored cached metrics in each item's `Extra` field as namespaced lines:
 
 ```
 Citegeist.openAlexId: W12345678
@@ -13,98 +13,98 @@ Citegeist.fwci: 2.31
 …
 ```
 
-User feedback flagged four real problems with that approach:
+Four problems with that:
 
-1. **Tenancy collision.** Better BibTeX, Zutilo, and CSL processors all read or write Extra. The shared namespace was a known footgun.
-2. **CSL template leakage.** Citation-style templates can pull from `Extra`. A misconfigured template could surface Citegeist's bibliometric data inside generated citations.
-3. **Orphan data on uninstall.** Removing Citegeist left `Citegeist.*` lines in every item forever. There was no clean way to take it back.
-4. **Backup-restore staleness.** Restoring an older library backup would overwrite fresher cached values without any signal to the user.
+1. **Tenancy collision.** Better BibTeX, Zutilo, and CSL processors all touch Extra. Shared namespace was a known footgun.
+2. **CSL template leakage.** Templates can pull from Extra. A misconfigured template could surface bibliometric data inside generated citations.
+3. **Orphan data on uninstall.** Removing Citegeist left `Citegeist.*` lines in every item forever.
+4. **Backup-restore staleness.** Restoring an older library backup overwrote fresher cached values silently.
 
-v1.4.0 follows the canonical Zotero 7+ plugin storage pattern — a plugin-owned SQLite database opened via `Zotero.DBConnection`, identical to what Better BibTeX has used for years.
+v1.4.0 uses the documented Zotero 7+ plugin storage pattern: a plugin-owned SQLite file opened via `Zotero.DBConnection`. Better BibTeX uses the same pattern.
 
-## What v1.4.0 actually does
+## What v1.4.0 does
 
 ### On first launch
 
-1. Verifies you're on Zotero 7.0.10 or newer. (Older builds silently ignore the metadata flag the migration needs; the plugin refuses to load on those builds so it never corrupts your data.)
+1. Refuses to load on Zotero older than 7.0.10. (Older builds silently ignore the metadata flag the migration needs.)
 2. Creates `<profile>/citegeist.sqlite` and its tables.
-3. Scans every regular item in every library you have access to. For each item that contains `Citegeist.*` lines in its Extra:
+3. Scans every regular item in every library. For each item with `Citegeist.*` lines in Extra:
    - Parses the lines.
-   - Writes the parsed values to SQLite.
-   - Removes the `Citegeist.*` lines from the Extra field.
-   - Checkpoints the item so it isn't re-processed.
-4. Re-emits a single line — `Citegeist match ID: W…` — to the Extra field of items where you previously confirmed a title match. This is the only data that survives plugin downgrade and propagates across devices via Zotero Sync.
+   - Writes parsed values to SQLite.
+   - Removes the `Citegeist.*` lines from Extra.
+   - Checkpoints the item.
+4. Re-emits one line — `Citegeist match ID: W…` — to Extra for items with a previously confirmed title match. This is the only data that survives plugin downgrade and propagates across devices via Zotero Sync.
 
 ### On every subsequent launch
 
-- Loads the SQLite cache into an in-memory mirror. Column rendering hits the mirror directly (no SQL query per row).
-- Garbage-collects orphan rows (rate-limited to once per 7 days) — rows whose item no longer exists in any library.
+- Loads the SQLite cache into an in-memory mirror. Column rendering hits the mirror; no SQL per row.
+- Garbage-collects orphan rows (items deleted while the plugin was offline). Rate-limited to once per 7 days.
 
 ### When the plugin is removed
 
-- The plugin's icon disappears and its sidebar pane and columns are unregistered.
-- `<profile>/citegeist.sqlite` stays on disk but is no longer opened. Delete it yourself if you want a clean uninstall.
-- The `Citegeist match ID:` line we wrote to Extra survives. It's plain text; you can delete it manually.
+- Pane and columns unregister.
+- `<profile>/citegeist.sqlite` stays on disk; delete it manually if you want a clean uninstall.
+- The `Citegeist match ID:` line in Extra survives. Plain text; delete manually if unwanted.
 
 ## Before upgrading
 
-**Back up your Zotero data directory.** This is the standard recommendation for any plugin update that touches stored data:
+Back up your Zotero data directory:
 
 1. In Zotero: right-click anywhere in the library tree → **Show Data Directory**.
-2. Quit Zotero completely on every device.
-3. Copy that folder somewhere safe — Time Machine, Dropbox version history, or a sibling `Zotero.backup-pre-v1.4.0` directory.
-4. Restart Zotero and install v1.4.0.
+2. Quit Zotero on every device.
+3. Copy that folder somewhere safe (Time Machine, Dropbox version history, or a sibling `Zotero.backup-pre-v1.4.0`).
+4. Restart Zotero, install v1.4.0.
 
-If anything goes wrong, you can restore the backup by quitting Zotero, swapping the folders, and reinstalling v1.3.x.
+To roll back: quit Zotero, swap the folders, reinstall v1.3.x.
 
 ## After upgrading
 
-**Open `Help → Debug Output Logging → View Output`** and look for two lines on startup:
+Open `Help → Debug Output Logging → View Output` and check for:
 
 ```
 [Citegeist] cache initialized: N rows
 [Citegeist] migration complete: M items processed
 ```
 
-- `N` is the number of items currently in the SQLite cache. For a first migration `N` will be `M`.
-- If you see `migration deferred: Zotero X.Y.Z < 7.0.10`, you're on an unsupported build. Update Zotero, then restart.
-- If you see `cache not initialized`, the plugin can't open its SQLite file. Most common cause is antivirus quarantine of `<profile>/citegeist.sqlite`. Whitelist the file and restart.
+- `N` is current SQLite row count. First migration: `N == M`.
+- `migration deferred: Zotero X.Y.Z < 7.0.10` → update Zotero, restart.
+- `cache not initialized` → SQLite file can't open. Usually antivirus quarantine of `<profile>/citegeist.sqlite`. Whitelist, restart.
 
-## What changed in the UI
+## UI changes
 
-- The citation count column still shows. Same data path; just reads from SQLite via the in-memory mirror instead of from Extra.
-- The pane redesign you might remember from v1.3.0 (the 3-tile metric grid) now adapts to your Zotero theme. Light theme renders dark text; dark theme renders light text. Previously the tile values were hardcoded for dark theme and invisible on light.
+- Citation columns: same data, now sourced from SQLite via the in-memory mirror.
+- 3-tile metric pane (Citations / FWCI / Percentile) now adapts to Zotero theme. v1.3.x hardcoded dark-theme colors that rendered invisibly on light theme; v1.4.0 inherits the active theme.
 
 ## Recovery paths
 
 ### "Migration ran but my data is gone"
 
-1. Look at one of your items. Is there a `Citegeist match ID: W…` line in Extra? If yes, your confirmed matches survived — the cache just hasn't been populated yet. Restart Zotero and let the auto-fetch refill column data.
-2. If not, your debug log will show why migration skipped that item. Common reasons: round-trip parse refused (item had ambiguously-shaped legacy data — Citegeist preserved your Extra unchanged), or per-item save error (rare; logged with a one-line reason).
+1. Check an item's Extra for a `Citegeist match ID: W…` line. If present, your confirmed matches survived — restart and let auto-fetch refill column data.
+2. If not: the debug log shows why migration skipped the item. Usually round-trip parse refused (Extra left intact) or per-item save error (logged).
 
-### "I want to roll back to v1.3.x"
+### Roll back to v1.3.x
 
 1. Quit Zotero.
 2. Download a v1.3.x XPI from [GitHub Releases](https://github.com/phdemotions/zotero-citegeist/releases).
-3. Restart Zotero. Install the older XPI via **Tools → Plugins → gear icon → Install Plugin From File**.
-4. The `Citegeist match ID:` lines we wrote will sit harmlessly in Extra. v1.3.x doesn't read them.
-5. The `citegeist.sqlite` file stays on disk, unused. Delete it if you want.
+3. Restart, then install via **Tools → Plugins → gear icon → Install Plugin From File**.
+4. `Citegeist match ID:` lines sit harmlessly; v1.3.x doesn't read them.
+5. `citegeist.sqlite` stays on disk unused. Delete if wanted.
 
-You'll be back where you started, minus any items v1.3.x couldn't refetch (those will need a manual **Fetch Citation Counts** right-click).
+Items v1.3.x can't refetch automatically need a manual right-click → **Fetch Citation Counts**.
 
-### "I want a clean slate"
+### Clean slate
 
 1. Quit Zotero.
-2. Delete `<profile>/citegeist.sqlite` (from the same Show Data Directory location).
-3. Restart Zotero.
+2. Delete `<profile>/citegeist.sqlite`.
+3. Restart.
 
-Citegeist will rebuild the cache from scratch as you scroll through your library. No data loss — every value comes from OpenAlex and can always be re-fetched.
+Cache rebuilds from OpenAlex as you scroll. No data loss; every value can be re-fetched.
 
-## Internals (if you're curious)
+## Internals
 
 - Mirror: `Map<\`${libraryID}:${itemKey}\`, ItemCacheRow>` loaded at startup from `SELECT * FROM item_cache`.
-- Schema: composite primary key `(library_id, item_key)`. Two items in different libraries with the same Zotero key don't collide.
-- Migration is crash-safe: per-item ordering is SQLite write → Extra strip → checkpoint. A crash between any two steps re-runs the item on next launch with no data loss.
-- The migration loop runs inside `Zotero.Sync.Runner.delaySync` so the sync engine doesn't merge the stripped lines back from a server snapshot mid-migration.
+- Schema: composite PK `(library_id, item_key)`. Items in different libraries with the same Zotero key don't collide.
+- Crash-safe: per-item ordering is SQLite write → Extra strip → checkpoint. Crash between any two steps re-runs the item on next launch.
+- Migration loop runs inside `Zotero.Sync.Runner.delaySync` so the sync engine can't merge stripped lines back mid-migration.
 
-See [`docs/plans/2026-05-27-001-feat-sqlite-cache-migration-plan.md`](plans/2026-05-27-001-feat-sqlite-cache-migration-plan.md) for the full design, review record, and `v3 amendments` section documenting every refinement applied across the iterative review rounds.
+See [`docs/plans/2026-05-27-001-feat-sqlite-cache-migration-plan.md`](plans/2026-05-27-001-feat-sqlite-cache-migration-plan.md) for full design and the `v3 amendments` section documenting refinements applied across review rounds.

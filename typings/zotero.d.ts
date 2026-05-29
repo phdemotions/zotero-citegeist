@@ -172,6 +172,8 @@ declare namespace _ZoteroTypes {
   interface Library {
     libraryID: number;
     libraryType: string;
+    /** False for group libraries the user is a read-only member of. */
+    editable: boolean;
   }
 }
 

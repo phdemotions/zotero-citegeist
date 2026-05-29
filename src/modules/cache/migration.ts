@@ -36,6 +36,44 @@ import {
 
 // ── Legacy parser ──────────────────────────────────────────────────────────
 
+/**
+ * Strict allowlist of v1.3.x Citegeist field names. Lines with a
+ * `Citegeist.<key>: …` prefix whose key is NOT in this set are treated as
+ * user content (e.g. a researcher who typed `Citegeist.note: still useful`
+ * into Extra as a free-form note) and pushed to `otherLines` so they
+ * survive migration verbatim. Without this guard, the parser would
+ * happily consume any `Citegeist.*` line and the migration's Step-2 strip
+ * would silently destroy it.
+ */
+const KNOWN_LEGACY_FIELDS = new Set([
+  "openAlexId",
+  "citedByCount",
+  "fwci",
+  "percentile",
+  "isTop1Percent",
+  "isTop10Percent",
+  "isRetracted",
+  "lastFetched",
+  "sourceId",
+  "citedness2yr",
+  "journalHIndex",
+  "sourceISSNs",
+  "issnL",
+  "noMatch",
+  "noMatchTimestamp",
+  "matchMethod",
+  "matchConfidence",
+  "confirmedOpenAlexId",
+  "pendingSuggestionId",
+  "pendingSuggestionTitle",
+  "pendingSuggestionCount",
+  "pendingSuggestionFwci",
+  "pendingSuggestionYear",
+  "pendingSuggestionTier",
+  "pendingSuggestionConfidence",
+  "pendingSuggestionDoi",
+]);
+
 interface LegacyParse {
   citegeistFields: Map<string, string>;
   otherLines: string[];
@@ -43,11 +81,9 @@ interface LegacyParse {
 
 /**
  * Parse the legacy `Citegeist.*` namespace out of an Extra field.
- * Byte-for-byte compatible with the v1.3.0 parser.
- *
- * Note: a `Citegeist.X` line without a `": "` separator is treated as
- * non-data and pushed into `otherLines` — that way it survives the
- * migration verbatim instead of being silently dropped.
+ * Lines whose key is not in `KNOWN_LEGACY_FIELDS` are preserved in
+ * `otherLines` to defend against silent data loss for user-typed notes
+ * that happen to start with `Citegeist.`.
  */
 function parseExtraLegacy(extra: string): LegacyParse {
   const citegeistFields = new Map<string, string>();
@@ -57,10 +93,14 @@ function parseExtraLegacy(extra: string): LegacyParse {
     if (line.startsWith(LEGACY_PREFIX)) {
       const idx = line.indexOf(": ");
       if (idx > 0) {
-        citegeistFields.set(line.substring(0, idx), line.substring(idx + 2));
-      } else {
-        otherLines.push(line);
+        const key = line.substring(LEGACY_PREFIX.length, idx);
+        if (KNOWN_LEGACY_FIELDS.has(key)) {
+          citegeistFields.set(line.substring(0, idx), line.substring(idx + 2));
+          continue;
+        }
       }
+      // Unknown field name OR no `: ` separator — treat as user content.
+      otherLines.push(line);
     } else {
       otherLines.push(line);
     }
@@ -282,12 +322,15 @@ export async function migrateFromExtraV1(): Promise<void> {
   let unresolvedSkips = 0;
 
   await Zotero.Sync.Runner.delaySync(async () => {
-    // Collect candidates across every library the user has access to.
-    // Filter to regular items only — notes and attachments are not the
-    // things Citegeist ever wrote data for, and skipping them defuses a
-    // potential malicious-import explosion via crafted `.bib` files.
+    // Collect candidates across every library the user can write to. Skip
+    // read-only group libraries: Step 1 (SQLite write) would succeed but
+    // Step 2 (saveTx) would throw on every item, leaving migration
+    // permanently unresolved and re-scanning the same items every launch.
+    // Items in read-only libraries still get SQLite rows lazily via the
+    // runtime fetch path; only the Extra strip is impossible.
     const candidates: _ZoteroTypes.Item[] = [];
     for (const lib of Zotero.Libraries.getAll()) {
+      if (!lib.editable) continue;
       const items = await Zotero.Items.getAll(lib.libraryID, false);
       for (const item of items) {
         if (item.deleted) continue;

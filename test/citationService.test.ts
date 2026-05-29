@@ -37,7 +37,12 @@ const mockZotero = {
     return fakeDb;
   }),
   Items: { getAll: vi.fn(async () => [] as _ZoteroTypes.Item[]) },
-  Libraries: { userLibraryID: 1 },
+  Libraries: {
+    userLibraryID: 1,
+    getAll: vi.fn(
+      () => [{ libraryID: 1, libraryType: "user", editable: true }] as _ZoteroTypes.Library[],
+    ),
+  },
   Sync: {
     Runner: { delaySync: vi.fn(async (fn: () => Promise<unknown>) => await fn()) },
   },

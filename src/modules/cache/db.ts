@@ -93,19 +93,31 @@ export function initCache(): Promise<void> {
 }
 
 async function doInit(): Promise<void> {
-  db = new Zotero.DBConnection("citegeist");
-  await db.queryAsync(SCHEMA);
-  await db.queryAsync(CREATE_PROGRESS_TABLE);
+  // Build the connection in a local. Don't assign to the module's `db`
+  // until schema + mirror load have all succeeded, so a `closeCache()`
+  // racing against init can't null-out a half-initialized connection.
+  const conn = new Zotero.DBConnection("citegeist");
+  await conn.queryAsync(SCHEMA);
+  await conn.queryAsync(CREATE_PROGRESS_TABLE);
 
-  const rows = await db.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
-  mirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
+  const rows = await conn.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
+  const nextMirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
 
+  db = conn;
+  mirror = nextMirror;
   initialized = true;
   Zotero.debug(`[Citegeist] cache initialized: ${mirror.size} rows`);
 }
 
-/** Close the DB connection on shutdown. Drains pending writes first. */
+/**
+ * Close the DB connection on shutdown. Awaits any in-flight init, then
+ * drains pending writes, then closes. The init-await is what prevents
+ * doInit from observing a null `db` after we cleared module state.
+ */
 export async function closeCache(): Promise<void> {
+  if (initPromise) {
+    await initPromise.catch(() => {});
+  }
   if (pendingWrites.size > 0) {
     await Promise.allSettled([...pendingWrites]);
   }
@@ -188,18 +200,18 @@ async function withKeyLock<T>(
 
   await prev;
 
-  const work = fn();
-  // Track for closeCache drain. Errors propagate to caller via outer await;
-  // the tracker swallows rejections only to avoid an unhandled-rejection
-  // warning on the bookkeeping promise.
-  const tracker: Promise<void> = work.then(noop, noop);
-  pendingWrites.add(tracker);
-
+  // `fn()` runs inside the try so a synchronous throw still hits `finally`
+  // and releases the ticket — without that, a sync throw would leave the
+  // next waiter awaiting an unresolved promise forever.
+  let tracker: Promise<void> | null = null;
   try {
+    const work = fn();
+    tracker = work.then(noop, noop);
+    pendingWrites.add(tracker);
     return await work;
   } finally {
     releaseTicket();
-    pendingWrites.delete(tracker);
+    if (tracker) pendingWrites.delete(tracker);
     if (writeTails.get(key) === newTail) writeTails.delete(key);
   }
 }
@@ -220,5 +232,27 @@ export async function deleteRow(libraryID: number, itemKey: string): Promise<voi
       itemKey,
     ]);
     mirror.delete(mirrorKey(libraryID, itemKey));
+  });
+}
+
+/**
+ * Read-modify-write under the per-key lock. The transform receives the
+ * row as it exists AT THE MOMENT the lock is granted, not at call time —
+ * so a concurrent `clearCache` between the caller's call and the lock
+ * acquisition is observed correctly. Return `null` from `transform` to
+ * leave the row unchanged.
+ */
+export async function mutateRow(
+  libraryID: number,
+  itemKey: string,
+  transform: (existing: ItemCacheRow | undefined) => ItemCacheRow | null,
+): Promise<void> {
+  await withKeyLock(libraryID, itemKey, async () => {
+    const existing = mirror.get(mirrorKey(libraryID, itemKey));
+    const next = transform(existing);
+    if (next === null) return;
+    const conn = requireDb();
+    await conn.queryAsync(UPSERT_SQL, rowToParams(next));
+    mirror.set(mirrorKey(next.library_id, next.item_key), next);
   });
 }

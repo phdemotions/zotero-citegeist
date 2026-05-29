@@ -21,7 +21,7 @@ import {
   parseWorkId,
   toDbBool,
 } from "./types";
-import { deleteRow, getRow, upsertRow } from "./db";
+import { deleteRow, mutateRow } from "./db";
 
 /** Pending-suggestion fields cleared together on confirm/dismiss. */
 const PENDING_CLEARED = {
@@ -63,9 +63,6 @@ export async function cacheWorkData(
   work: CacheWorkInput,
   sourceStats: CacheSourceStatsInput | null,
 ): Promise<void> {
-  const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
-  const metrics = deriveCitationMetrics(work);
-
   // Validate IDs at the trust boundary. A malformed value would otherwise
   // flow into Zotero's Extra field via writeConfirmedMatchToExtra and could
   // spoof CSL metadata read by other plugins.
@@ -77,28 +74,35 @@ export async function cacheWorkData(
     return;
   }
   const sourceId = parseSourceId(work.primary_location?.source?.id);
+  const metrics = deriveCitationMetrics(work);
+  // Snapshot libraryID at call time so a concurrent cross-library move
+  // can't split the SQLite write and any downstream Extra write across
+  // two libraries.
+  const libraryID = item.libraryID;
+  const itemKey = item.key;
 
-  const row: ItemCacheRow = {
-    ...existing,
-    open_alex_id: openAlexId,
-    cited_by_count: work.cited_by_count,
-    fwci: metrics.fwci,
-    percentile: metrics.percentile,
-    is_top_1_percent: metrics.isTop1Percent,
-    is_top_10_percent: metrics.isTop10Percent,
-    is_retracted: toDbBool(work.is_retracted),
-    last_fetched: new Date().toISOString(),
-    source_id: sourceId,
-    citedness_2yr: sourceStats ? sourceStats.citedness2yr : existing.citedness_2yr,
-    journal_h_index: sourceStats ? sourceStats.hIndex : existing.journal_h_index,
-    source_issns:
-      sourceStats && sourceStats.issns.length > 0
-        ? [...sourceStats.issns].join(",")
-        : existing.source_issns,
-    issn_l: work.primary_location?.source?.issn_l ?? existing.issn_l,
-  };
-
-  await upsertRow(row);
+  await mutateRow(libraryID, itemKey, (existing) => {
+    const base = existing ?? emptyRow(libraryID, itemKey);
+    return {
+      ...base,
+      open_alex_id: openAlexId,
+      cited_by_count: work.cited_by_count,
+      fwci: metrics.fwci,
+      percentile: metrics.percentile,
+      is_top_1_percent: metrics.isTop1Percent,
+      is_top_10_percent: metrics.isTop10Percent,
+      is_retracted: toDbBool(work.is_retracted),
+      last_fetched: new Date().toISOString(),
+      source_id: sourceId,
+      citedness_2yr: sourceStats ? sourceStats.citedness2yr : base.citedness_2yr,
+      journal_h_index: sourceStats ? sourceStats.hIndex : base.journal_h_index,
+      source_issns:
+        sourceStats && sourceStats.issns.length > 0
+          ? [...sourceStats.issns].join(",")
+          : base.source_issns,
+      issn_l: work.primary_location?.source?.issn_l ?? base.issn_l,
+    };
+  });
 }
 
 /**
@@ -113,13 +117,13 @@ export async function clearCache(item: CacheItemKey): Promise<void> {
 }
 
 export async function writeNoMatch(item: CacheItemKey): Promise<void> {
-  const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
-  const row: ItemCacheRow = {
-    ...existing,
+  const libraryID = item.libraryID;
+  const itemKey = item.key;
+  await mutateRow(libraryID, itemKey, (existing) => ({
+    ...(existing ?? emptyRow(libraryID, itemKey)),
     no_match: 1,
     no_match_timestamp: new Date().toISOString(),
-  };
-  await upsertRow(row);
+  }));
 }
 
 /**
@@ -136,31 +140,53 @@ export async function writeNoMatch(item: CacheItemKey): Promise<void> {
  * log and no-op rather than persist a malformed row.
  */
 export async function confirmTitleMatch(item: _ZoteroTypes.Item, tier: MatchTier): Promise<void> {
-  const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
-  const pendingId = existing.pending_open_alex_id ?? existing.open_alex_id;
+  // Snapshot libraryID + key at call time so a concurrent cross-library
+  // move can't split the SQLite write and the Extra mirror across libraries.
+  const libraryID = item.libraryID;
+  const itemKey = item.key;
+  let confirmedId: string | null = null;
 
-  if (!pendingId) {
-    Zotero.debug(
-      `[Citegeist] confirmTitleMatch called on ${item.key} with no pending or existing ID — ignored`,
-    );
-    return;
+  await mutateRow(libraryID, itemKey, (existing) => {
+    const base = existing ?? emptyRow(libraryID, itemKey);
+    const pendingId = base.pending_open_alex_id ?? base.open_alex_id;
+    if (!pendingId) {
+      Zotero.debug(
+        `[Citegeist] confirmTitleMatch on ${itemKey} with no pending or existing ID — ignored`,
+      );
+      return null;
+    }
+    // Guard against silent overwrite of a prior user-confirmed match.
+    // A pending suggestion arriving after a confirmation may legitimately
+    // replace it (e.g. user fixed a typo), but it should be a deliberate
+    // user action — refuse the implicit overwrite and let the caller
+    // explicitly clear the pending or re-confirm with intent.
+    if (
+      base.confirmed_open_alex_id &&
+      base.pending_open_alex_id &&
+      base.confirmed_open_alex_id !== base.pending_open_alex_id
+    ) {
+      Zotero.debug(
+        `[Citegeist] confirmTitleMatch on ${itemKey} would overwrite confirmed ` +
+          `${base.confirmed_open_alex_id} with pending ${base.pending_open_alex_id} — ignored. ` +
+          `Caller must clearPendingSuggestion first to acknowledge the replacement.`,
+      );
+      return null;
+    }
+    confirmedId = pendingId;
+    return {
+      ...base,
+      no_match: null,
+      no_match_timestamp: null,
+      match_method: "title-match",
+      match_confidence: tier,
+      confirmed_open_alex_id: pendingId,
+      ...PENDING_CLEARED,
+    };
+  });
+
+  if (confirmedId) {
+    await writeConfirmedMatchToExtra(item, confirmedId);
   }
-
-  // Atomically promote pending → confirmed AND clear the pending block in
-  // one upsert, so no concurrent reader can observe a row where both states
-  // are populated and surface a stale suggestion in the same render tick.
-  const row: ItemCacheRow = {
-    ...existing,
-    no_match: null,
-    no_match_timestamp: null,
-    match_method: "title-match",
-    match_confidence: tier,
-    confirmed_open_alex_id: pendingId,
-    ...PENDING_CLEARED,
-  };
-
-  await upsertRow(row);
-  await writeConfirmedMatchToExtra(item, pendingId);
 }
 
 export async function writePendingSuggestion(
@@ -176,9 +202,10 @@ export async function writePendingSuggestion(
     );
     return;
   }
-  const existing = getRow(item.libraryID, item.key) ?? emptyRow(item.libraryID, item.key);
-  const row: ItemCacheRow = {
-    ...existing,
+  const libraryID = item.libraryID;
+  const itemKey = item.key;
+  await mutateRow(libraryID, itemKey, (existing) => ({
+    ...(existing ?? emptyRow(libraryID, itemKey)),
     pending_open_alex_id: pendingId,
     pending_title: sanitizeForDisplay(work.display_name),
     pending_cited_by_count: work.cited_by_count,
@@ -187,14 +214,13 @@ export async function writePendingSuggestion(
     pending_tier: tier,
     pending_confidence: confidence,
     pending_doi: work.doi ? sanitizeForDisplay(work.doi) : null,
-  };
-  await upsertRow(row);
+  }));
 }
 
 export async function clearPendingSuggestion(item: CacheItemKey): Promise<void> {
-  const existing = getRow(item.libraryID, item.key);
-  if (!existing) return;
-  await upsertRow({ ...existing, ...PENDING_CLEARED });
+  await mutateRow(item.libraryID, item.key, (existing) =>
+    existing ? { ...existing, ...PENDING_CLEARED } : null,
+  );
 }
 
 // ── Extra-field downgrade mirror ───────────────────────────────────────────
