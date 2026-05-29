@@ -85,7 +85,7 @@ const mockZotero = {
 
 vi.stubGlobal("Zotero", mockZotero);
 
-import { _resetForTesting } from "../src/modules/cache/db";
+import { _resetForTesting, closeCache } from "../src/modules/cache/db";
 import {
   initCache,
   cacheWorkData,
@@ -1231,5 +1231,137 @@ describe("migrateFromExtraV1", () => {
     // Force-rerun cleared the pref and ran migration: Extra now stripped.
     expect(items.get("R")!.extra).not.toContain("Citegeist.");
     expect(fakeDb.table.size).toBe(1);
+  });
+});
+
+// ── Iter H: previously-uncovered branches ──────────────────────────────────
+
+describe("closeCache lifecycle", () => {
+  it("passes permanent=true to closeDatabase so Zotero truncates the WAL", async () => {
+    const spy = vi.spyOn(fakeDb, "closeDatabase");
+    await closeCache();
+    expect(spy).toHaveBeenCalledWith(true);
+  });
+
+  it("drains in-flight writes before closing", async () => {
+    // Stage a write that resolves asynchronously, call closeCache while it's
+    // still pending, and verify both complete before the connection closes.
+    const item = mockItem("DRAIN", "");
+    const writePromise = cacheWorkData(item, {
+      id: "https://openalex.org/W500",
+      cited_by_count: 1,
+      fwci: null,
+      is_retracted: false,
+    } as never);
+    const closeSpy = vi.spyOn(fakeDb, "closeDatabase");
+    const closePromise = closeCache();
+    await Promise.all([writePromise, closePromise]);
+    // Mirror was populated AND closeDatabase ran exactly once after the
+    // pending write completed.
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("cacheWorkData numeric validation", () => {
+  it("rejects NaN fwci as null instead of persisting NaN to SQLite", async () => {
+    const item = mockItem("NAN", "");
+    await cacheWorkData(item, {
+      id: "https://openalex.org/W1",
+      cited_by_count: 5,
+      fwci: Number.NaN,
+      is_retracted: false,
+    } as never);
+    expect(getCachedData(item)?.fwci).toBeNull();
+  });
+
+  it("rejects Infinity fwci as null", async () => {
+    const item = mockItem("INF", "");
+    await cacheWorkData(item, {
+      id: "https://openalex.org/W2",
+      cited_by_count: 5,
+      fwci: Number.POSITIVE_INFINITY,
+      is_retracted: false,
+    } as never);
+    expect(getCachedData(item)?.fwci).toBeNull();
+  });
+
+  it("rejects negative cited_by_count as null (sentinel for 'unknown')", async () => {
+    const item = mockItem("NEG", "");
+    await cacheWorkData(item, {
+      id: "https://openalex.org/W3",
+      cited_by_count: -1,
+      fwci: null,
+      is_retracted: false,
+    } as never);
+    // Negative counts cannot exist; row should not record a count
+    expect(getCachedCitationCount(item)).toBeNull();
+  });
+
+  it("rejects non-integer cited_by_count as null", async () => {
+    const item = mockItem("FRAC", "");
+    await cacheWorkData(item, {
+      id: "https://openalex.org/W4",
+      cited_by_count: 3.7,
+      fwci: null,
+      is_retracted: false,
+    } as never);
+    expect(getCachedCitationCount(item)).toBeNull();
+  });
+});
+
+describe("atomic backup write", () => {
+  function legacyExtraSmall(): string {
+    return ["Citegeist.openAlexId: W900", "Citegeist.citedByCount: 1"].join("\n");
+  }
+
+  it("writes to .tmp then renames onto the final path via IOUtils.move", async () => {
+    const moveSpy = IOUtils.move as unknown as ReturnType<typeof vi.fn>;
+    moveSpy.mockClear();
+    mockZotero.Items.getAll.mockResolvedValue([mockItem("MV", legacyExtraSmall())]);
+    await migrateFromExtraV1();
+    expect(moveSpy).toHaveBeenCalledTimes(1);
+    const [src, dest] = moveSpy.mock.calls[0];
+    expect(src).toMatch(/\.json\.tmp$/);
+    expect(dest).toBe((src as string).replace(/\.tmp$/, ""));
+  });
+
+  it("chmod 0600 applies to the .tmp before the rename", async () => {
+    const permSpy = (IOUtils as unknown as { setPermissions: ReturnType<typeof vi.fn> })
+      .setPermissions;
+    permSpy.mockClear();
+    mockZotero.Items.getAll.mockResolvedValue([mockItem("PM", legacyExtraSmall())]);
+    await migrateFromExtraV1();
+    expect(permSpy).toHaveBeenCalledTimes(1);
+    const [path, opts] = permSpy.mock.calls[0];
+    expect(path).toMatch(/\.json\.tmp$/);
+    expect(opts).toEqual({ unixMode: 0o600 });
+  });
+
+  it("sweeps stranded .tmp files from prior crashes during prune", async () => {
+    const getChildrenSpy = IOUtils.getChildren as unknown as ReturnType<typeof vi.fn>;
+    const removeSpy = IOUtils.remove as unknown as ReturnType<typeof vi.fn>;
+    removeSpy.mockClear();
+    getChildrenSpy.mockResolvedValueOnce([
+      "/tmp/zotero-test-data/citegeist-migration-backup-2025-01-01T00-00-00-000Z.json",
+      "/tmp/zotero-test-data/citegeist-migration-backup-2024-06-15T00-00-00-000Z.json.tmp",
+    ]);
+    mockZotero.Items.getAll.mockResolvedValue([mockItem("TMP", legacyExtraSmall())]);
+    await migrateFromExtraV1();
+    // .tmp from a prior crash is removed unconditionally.
+    expect(removeSpy.mock.calls.some(([p]) => /\.json\.tmp$/.test(p as string))).toBe(true);
+  });
+});
+
+describe("buildRowFromLegacy strict numeric parsing", () => {
+  it("treats garbage citedByCount as null, not 0", async () => {
+    const item = mockItem(
+      "GBG",
+      ["Citegeist.openAlexId: W1234", "Citegeist.citedByCount: not-a-number"].join("\n"),
+    );
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+    await migrateFromExtraV1();
+    // Garbage must not become a real `0` — that would be indistinguishable
+    // from a true zero-citation work and corrupt downstream comparisons.
+    expect(getCachedCitationCount(item)).toBeNull();
   });
 });

@@ -33,6 +33,17 @@ import { escapeHTML, logError, isBookType, toOrdinal } from "./utils";
 
 let refreshing = false;
 
+/**
+ * Generation counter incremented on every item change. Pane async paths
+ * snapshot the current value before awaiting and re-check after — a stale
+ * resolution (user selected a different item while a fetch was in flight)
+ * is dropped instead of stomping the now-current item's container with
+ * stale data. Zotero reuses the section's `body` element across selections,
+ * so without this guard a slow fetch on item A would overwrite item B's
+ * pane.
+ */
+let paneGeneration = 0;
+
 const PANE_ID = "citegeist-citation-details";
 
 /**
@@ -452,6 +463,10 @@ export function registerCitationPane(pluginID: string): void {
       </div>
     `,
     onItemChange: ({ item, setEnabled }) => {
+      // Bump the generation token so any in-flight onAsyncRender / onConfirm
+      // from the previous item's fetch detects the mismatch on resume and
+      // drops its DOM write instead of clobbering the new item's pane.
+      paneGeneration++;
       setEnabled(item.isRegularItem());
     },
     onRender: ({ body, item, setSectionSummary }) => {
@@ -490,7 +505,12 @@ export function registerCitationPane(pluginID: string): void {
       // If a suggestion is already rendered (from a prior fetch stored in Extra), skip
       if (!alreadyCached && getPendingSuggestion(item)) return;
 
+      // Snapshot the generation BEFORE the await so a mid-fetch item
+      // change is detected on resume. Without this, Zotero's body-element
+      // reuse would have us writing item A's data into item B's pane.
+      const gen = paneGeneration;
       const result = await fetchAndCacheItem(item);
+      if (gen !== paneGeneration) return;
 
       if (result.status === "ok") {
         const freshData = getCachedData(item);
@@ -523,11 +543,15 @@ export function registerCitationPane(pluginID: string): void {
         onClick: async ({ body, item, setSectionSummary }) => {
           if (refreshing) return;
           refreshing = true;
+          // Snapshot generation; item-change mid-refresh would otherwise stomp
+          // the new item's pane with the old fetch result.
+          const gen = paneGeneration;
           try {
             const container = body.querySelector("#citegeist-content") as HTMLElement;
             if (container) renderEmptyState(container, setSectionSummary, "refreshing");
             await clearCache(item); // wide-clear: also nukes pending suggestion
             const result = await fetchAndCacheItem(item);
+            if (gen !== paneGeneration) return;
             const cached = getCachedData(item);
             if (container) {
               if (cached) {
@@ -638,15 +662,21 @@ function renderSuggestion(
   };
 
   const onConfirm = async (): Promise<void> => {
+    // Generation snapshot: a mid-confirm item change must not leave the
+    // newly-selected item's pane displaying the previous item's freshly-
+    // fetched work data.
+    const gen = paneGeneration;
     try {
       // confirmTitleMatch atomically promotes pending→confirmed and clears
       // the pending block in a single upsert (see cache/write.ts), so no
       // separate clearPendingSuggestion call is needed.
       await confirmTitleMatch(item, suggestion.tier);
+      if (gen !== paneGeneration) return;
 
       // Fetch the full work using the now-confirmed ID
       renderEmptyState(container, setSectionSummary, "confirmLoading");
       const result = await fetchAndCacheItem(item);
+      if (gen !== paneGeneration) return;
       const fresh = getCachedData(item);
       if (fresh) {
         renderPane(container, fresh, item, result.status === "ok" ? result.work : undefined);

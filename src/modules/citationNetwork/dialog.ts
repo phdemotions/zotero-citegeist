@@ -117,9 +117,15 @@ export async function showCitationNetwork(
     safeInnerHTML(body, skeleton);
   }
 
-  // Close on Escape/backdrop while loading
+  // Close on Escape/backdrop while loading. We flip `phase` to "closed"
+  // BEFORE the DOM removal so any awaiter that resumes between this handler
+  // and `closedBeforeReady` returning true sees a consistent state — without
+  // it, the post-await "happy path" (work fetched after early-close) would
+  // proceed to bind events on a detached overlay and fire network calls
+  // against an orphaned UI.
   const earlyClose = (e: Event) => {
     if ((e as KeyboardEvent).key === "Escape" || e.target === overlay) {
+      phase = "closed";
       try {
         overlay.remove();
       } catch {
@@ -189,6 +195,12 @@ export async function showCitationNetwork(
     }
     return;
   }
+
+  // Second check: a user can close the dialog between the first guard and
+  // here (rare but possible — the safeInnerHTML write yields to the event
+  // loop). Without this, we'd bind the full event set and fire loadResults
+  // on a detached overlay.
+  if (closedBeforeReady()) return;
 
   // Remove early close handlers, bind full event set
   overlay.removeEventListener("keydown", earlyClose);

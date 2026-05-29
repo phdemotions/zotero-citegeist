@@ -24,7 +24,7 @@ import {
   PREF_MIGRATION_COMPLETE,
   SHOW_PROGRESS_UI_THRESHOLD,
 } from "../../constants";
-import { safeParseFloat, safeParseInt } from "../utils";
+import { safeParseFloat, safeParseIntOrNull } from "../utils";
 import { deleteMirrorEntries, mirrorSnapshot, requireDb, upsertRow } from "./db";
 import { setExtraConfirmedMatch } from "./write";
 import {
@@ -37,6 +37,7 @@ import {
   mirrorKey,
   parseSourceId,
   parseWorkId,
+  type SqliteBindValue,
 } from "./types";
 
 // ── Runtime/migration coordination ────────────────────────────────────────
@@ -191,8 +192,10 @@ function buildRowFromLegacy(
   // not flow into SQLite where readers would treat them as real OpenAlex IDs.
   row.open_alex_id = parseWorkId(get("openAlexId"));
 
-  const cbc = get("citedByCount");
-  if (cbc !== undefined) row.cited_by_count = safeParseInt(cbc);
+  // Use safeParseIntOrNull (not safeParseInt) at the legacy trust boundary:
+  // a hand-edited `Citegeist.citedByCount: garbage` would otherwise coerce to
+  // 0 and become indistinguishable from a real zero-citation work.
+  row.cited_by_count = safeParseIntOrNull(get("citedByCount"));
 
   const fwci = get("fwci");
   if (fwci) row.fwci = safeParseFloat(fwci);
@@ -213,8 +216,7 @@ function buildRowFromLegacy(
   row.source_id = parseSourceId(get("sourceId"));
   const c2y = get("citedness2yr");
   if (c2y) row.citedness_2yr = safeParseFloat(c2y);
-  const hidx = get("journalHIndex");
-  if (hidx) row.journal_h_index = safeParseInt(hidx);
+  row.journal_h_index = safeParseIntOrNull(get("journalHIndex"));
   row.source_issns = get("sourceISSNs") ?? get("issnL") ?? null;
   row.issn_l = get("issnL") ?? null;
 
@@ -230,15 +232,11 @@ function buildRowFromLegacy(
   if (psid) {
     row.pending_open_alex_id = psid;
     row.pending_title = get("pendingSuggestionTitle") ?? null;
-    const pcbc = get("pendingSuggestionCount");
-    if (pcbc) row.pending_cited_by_count = safeParseInt(pcbc);
+    row.pending_cited_by_count = safeParseIntOrNull(get("pendingSuggestionCount"));
     const pfwci = get("pendingSuggestionFwci");
     if (pfwci) row.pending_fwci = safeParseFloat(pfwci);
-    const py = get("pendingSuggestionYear");
-    if (py) {
-      const n = safeParseInt(py);
-      row.pending_year = n > 0 ? n : null;
-    }
+    const py = safeParseIntOrNull(get("pendingSuggestionYear"));
+    if (py !== null && py > 0) row.pending_year = py;
     const pt = get("pendingSuggestionTier");
     if (pt && isMatchTier(pt)) row.pending_tier = pt;
     const pc = get("pendingSuggestionConfidence");
@@ -751,7 +749,7 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
     // Two-param `WHERE (library_id, item_key) IN ((?,?), (?,?), …)` is the
     // canonical SQLite shape for composite key lookups.
     const tuplePlaceholders = slice.map(() => "(?, ?)").join(",");
-    const params: unknown[] = [];
+    const params: SqliteBindValue[] = [];
     for (const o of slice) {
       params.push(o.libraryID, o.itemKey);
     }
@@ -765,6 +763,6 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
     );
     deleteMirrorEntries(slice.map((o) => o.composite));
   }
-  trySetPref("extensions.zotero.citegeist.lastOrphanGcAt", Date.now());
+  trySetPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
   Zotero.debug(`[Citegeist] orphan GC removed ${orphans.length} rows`);
 }

@@ -53,8 +53,15 @@ export interface SuggestionPreview {
   tier: MatchTier;
 }
 
-export type MatchMethod = "doi" | "pmid" | "arxiv" | "isbn" | "title-match";
-export type MatchTier = "high" | "medium";
+// Single source of truth for match-tier and match-method enumerations.
+// Defining the values as a `readonly` tuple and deriving the type from it
+// means the runtime guard and the compile-time type cannot drift apart —
+// adding a new tier here surfaces every callsite that needs an update.
+export const MATCH_TIERS = ["high", "medium"] as const;
+export type MatchTier = (typeof MATCH_TIERS)[number];
+
+export const MATCH_METHODS = ["doi", "pmid", "arxiv", "isbn", "title-match"] as const;
+export type MatchMethod = (typeof MATCH_METHODS)[number];
 
 export interface TitleMatchMeta {
   noMatch: boolean;
@@ -78,11 +85,11 @@ export interface PendingSuggestion {
 }
 
 export function isMatchTier(v: unknown): v is MatchTier {
-  return v === "high" || v === "medium";
+  return typeof v === "string" && (MATCH_TIERS as readonly string[]).includes(v);
 }
 
 export function isMatchMethod(v: unknown): v is MatchMethod {
-  return v === "doi" || v === "pmid" || v === "arxiv" || v === "isbn" || v === "title-match";
+  return typeof v === "string" && (MATCH_METHODS as readonly string[]).includes(v);
 }
 
 // ── Internal row + column metadata ─────────────────────────────────────────
@@ -222,8 +229,23 @@ export function emptyRow(libraryID: number, itemKey: string): ItemCacheRow {
 /** Value types SQLite's `queryAsync` parameter binding accepts in this codebase. */
 export type SqliteBindValue = string | number | null;
 
+// Compile-time gate: every ItemCacheRow field must be assignable to
+// SqliteBindValue. If a future column is added with an off-shape type
+// (Date, boolean, object, ...), this conditional resolves to `never`,
+// the `_rowFieldsAreBindShape` constant fails typechecking, and rowToParams
+// stops compiling — surfacing the issue at the schema rather than producing
+// silent SQLite bind corruption at runtime.
+type _RowFieldsAreBindShape = ItemCacheRow[keyof ItemCacheRow] extends SqliteBindValue
+  ? true
+  : never;
+const _rowFieldsAreBindShape: _RowFieldsAreBindShape = true;
+void _rowFieldsAreBindShape;
+
 export function rowToParams(row: ItemCacheRow): SqliteBindValue[] {
-  return COLUMNS.map((c) => row[c] as SqliteBindValue);
+  // No `as`: the type-level gate above guarantees every column value is
+  // already assignable to SqliteBindValue, so the indexed access narrows
+  // cleanly without a cast.
+  return COLUMNS.map((c) => row[c]);
 }
 
 /** Marker used to mirror confirmed match IDs back to Extra for downgrade safety. */

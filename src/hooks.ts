@@ -32,7 +32,13 @@ export async function onStartup(data: PluginData): Promise<void> {
   // BEFORE any reader (pane, column) registers. Column dataProvider is
   // synchronous and assumes the mirror is populated.
   let cacheInitFailed = false;
-  const wasMigratedBefore = Zotero.Prefs.get(PREF_MIGRATION_COMPLETE) as boolean | undefined;
+  // Runtime-guard the cast: prefs.js can be corrupted with mismatched types
+  // (e.g. a string `"true"` if a prior plugin version wrote it wrong) and
+  // truthy-checking a string `"false"` would silently suppress the first-run
+  // migration alert.
+  const wasMigratedBeforeRaw = Zotero.Prefs.get(PREF_MIGRATION_COMPLETE);
+  const wasMigratedBefore =
+    typeof wasMigratedBeforeRaw === "boolean" ? wasMigratedBeforeRaw : undefined;
   try {
     await initCache();
     await migrateFromExtraV1();
@@ -59,7 +65,8 @@ export async function onStartup(data: PluginData): Promise<void> {
     // alert pointing to the safety-net backup file so users know exactly
     // where to find a verbatim copy of every pre-migration Extra field
     // if they want to audit or restore anything.
-    const backupPath = Zotero.Prefs.get(PREF_LAST_BACKUP_PATH) as string | undefined;
+    const backupPathRaw = Zotero.Prefs.get(PREF_LAST_BACKUP_PATH);
+    const backupPath = typeof backupPathRaw === "string" ? backupPathRaw : undefined;
     const backupLine = backupPath
       ? `A snapshot of every Extra field Citegeist touched was saved to:\n\n${backupPath}\n\n` +
         "Keep it until you've confirmed everything looks right. If anything is missing, " +
