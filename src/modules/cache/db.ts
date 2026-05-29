@@ -249,6 +249,14 @@ export async function deleteRow(libraryID: number, itemKey: string): Promise<voi
       libraryID,
       itemKey,
     ]);
+    // Also drop the migration checkpoint so a future force-rerun can
+    // actually re-process the item. Without this, a `clearCache` followed
+    // by `shouldForceRerun` would skip the now-empty row at checkpoint
+    // lookup and the user's intentional clear would not trigger re-migration.
+    await conn.queryAsync(`DELETE FROM migration_progress WHERE library_id = ? AND item_key = ?`, [
+      libraryID,
+      itemKey,
+    ]);
     mirror.delete(mirrorKey(libraryID, itemKey));
   });
 }

@@ -47,6 +47,7 @@ export {
   clearCache,
   clearPendingSuggestion,
   confirmTitleMatch,
+  dismissAsNoMatch,
   writeNoMatch,
   writePendingSuggestion,
 } from "./write";

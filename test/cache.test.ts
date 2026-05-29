@@ -976,7 +976,7 @@ describe("migration Extra-field edge cases", () => {
     expect(items.get("MID")!.extra).not.toContain("Citegeist match ID");
   });
 
-  it("treats invalid match-ID line as no-op recovery (line preserved as user content)", async () => {
+  it("strips malformed `Citegeist match ID:` line — never user-typed content", async () => {
     const extra = "Citegeist match ID: not-a-work-id";
     const item = mockItem("BAD", extra);
     mockZotero.Items.getAll.mockResolvedValue([item]);
@@ -984,9 +984,25 @@ describe("migration Extra-field edge cases", () => {
     await migrateFromExtraV1();
 
     // Malformed work ID failed parseWorkId validation; no row recovered,
-    // Extra left untouched (user can hand-fix).
+    // and the line is stripped (it came from v2.0.0 runtime, never user-
+    // typed). Leaving it would let it sit forever across reinstalls.
     expect(getCachedData(item)).toBeNull();
-    expect(items.get("BAD")!.extra).toBe(extra);
+    expect(items.get("BAD")!.extra).not.toContain("Citegeist match ID");
+  });
+
+  it("multi-line match-ID Extra triggers bail (incoherent state)", async () => {
+    // Two mirror lines means runtime invariant was violated by an external
+    // editor or buggy plugin. Bail — do not pick one arbitrarily and
+    // silently destroy the other.
+    const extra = ["Citegeist match ID: W11111", "Citegeist match ID: W22222"].join("\n");
+    const item = mockItem("MULTI", extra);
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+
+    await migrateFromExtraV1();
+
+    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBeNull();
+    // Strip still applies — these are unconditionally runtime-managed lines.
+    expect(items.get("MULTI")!.extra).not.toContain("Citegeist match ID");
   });
 });
 

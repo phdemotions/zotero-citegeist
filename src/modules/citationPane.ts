@@ -18,8 +18,7 @@ import {
   clearCache,
   isCacheStale,
   getPendingSuggestion,
-  clearPendingSuggestion,
-  writeNoMatch,
+  dismissAsNoMatch,
   confirmTitleMatch,
   type CachedData,
   type PendingSuggestion,
@@ -681,6 +680,16 @@ function renderSuggestion(
       if (fresh) {
         renderPane(container, fresh, item, result.status === "ok" ? result.work : undefined);
         setSectionSummary(citationSummary(fresh.citedByCount, item));
+      } else if (result.status === "error") {
+        // Confirmation persisted in SQLite (confirmed_open_alex_id is set),
+        // but the follow-up fetch failed (network blip, transient 5xx).
+        // Without this branch the pane stays on `confirmLoading` forever,
+        // hiding the fact that the user's curation actually succeeded.
+        renderEmptyState(
+          container,
+          setSectionSummary,
+          result.error === "network" ? "unavailable" : "notFound",
+        );
       }
       invalidateColumnCache(item.id);
 
@@ -696,14 +705,21 @@ function renderSuggestion(
 
   const onDismiss = async (): Promise<void> => {
     try {
-      await clearPendingSuggestion(item);
-      await writeNoMatch(item);
+      // Atomic clear+no-match: prevents a concurrent fetch from landing
+      // work data between the two writes and producing a row with both
+      // real metrics AND no_match=1 (contradictory state).
+      await dismissAsNoMatch(item);
       renderEmptyState(container, setSectionSummary, "dismissed");
       invalidateColumnCache(item.id);
     } catch (e) {
       logError("renderSuggestion dismiss", e);
     }
   };
+
+  // Both tiers represent a possible-but-unconfirmed match; surface the
+  // status in the section header so it doesn't read "Loading…" or
+  // "Not found" while a confirmable match is visible in the body.
+  setSectionSummary("Possible match");
 
   if (suggestion.tier === "high") {
     // High-confidence: show a banner above the metrics
@@ -770,7 +786,6 @@ function renderSuggestion(
     card.appendChild(actions);
 
     container.appendChild(card);
-    setSectionSummary("Possible match");
   }
 }
 

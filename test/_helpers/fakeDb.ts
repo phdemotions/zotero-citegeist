@@ -94,6 +94,16 @@ export function makeFakeDb() {
         return [];
       }
 
+      if (
+        /^DELETE\s+FROM\s+migration_progress\s+WHERE\s+library_id\s+=\s+\?\s+AND\s+item_key\s+=\s+\?/i.test(
+          s,
+        )
+      ) {
+        const [libId, key] = params as [number, string];
+        progress.delete(compositeKey(libId, key));
+        return [];
+      }
+
       if (/^DELETE\s+FROM\s+migration_progress\s*$/i.test(s)) {
         progress.clear();
         return [];

@@ -194,20 +194,25 @@ function recoverConfirmedMatchOnly(
   extra: string,
 ): ItemCacheRow | null {
   const prefix = `${CONFIRMED_MATCH_EXTRA_PREFIX}:`;
+  const matches: string[] = [];
   for (const line of extra.split("\n")) {
-    if (!line.startsWith(prefix)) continue;
-    const id = parseWorkId(line.substring(prefix.length).trim());
-    if (!id) return null;
-    const row = emptyRow(libraryID, itemKey);
-    row.confirmed_open_alex_id = id;
-    row.match_method = "title-match";
-    // Default to medium tier — runtime confirmation didn't persist the
-    // tier across downgrade, and medium is the conservative choice
-    // (high-tier matches are auto-confirmed in the runtime path).
-    row.match_confidence = "medium";
-    return row;
+    if (line.startsWith(prefix)) matches.push(line);
   }
-  return null;
+  // Multiple mirror lines is incoherent — runtime writer always replaces
+  // any prior line on confirm. The presence of two means either a buggy
+  // upstream client or a hand-edit we don't understand. Bail rather than
+  // pick one arbitrarily and silently strip the others.
+  if (matches.length !== 1) return null;
+  const id = parseWorkId(matches[0].substring(prefix.length).trim());
+  if (!id) return null;
+  const row = emptyRow(libraryID, itemKey);
+  row.confirmed_open_alex_id = id;
+  row.match_method = "title-match";
+  // Tier is intentionally null: runtime confirmation didn't persist the
+  // original tier across downgrade, so the recovered row carries no
+  // tier rather than fabricating one. Readers branch on null gracefully.
+  row.match_confidence = null;
+  return row;
 }
 
 function buildRowFromLegacy(
@@ -508,18 +513,21 @@ export async function migrateFromExtraV1(): Promise<void> {
           // every user-confirmed title match, defeating the whole point of
           // mirroring confirmation state to Extra.
           if (parse.citegeistFields.size === 0) {
+            // Strip any `Citegeist match ID:` lines unconditionally — they
+            // came from v2.0.0 runtime and are not user-typed content. A
+            // valid line gets its work ID recovered into SQLite first; a
+            // malformed line is dropped (the next runtime confirmation
+            // re-emits a fresh, valid line). Without the strip-on-failure
+            // path, a `Citegeist match ID: garbage` line would sit in
+            // Extra forever, surviving reinstalls.
             const recovered = recoverConfirmedMatchOnly(item.libraryID, item.key, extra);
-            if (recovered) {
-              await upsertRow(recovered);
-              // Strip the now-redundant `Citegeist match ID:` line — v2.0.0
-              // confirmTitleMatch will re-emit it on next confirmation.
-              const stripped = setExtraConfirmedMatch(extra.split("\n"), null)
-                .join("\n")
-                .replace(/\n+$/, "");
-              if (stripped !== rawExtra) {
-                item.setField("extra", stripped);
-                await item.saveTx({ skipDateModifiedUpdate: true });
-              }
+            if (recovered) await upsertRow(recovered);
+            const stripped = setExtraConfirmedMatch(extra.split("\n"), null)
+              .join("\n")
+              .replace(/\n+$/, "");
+            if (stripped !== rawExtra) {
+              item.setField("extra", stripped);
+              await item.saveTx({ skipDateModifiedUpdate: true });
             }
             await checkpointItem(conn, item.libraryID, item.key);
             checkpointed.add(mirrorKey(item.libraryID, item.key));

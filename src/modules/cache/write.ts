@@ -143,6 +143,23 @@ export async function writeNoMatch(item: CacheItemKey): Promise<void> {
 }
 
 /**
+ * Atomic "user dismissed this suggestion" write. Clears the pending block
+ * AND sets no_match=1 in a single mutateRow so a concurrent runtime fetch
+ * cannot interleave between them and produce a row carrying both real
+ * work data AND no_match=1 (internally contradictory state).
+ */
+export async function dismissAsNoMatch(item: CacheItemKey): Promise<void> {
+  const libraryID = item.libraryID;
+  const itemKey = item.key;
+  await mutateRow(libraryID, itemKey, (existing) => ({
+    ...(existing ?? emptyRow(libraryID, itemKey)),
+    ...PENDING_CLEARED,
+    no_match: 1,
+    no_match_timestamp: new Date().toISOString(),
+  }));
+}
+
+/**
  * Confirm a title match: mark matchMethod/Confidence and store confirmedOpenAlexId
  * so future fetches go directly to the work by ID, bypassing title search.
  *
