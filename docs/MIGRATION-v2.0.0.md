@@ -57,6 +57,42 @@ Back up your Zotero data directory:
 
 To roll back: quit Zotero, swap the folders, reinstall v1.3.x.
 
+## What Citegeist does automatically to keep your data safe
+
+Before the migration touches a single item, Citegeist writes a JSON snapshot to your Zotero data directory at:
+
+```
+<dataDir>/citegeist-migration-backup-<ISO-timestamp>.json
+```
+
+The file contains the **full pre-migration Extra contents** of every item Citegeist is about to modify, keyed by `library_id` and `item_key`. Schema:
+
+```json
+{
+  "schema": "citegeist-migration-backup/v1",
+  "plugin_version": "2.0.0",
+  "zotero_version": "7.0.10",
+  "timestamp": "2026-05-28T...",
+  "note": "Restore by copying the `extra` field back to the matching item via Zotero's UI.",
+  "items": [
+    { "library_id": 1, "item_key": "ABC12345", "extra": "...full Extra text..." }
+  ]
+}
+```
+
+A one-time alert after the migration tells you the exact path. The file is plain JSON — open it in any text editor.
+
+**To restore a specific item by hand:**
+
+1. Find the item in Zotero. Note its 8-character item key (right-click → Show File → the key is in the filename, or copy from the item URL).
+2. Open the backup JSON. Search for the `"item_key": "<KEY>"` line.
+3. Copy the `"extra": "..."` string value.
+4. In Zotero, select the item → click **Extra** in the right pane → paste.
+
+Citegeist will see your `Citegeist.*` lines again on the next launch and re-migrate them idempotently (the SQLite row already exists from the first migration; only the Extra strip needs to re-run).
+
+**The backup file is never deleted automatically.** Delete it yourself once you're confident the migration was clean. Keeping it indefinitely is harmless — it's a single JSON file, typically a few hundred KB to a few MB.
+
 ## After upgrading
 
 Open `Help → Debug Output Logging → View Output` and check for:

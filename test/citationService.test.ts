@@ -18,6 +18,8 @@ import { makeFakeDb } from "./_helpers/fakeDb";
 
 let fakeDb = makeFakeDb();
 
+vi.stubGlobal("PathUtils", { join: (...parts: string[]) => parts.join("/") });
+
 // Mock Zotero global
 const mockZotero = {
   Prefs: {
@@ -33,6 +35,8 @@ const mockZotero = {
     request: vi.fn(),
   },
   debug: vi.fn(),
+  DataDirectory: { dir: "/tmp/zotero-test-data" },
+  File: { putContentsAsync: vi.fn(async () => {}) },
   DBConnection: vi.fn(function (this: unknown) {
     return fakeDb;
   }),

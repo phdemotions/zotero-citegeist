@@ -341,6 +341,20 @@ export async function migrateFromExtraV1(): Promise<void> {
     }
 
     const total = candidates.length;
+
+    // SAFETY NET: before touching a single Extra field, write a JSON
+    // snapshot of every candidate's pre-migration Extra to the data dir.
+    // If anything goes wrong — round-trip parse failure misdiagnosed,
+    // saveTx silently corrupts metadata, user reports lost notes — the
+    // user has a full audit log + restoration source.
+    //
+    // The file is also the user's escape hatch: they can manually walk
+    // the JSON entries and re-paste any lost content. We surface the
+    // path to the user via an alert after migration succeeds.
+    if (total > 0) {
+      await writeExtraBackup(candidates);
+    }
+
     const ui = buildProgressUI(total);
     let done = 0;
 
@@ -498,6 +512,50 @@ async function shouldForceRerun(): Promise<boolean> {
   } catch (e) {
     Zotero.debug(`[Citegeist] shouldForceRerun probe failed (non-fatal): ${String(e)}`);
     return false;
+  }
+}
+
+/**
+ * Write a pre-migration JSON snapshot of every candidate's full Extra
+ * field to `<dataDir>/citegeist-migration-backup-{ISO timestamp}.json`.
+ *
+ * Goal: an irreversible audit trail. If migration loses or alters any
+ * user content, the snapshot is the source of truth — the user can
+ * manually restore by opening the JSON, finding the item by
+ * `library_id` + `item_key`, and pasting `extra` back into the item's
+ * Extra field via Zotero's UI.
+ *
+ * Failure to write the backup file does NOT block migration — we log
+ * loudly so the user sees it in the debug output and surface it via
+ * the post-migration alert, but proceeding without a backup is better
+ * than refusing to migrate (which would leave the plugin permanently
+ * broken on a profile where the data dir is read-only).
+ */
+async function writeExtraBackup(candidates: _ZoteroTypes.Item[]): Promise<string | null> {
+  try {
+    const payload = {
+      schema: "citegeist-migration-backup/v1",
+      plugin_version: "2.0.0",
+      zotero_version: Zotero.version,
+      timestamp: new Date().toISOString(),
+      note: "Restore by copying the `extra` field back to the matching item via Zotero's UI.",
+      items: candidates.map((item) => ({
+        library_id: item.libraryID,
+        item_key: item.key,
+        extra: item.getField("extra") ?? "",
+      })),
+    };
+    const filename = `citegeist-migration-backup-${payload.timestamp.replace(/[:.]/g, "-")}.json`;
+    const path = PathUtils.join(Zotero.DataDirectory.dir, filename);
+    await Zotero.File.putContentsAsync(path, JSON.stringify(payload, null, 2));
+    Zotero.debug(
+      `[Citegeist] wrote pre-migration Extra backup: ${path} (${candidates.length} items)`,
+    );
+    trySetPref("extensions.zotero.citegeist.lastBackupPath", path);
+    return path;
+  } catch (e) {
+    Zotero.debug(`[Citegeist] FAILED to write pre-migration Extra backup: ${String(e)}`);
+    return null;
   }
 }
 

@@ -202,6 +202,14 @@ declare const Zotero: {
     getAll(): _ZoteroTypes.Library[];
   };
   DBConnection: new (name: string) => _ZoteroTypes.DBConnection;
+  /** Path to the active Zotero data directory (where `zotero.sqlite` lives). */
+  DataDirectory: {
+    dir: string;
+  };
+  /** Filesystem helpers exposed by Zotero. */
+  File: {
+    putContentsAsync(path: string, contents: string): Promise<void>;
+  };
   Sync: {
     Runner: {
       delaySync<T>(fn: () => Promise<T>): Promise<T>;
@@ -265,6 +273,11 @@ declare const ZoteroPane: {
 
 declare const ChromeUtils: {
   importESModule(url: string): Record<string, unknown>;
+};
+
+/** XPCOM path utilities for cross-platform path joining. */
+declare const PathUtils: {
+  join(...parts: string[]): string;
 };
 
 declare const Services: {

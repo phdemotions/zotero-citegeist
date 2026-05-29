@@ -19,6 +19,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > See [`docs/MIGRATION-v2.0.0.md`](docs/MIGRATION-v2.0.0.md) for the
 > full upgrade guide + recovery paths if anything goes wrong.
 
+### Safety net (automatic, before any Extra field is touched)
+
+- **Pre-migration JSON snapshot.** Before the migration mutates a single
+  item, Citegeist writes a verbatim copy of every Extra field it's
+  about to modify to `<dataDir>/citegeist-migration-backup-<timestamp>.json`
+  keyed by `library_id` + `item_key`. The file is plain JSON and stays
+  on disk indefinitely — open it in any text editor to restore an
+  item's original Extra value by hand if anything looks wrong.
+- **Post-migration alert** tells you the exact backup-file path on first
+  successful migration, so the location is never lost.
+- **Strict allowlist** for legacy `Citegeist.*` field names. Lines whose
+  key isn't in the known v1.3.x field set (e.g. a user-typed
+  `Citegeist.note: still useful`) are preserved verbatim in Extra,
+  never stripped.
+- **Round-trip invariant + sorted-multiset comparison** of every
+  parsed Extra: if the parser can't perfectly reproduce the input,
+  Citegeist writes the SQLite row but leaves the user's Extra
+  untouched. Migration refuses to mark itself complete while any items
+  remain unresolved, so the next launch retries them.
+
 ### Breaking
 
 - **Zotero 7.0.10 or newer is now required.** `addon/manifest.json`'s

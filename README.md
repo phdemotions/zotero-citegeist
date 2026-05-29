@@ -327,6 +327,12 @@ v2.0.0 moved cached citation data out of Zotero's `Extra` field and into a plugi
 2. **Make sure you're on Zotero 7.0.10 or newer.** Citegeist v2.0.0's manifest requires it, and the migration uses an API call that older builds silently ignore. Older versions will refuse to load the plugin — install Zotero from [zotero.org/downloads](https://www.zotero.org/downloads/) and try again.
 3. **Expect a one-time progress window** if your library has more than ~500 items with Citegeist data. Smaller migrations are instant.
 
+**Safety net Citegeist creates for you (automatic):**
+
+Before the migration touches a single item, Citegeist writes a JSON snapshot of every Extra field it's about to modify to your Zotero data directory. The file is named `citegeist-migration-backup-<timestamp>.json` and contains the full, verbatim Extra contents for every item being migrated, keyed by `library_id` + `item_key`. After migration completes, a one-time alert tells you exactly where the file lives.
+
+If anything looks wrong after migration — a note missing, an unfamiliar change to an item's Extra — open that JSON file, find the item by its key, and paste the `extra` value back into the item's Extra field via Zotero's UI. The file stays on disk permanently; delete it once you've confirmed everything is fine.
+
 **If something looks wrong after upgrading:**
 
 - _"All my citation columns are empty."_ Open `Help → Debug Output Logging → View Output` and look for `[Citegeist] cache initialized: N rows`. If `N` is 0 but you had data before, the migration may have been blocked. Check the surrounding log lines for `migration deferred` (Zotero version too old) or `cache not initialized` (DB couldn't open — usually antivirus quarantine of `<profile>/citegeist.sqlite`). Once unblocked, restart Zotero and the migration retries automatically.

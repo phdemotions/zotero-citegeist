@@ -31,6 +31,9 @@ export async function onStartup(data: PluginData): Promise<void> {
   // BEFORE any reader (pane, column) registers. Column dataProvider is
   // synchronous and assumes the mirror is populated.
   let cacheInitFailed = false;
+  const wasMigratedBefore = Zotero.Prefs.get("extensions.zotero.citegeist.migrationV1Complete") as
+    | boolean
+    | undefined;
   try {
     await initCache();
     await migrateFromExtraV1();
@@ -45,24 +48,41 @@ export async function onStartup(data: PluginData): Promise<void> {
   }
 
   if (cacheInitFailed) {
-    // Surface ONE alert so the user knows their column data and pane fetches
-    // are disabled until Zotero is restarted (and ideally the citegeist.sqlite
-    // file investigated — typically antivirus quarantine or a locked profile).
-    // We use setTimeout so this fires after the main window finishes loading.
-    Zotero.getMainWindow()?.setTimeout(() => {
-      try {
-        Services.prompt.alert(
-          Zotero.getMainWindow(),
-          "Citegeist: cache unavailable",
-          "Citegeist could not open its local cache database. Citation columns " +
-            "and the citation pane will not function until you restart Zotero. " +
-            "If the problem persists, check that <profile>/citegeist.sqlite is " +
-            "not locked or quarantined by antivirus.",
-        );
-      } catch (alertErr) {
-        logError("cache alert", alertErr);
-      }
-    }, 2000);
+    showStartupAlert(
+      "Citegeist: cache unavailable",
+      "Citegeist could not open its local cache database. Citation columns " +
+        "and the citation pane will not function until you restart Zotero. " +
+        "If the problem persists, check that <profile>/citegeist.sqlite is " +
+        "not locked or quarantined by antivirus.",
+    );
+  } else if (
+    !wasMigratedBefore &&
+    Zotero.Prefs.get("extensions.zotero.citegeist.migrationV1Complete")
+  ) {
+    // First successful migration of this profile. Surface a one-time
+    // alert pointing to the safety-net backup file so users know exactly
+    // where to find a verbatim copy of every pre-migration Extra field
+    // if they want to audit or restore anything.
+    const backupPath = Zotero.Prefs.get("extensions.zotero.citegeist.lastBackupPath") as
+      | string
+      | undefined;
+    const backupLine = backupPath
+      ? `A snapshot of every Extra field Citegeist touched was saved to:\n\n${backupPath}\n\n` +
+        "Keep it until you've confirmed everything looks right. If anything is missing, " +
+        "the JSON file lets you restore the original Extra contents by hand."
+      : "Citegeist could not write a pre-migration backup file to your data directory " +
+        "(usually a permissions issue). The migration still completed; if you need to " +
+        "audit the changes, your Zotero Sync history or a Time Machine snapshot from " +
+        "before today is the next-best source.";
+    showStartupAlert(
+      "Citegeist v2.0.0 — one-time migration complete",
+      "Citegeist v2.0.0 moved your cached citation data from each item's Extra field " +
+        "into a plugin-owned SQLite database (<profile>/citegeist.sqlite). Your library " +
+        "is otherwise unchanged.\n\n" +
+        backupLine +
+        "\n\nSee Help → Debug Output for the migration log, or read docs/MIGRATION-v2.0.0.md " +
+        "in the Citegeist GitHub repo for the full upgrade guide.",
+    );
   }
 
   // Register preference pane so users can access settings
@@ -88,6 +108,22 @@ export async function onStartup(data: PluginData): Promise<void> {
   }
 
   Zotero.debug("[Citegeist] Startup complete");
+}
+
+/**
+ * Show a single alert dialog from inside `onStartup`. Fires on a short
+ * delay so the main Zotero window has fully loaded before the modal
+ * appears, and wraps the call in try/catch so a missing `Services.prompt`
+ * (older builds, headless tests) can't crash startup.
+ */
+function showStartupAlert(title: string, body: string): void {
+  Zotero.getMainWindow()?.setTimeout(() => {
+    try {
+      Services.prompt.alert(Zotero.getMainWindow(), title, body);
+    } catch (alertErr) {
+      logError("startup alert", alertErr);
+    }
+  }, 2000);
 }
 
 export async function onShutdown(_data: PluginData): Promise<void> {

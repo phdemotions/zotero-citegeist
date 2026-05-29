@@ -32,9 +32,22 @@ function mockItem(key: string, extra: string = ""): _ZoteroTypes.Item {
 
 let fakeDb: ReturnType<typeof makeFakeDb>;
 
+// Captured calls to Zotero.File.putContentsAsync — tests assert backup contents here.
+const fileWrites: Array<{ path: string; contents: string }> = [];
+
+vi.stubGlobal("PathUtils", {
+  join: (...parts: string[]) => parts.join("/"),
+});
+
 const mockZotero = {
   version: "7.0.10",
   debug: vi.fn(),
+  DataDirectory: { dir: "/tmp/zotero-test-data" },
+  File: {
+    putContentsAsync: vi.fn(async (path: string, contents: string) => {
+      fileWrites.push({ path, contents });
+    }),
+  },
   Prefs: {
     get: vi.fn().mockImplementation((pref: string) => {
       if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
@@ -88,6 +101,7 @@ import {
 
 beforeEach(async () => {
   items.clear();
+  fileWrites.length = 0;
   fakeDb = makeFakeDb();
   // Replace DBConnection with a constructor that returns the fake.
   // vi.fn() with new-call returns whatever its body returns.
@@ -827,6 +841,69 @@ describe("runtime ID validation (write boundary)", () => {
     const data = getCachedData(item);
     expect(data!.openAlexId).toBe("W42");
     expect(data!.sourceId).toBeNull();
+  });
+});
+
+// ── Migration: pre-migration Extra backup safety net ──────────────────────
+
+describe("migration Extra backup", () => {
+  it("writes a JSON snapshot of every candidate's Extra before touching anything", async () => {
+    const extraA = "Citegeist.openAlexId: W500\nCitegeist.citedByCount: 12\nPMID: 11111";
+    const extraB = "Citegeist.openAlexId: W600\nUser note: don't lose me";
+    const itemA = mockItem("A1", extraA);
+    const itemB = mockItem("B1", extraB);
+    mockZotero.Items.getAll.mockResolvedValue([itemA, itemB]);
+
+    await migrateFromExtraV1();
+
+    expect(fileWrites).toHaveLength(1);
+    const { path, contents } = fileWrites[0];
+    expect(path).toMatch(/citegeist-migration-backup-.*\.json$/);
+    expect(path).toContain("/tmp/zotero-test-data/");
+
+    const payload = JSON.parse(contents);
+    expect(payload.schema).toBe("citegeist-migration-backup/v1");
+    expect(payload.plugin_version).toBe("2.0.0");
+    expect(payload.items).toHaveLength(2);
+
+    const byKey = Object.fromEntries(
+      (payload.items as Array<{ item_key: string; extra: string }>).map((i) => [i.item_key, i]),
+    );
+    // Snapshot captured the FULL pre-migration Extra verbatim.
+    expect(byKey.A1.extra).toBe(extraA);
+    expect(byKey.B1.extra).toBe(extraB);
+  });
+
+  it("records the backup file path in lastBackupPath pref for the alert", async () => {
+    mockZotero.Items.getAll.mockResolvedValue([
+      mockItem("X1", "Citegeist.openAlexId: W700\nCitegeist.citedByCount: 1"),
+    ]);
+    await migrateFromExtraV1();
+    expect(mockZotero.Prefs.set).toHaveBeenCalledWith(
+      "extensions.zotero.citegeist.lastBackupPath",
+      expect.stringMatching(/citegeist-migration-backup-.*\.json$/),
+    );
+  });
+
+  it("skips backup write when there are no candidates", async () => {
+    // Empty library — nothing to migrate, nothing to back up.
+    mockZotero.Items.getAll.mockResolvedValue([]);
+    await migrateFromExtraV1();
+    expect(fileWrites).toHaveLength(0);
+  });
+
+  it("continues migration even if backup write fails (logged, not fatal)", async () => {
+    mockZotero.File.putContentsAsync.mockRejectedValueOnce(new Error("disk full"));
+    const item = mockItem("F1", "Citegeist.openAlexId: W800\nCitegeist.citedByCount: 4");
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+
+    await migrateFromExtraV1();
+
+    // Migration still ran: row persisted, Extra stripped.
+    expect(getCachedData(item)!.openAlexId).toBe("W800");
+    expect(items.get("F1")!.extra).not.toContain("Citegeist.");
+    // No file was written (the rejection happened mid-call).
+    expect(fileWrites).toHaveLength(0);
   });
 });
 
