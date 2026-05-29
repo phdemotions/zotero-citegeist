@@ -280,6 +280,12 @@ declare const PathUtils: {
   join(...parts: string[]): string;
 };
 
+/** Async filesystem helpers exposed by Mozilla's `IOUtils` (Firefox/Zotero 7+). */
+declare const IOUtils: {
+  getChildren(dir: string): Promise<string[]>;
+  remove(path: string): Promise<void>;
+};
+
 declare const Services: {
   scriptloader: {
     loadSubScript(url: string, scope?: unknown): void;

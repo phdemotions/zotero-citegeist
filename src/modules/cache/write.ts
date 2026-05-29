@@ -22,6 +22,7 @@ import {
   toDbBool,
 } from "./types";
 import { deleteRow, mutateRow } from "./db";
+import { isMigrationInProgress } from "./migration";
 
 /** Pending-suggestion fields cleared together on confirm/dismiss. */
 const PENDING_CLEARED = {
@@ -247,6 +248,20 @@ async function writeConfirmedMatchToExtra(
   item: _ZoteroTypes.Item,
   openAlexId: string,
 ): Promise<void> {
+  // Defer Extra writes while migration is mid-loop. Without this, the
+  // runtime saveTx could race with migration's Step 2 strip and either
+  // (a) resurrect legacy `Citegeist.*` lines that migration was about
+  // to remove, or (b) clobber a stripped Extra with the pre-strip
+  // contents. SQLite still got updated by the caller's `mutateRow`, so
+  // the user's confirmation is persisted; the Extra mirror just waits
+  // for the next confirmTitleMatch (or skips this round entirely —
+  // acceptable, the mirror is only used for downgrade/cross-device).
+  if (isMigrationInProgress()) {
+    Zotero.debug(
+      `[Citegeist] writeConfirmedMatchToExtra deferred while migration is running (item ${item.key})`,
+    );
+    return;
+  }
   // openAlexId is already validated by cacheWorkData / writePendingSuggestion /
   // buildRowFromLegacy at the row's write boundary — no re-check here.
   const extra = item.getField("extra") ?? "";

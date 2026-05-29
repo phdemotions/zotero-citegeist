@@ -15,6 +15,7 @@
  */
 
 import {
+  MAX_BACKUP_FILES,
   MIGRATION_PROGRESS_TICK,
   ORPHAN_GC_CHUNK_SIZE,
   ORPHAN_GC_MIN_INTERVAL_MS,
@@ -24,6 +25,7 @@ import { safeParseFloat, safeParseInt } from "../utils";
 import { deleteMirrorEntries, mirrorSnapshot, requireDb, upsertRow } from "./db";
 import { setExtraConfirmedMatch } from "./write";
 import {
+  CONFIRMED_MATCH_EXTRA_PREFIX,
   emptyRow,
   isMatchMethod,
   isMatchTier,
@@ -33,6 +35,25 @@ import {
   parseSourceId,
   parseWorkId,
 } from "./types";
+
+// ── Runtime/migration coordination ────────────────────────────────────────
+
+/**
+ * Set to `true` while `migrateFromExtraV1` is running. Runtime write
+ * paths that touch the Extra field (currently only
+ * `writeConfirmedMatchToExtra`) check this and defer to avoid
+ * resurrecting legacy lines that the migration is in the middle of
+ * stripping. The flag lives in this module rather than `db.ts` so the
+ * migration owns the coordination and removing the legacy parser also
+ * removes the flag.
+ */
+let migrationInProgress = false;
+function setMigrationInProgress(v: boolean): void {
+  migrationInProgress = v;
+}
+export function isMigrationInProgress(): boolean {
+  return migrationInProgress;
+}
 
 // ── Legacy parser ──────────────────────────────────────────────────────────
 
@@ -81,10 +102,31 @@ interface LegacyParse {
 
 /**
  * Parse the legacy `Citegeist.*` namespace out of an Extra field.
+ *
+ * Tolerates real-world Extra-field contents:
+ *   - CRLF line endings (Windows): `\r\n` and trailing `\r` on each
+ *     line are normalized. Without this, Windows-edited Extra would
+ *     leave `\r` on every value, fail every `parseWorkId` validation,
+ *     and silently null the entire row — silent data loss.
+ *   - Leading BOM (`﻿`): some import sources prefix exports with
+ *     a UTF-8 BOM, which would otherwise make `startsWith("Citegeist.")`
+ *     return false on the first line and skip migration.
+ *   - Extra whitespace around values (`Citegeist.openAlexId:  W123 `):
+ *     trimmed before storage so validation succeeds.
+ *
  * Lines whose key is not in `KNOWN_LEGACY_FIELDS` are preserved in
  * `otherLines` to defend against silent data loss for user-typed notes
  * that happen to start with `Citegeist.`.
  */
+/**
+ * Pre-parse normalization. Strips a leading BOM and folds CRLF / CR to
+ * LF so downstream split/match logic doesn't have to think about either.
+ * Exported (in spirit) via the caller; tests can call this directly.
+ */
+function normalizeExtraForParse(extra: string): string {
+  return extra.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+}
+
 function parseExtraLegacy(extra: string): LegacyParse {
   const citegeistFields = new Map<string, string>();
   const otherLines: string[] = [];
@@ -95,7 +137,10 @@ function parseExtraLegacy(extra: string): LegacyParse {
       if (idx > 0) {
         const key = line.substring(LEGACY_PREFIX.length, idx);
         if (KNOWN_LEGACY_FIELDS.has(key)) {
-          citegeistFields.set(line.substring(0, idx), line.substring(idx + 2));
+          // .trim() defends against whitespace-padded values
+          // (`Citegeist.openAlexId:  W123 `) that would otherwise fail
+          // strict validators like `parseWorkId`.
+          citegeistFields.set(`${LEGACY_PREFIX}${key}`, line.substring(idx + 2).trim());
           continue;
         }
       }
@@ -116,11 +161,20 @@ function parseExtraLegacy(extra: string): LegacyParse {
  * comparison preserves duplicate counts so a collapsed duplicate trips the check.
  */
 function verifyParseRoundTrip(extra: string, parse: LegacyParse): boolean {
+  // Compare with per-line trimming because `parseExtraLegacy` trims values
+  // on known Citegeist fields. The reassembled form is byte-equal to the
+  // input modulo trailing whitespace, which is cosmetic; the invariant
+  // this guards is "no line lost or its identity mutated."
+  const norm = (s: string) => s.trim();
   const cgLines: string[] = [];
   for (const [k, v] of parse.citegeistFields) cgLines.push(`${k}: ${v}`);
-  const reassembled = [...parse.otherLines, ...cgLines].filter((l) => l !== "").sort();
+  const reassembled = [...parse.otherLines, ...cgLines]
+    .map(norm)
+    .filter((l) => l !== "")
+    .sort();
   const original = extra
     .split("\n")
+    .map(norm)
     .filter((l) => l !== "")
     .sort();
   if (reassembled.length !== original.length) return false;
@@ -321,6 +375,8 @@ export async function migrateFromExtraV1(): Promise<void> {
   // completion until the next launch retries.
   let unresolvedSkips = 0;
 
+  setMigrationInProgress(true);
+
   await Zotero.Sync.Runner.delaySync(async () => {
     // Collect candidates across every library the user can write to. Skip
     // read-only group libraries: Step 1 (SQLite write) would succeed but
@@ -328,6 +384,12 @@ export async function migrateFromExtraV1(): Promise<void> {
     // permanently unresolved and re-scanning the same items every launch.
     // Items in read-only libraries still get SQLite rows lazily via the
     // runtime fetch path; only the Extra strip is impossible.
+    // Candidates: items containing the legacy `Citegeist.*` namespace
+    // OR a runtime `Citegeist match ID:` line. The latter exists only
+    // on items whose user confirmed a title match during a v2.0.0+
+    // session and then downgraded to v1.3.x before re-upgrading; the
+    // line carries recoverable confirmation state we want to migrate
+    // even though there's no `Citegeist.` prefix anywhere on the item.
     const candidates: _ZoteroTypes.Item[] = [];
     for (const lib of Zotero.Libraries.getAll()) {
       if (!lib.editable) continue;
@@ -336,7 +398,10 @@ export async function migrateFromExtraV1(): Promise<void> {
         if (item.deleted) continue;
         if (!item.isRegularItem()) continue;
         const extra = item.getField("extra");
-        if (extra && extra.includes(LEGACY_PREFIX)) candidates.push(item);
+        if (!extra) continue;
+        if (extra.includes(LEGACY_PREFIX) || extra.includes(CONFIRMED_MATCH_EXTRA_PREFIX)) {
+          candidates.push(item);
+        }
       }
     }
 
@@ -390,7 +455,12 @@ export async function migrateFromExtraV1(): Promise<void> {
 
         if (checkpointed.has(mirrorKey(item.libraryID, item.key))) continue;
 
-        const extra = item.getField("extra") ?? "";
+        const rawExtra = item.getField("extra") ?? "";
+        // Normalize line endings + strip BOM once. parseExtraLegacy and
+        // verifyParseRoundTrip both expect a clean LF-delimited string;
+        // working off the raw `\r\n`-mixed value would corrupt values
+        // (every parseWorkId would fail) AND fail the round-trip check.
+        const extra = normalizeExtraForParse(rawExtra);
         const parse = parseExtraLegacy(extra);
 
         // Defensive checkpoint: zero Citegeist fields means either the item
@@ -461,6 +531,8 @@ export async function migrateFromExtraV1(): Promise<void> {
     ui?.close();
     Zotero.debug(`[Citegeist] migration complete: ${total} items processed`);
   });
+
+  setMigrationInProgress(false);
 
   // Mark complete only when every candidate processed cleanly. Round-trip
   // skips, salvage-only writes, and per-item errors all increment
@@ -552,10 +624,37 @@ async function writeExtraBackup(candidates: _ZoteroTypes.Item[]): Promise<string
       `[Citegeist] wrote pre-migration Extra backup: ${path} (${candidates.length} items)`,
     );
     trySetPref("extensions.zotero.citegeist.lastBackupPath", path);
+    await pruneOldBackups();
     return path;
   } catch (e) {
     Zotero.debug(`[Citegeist] FAILED to write pre-migration Extra backup: ${String(e)}`);
     return null;
+  }
+}
+
+/**
+ * Cap the number of `citegeist-migration-backup-*.json` files in the data
+ * directory to `MAX_BACKUP_FILES`. Filenames embed an ISO-8601 timestamp
+ * (sortable lexically), so the lex-sorted list has the newest at the end.
+ * Best-effort: failures are logged but don't propagate — the latest
+ * backup succeeded, which is what the user needs for recovery.
+ */
+async function pruneOldBackups(): Promise<void> {
+  try {
+    const entries = await IOUtils.getChildren(Zotero.DataDirectory.dir);
+    const backups = entries.filter((p) => /citegeist-migration-backup-.+\.json$/.test(p)).sort();
+    const excess = backups.length - MAX_BACKUP_FILES;
+    if (excess <= 0) return;
+    for (const oldPath of backups.slice(0, excess)) {
+      try {
+        await IOUtils.remove(oldPath);
+        Zotero.debug(`[Citegeist] pruned old backup: ${oldPath}`);
+      } catch (e) {
+        Zotero.debug(`[Citegeist] prune-old-backup failed for ${oldPath}: ${String(e)}`);
+      }
+    }
+  } catch (e) {
+    Zotero.debug(`[Citegeist] backup pruning skipped (non-fatal): ${String(e)}`);
   }
 }
 

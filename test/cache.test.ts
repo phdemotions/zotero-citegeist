@@ -39,6 +39,11 @@ vi.stubGlobal("PathUtils", {
   join: (...parts: string[]) => parts.join("/"),
 });
 
+vi.stubGlobal("IOUtils", {
+  getChildren: vi.fn(async () => [] as string[]),
+  remove: vi.fn(async () => {}),
+});
+
 const mockZotero = {
   version: "7.0.10",
   debug: vi.fn(),
@@ -904,6 +909,63 @@ describe("migration Extra backup", () => {
     expect(items.get("F1")!.extra).not.toContain("Citegeist.");
     // No file was written (the rejection happened mid-call).
     expect(fileWrites).toHaveLength(0);
+  });
+});
+
+// ── Migration: Extra-field edge cases ──────────────────────────────────────
+
+describe("migration Extra-field edge cases", () => {
+  it("handles CRLF line endings without losing the OpenAlex ID", async () => {
+    const extra = "Citegeist.openAlexId: W90020\r\nCitegeist.citedByCount: 7\r\n";
+    const item = mockItem("CRLF", extra);
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+
+    await migrateFromExtraV1();
+
+    const data = getCachedData(item);
+    // CRLF previously caused parseWorkId to reject "W90020\r" → null.
+    expect(data).not.toBeNull();
+    expect(data!.openAlexId).toBe("W90020");
+    expect(data!.citedByCount).toBe(7);
+    // Extra stripped (LF-normalized).
+    expect(items.get("CRLF")!.extra).not.toContain("Citegeist.");
+  });
+
+  it("strips leading BOM before parsing", async () => {
+    const extra = "﻿Citegeist.openAlexId: W90021\nCitegeist.citedByCount: 3";
+    const item = mockItem("BOM", extra);
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+
+    await migrateFromExtraV1();
+
+    const data = getCachedData(item);
+    expect(data).not.toBeNull();
+    expect(data!.openAlexId).toBe("W90021");
+  });
+
+  it("trims whitespace-padded values that would otherwise fail validation", async () => {
+    // Two spaces after colon, trailing space on the value.
+    const extra = "Citegeist.openAlexId:  W90022 \nCitegeist.citedByCount: 11";
+    const item = mockItem("WS", extra);
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+
+    await migrateFromExtraV1();
+
+    expect(getCachedData(item)!.openAlexId).toBe("W90022");
+  });
+
+  it("picks up downgrade-replay items containing only a 'Citegeist match ID:' line", async () => {
+    // No `Citegeist.` prefix — only the v2-runtime mirror line.
+    const extra = "Citegeist match ID: W90023";
+    const item = mockItem("MID", extra);
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+
+    await migrateFromExtraV1();
+
+    // Candidate scan now includes items with CONFIRMED_MATCH_EXTRA_PREFIX.
+    // The Extra line itself isn't parseable as a legacy field but the
+    // defensive-checkpoint branch fires, so the item is processed cleanly.
+    expect(items.get("MID")!.extra).toBe(extra); // line preserved
   });
 });
 

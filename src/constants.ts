@@ -56,6 +56,8 @@ export const SHOW_PROGRESS_UI_THRESHOLD = 500;
 export const MIGRATION_PROGRESS_TICK = 50;
 /** Max item_keys per `DELETE … WHERE item_key IN (…)` chunk during orphan GC. */
 export const ORPHAN_GC_CHUNK_SIZE = 200;
+/** Max migration-backup JSON files to keep in the data dir. Older files removed. */
+export const MAX_BACKUP_FILES = 5;
 /** Minimum interval between orphan-GC sweeps at startup. */
 export const ORPHAN_GC_MIN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
