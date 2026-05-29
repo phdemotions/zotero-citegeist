@@ -186,7 +186,7 @@ Open Zotero's settings (**Zotero &rarr; Settings** on macOS, **Edit &rarr; Prefe
 
 ## Multi-device behavior
 
-Starting with v1.4.0, Citegeist stores cached citation data in a plugin-owned
+Starting with v2.0.0, Citegeist stores cached citation data in a plugin-owned
 SQLite file (`<profile>/citegeist.sqlite`) instead of writing to your items'
 Extra fields. This keeps your library completely clean: uninstalling
 Citegeist leaves no orphan data behind.
@@ -315,7 +315,7 @@ No. Citegeist requires Zotero 7 or later (including Zotero 8). You can [upgrade 
 <details>
 <summary><strong>Upgrading from v1.3.x — what changed, and what to do if something looks wrong</strong></summary>
 
-v1.4.0 moved cached citation data out of Zotero's `Extra` field and into a plugin-owned SQLite database (`<profile>/citegeist.sqlite`). A one-time migration on first launch strips the old `Citegeist.*` lines from your items and rewrites them into the new cache. After migration:
+v2.0.0 moved cached citation data out of Zotero's `Extra` field and into a plugin-owned SQLite database (`<profile>/citegeist.sqlite`). A one-time migration on first launch strips the old `Citegeist.*` lines from your items and rewrites them into the new cache. After migration:
 
 - **Your library is left clean.** Removing Citegeist no longer leaves orphan data behind.
 - **One line survives in Extra by design.** `Citegeist match ID: W12345678` (no leading namespace) appears only on items where you manually confirmed a title match. It's the only piece of user-curated state that needs to survive plugin downgrade and propagate across devices via Zotero Sync.
@@ -324,7 +324,7 @@ v1.4.0 moved cached citation data out of Zotero's `Extra` field and into a plugi
 **Recommended before upgrading:**
 
 1. **Back up your Zotero data directory.** Right-click anywhere in the library → **Show Data Directory**. Quit Zotero. Copy that folder somewhere safe (Time Machine, Dropbox version history, or just a `Zotero.backup` next to it). Restart Zotero and continue with the upgrade.
-2. **Make sure you're on Zotero 7.0.10 or newer.** Citegeist v1.4.0's manifest requires it, and the migration uses an API call that older builds silently ignore. Older versions will refuse to load the plugin — install Zotero from [zotero.org/downloads](https://www.zotero.org/downloads/) and try again.
+2. **Make sure you're on Zotero 7.0.10 or newer.** Citegeist v2.0.0's manifest requires it, and the migration uses an API call that older builds silently ignore. Older versions will refuse to load the plugin — install Zotero from [zotero.org/downloads](https://www.zotero.org/downloads/) and try again.
 3. **Expect a one-time progress window** if your library has more than ~500 items with Citegeist data. Smaller migrations are instant.
 
 **If something looks wrong after upgrading:**

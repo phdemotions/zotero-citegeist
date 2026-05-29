@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.4.0] — 2026-05-27
+## [2.0.0] — 2026-05-28
+
+> **Major version bump.** v2.0.0 completely revamps how Citegeist stores
+> cached citation data. The storage format moves from per-item Zotero
+> `Extra` fields to a plugin-owned SQLite database, the minimum Zotero
+> version goes up, and the upgrade requires a one-time migration of
+> every item with previously-cached data. SemVer says that's a major
+> bump — hence `2.0.0`, not `1.4.0`.
+>
+> See [`docs/MIGRATION-v2.0.0.md`](docs/MIGRATION-v2.0.0.md) for the
+> full upgrade guide + recovery paths if anything goes wrong.
 
 ### Breaking
 
@@ -18,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   item as locally modified and trigger a full-library re-sync. The
   manifest bump prevents the plugin from loading on builds where the
   migration cannot run safely.
+- **Storage format changed.** Cached citation data, FWCI, journal
+  metrics, and match metadata now live in `<profile>/citegeist.sqlite`
+  instead of each item's Extra field. A one-time migration runs on
+  first launch and strips the legacy `Citegeist.*` lines. Plain
+  downgrade to v1.x post-migration loses cached data (re-fetchable from
+  OpenAlex on first column scan; users can also reinstall a v1.x XPI
+  from Releases to read the surviving `Citegeist match ID:` line).
 
 ### Your library data is now untouched
 
@@ -109,7 +126,7 @@ If you uninstall Citegeist, your library is left exactly as it was.
 
 ### Out of scope (deferred to 1.5.x)
 
-- Group library migration. v1.4.0 migrates the user library only; group library
+- Group library migration. v2.0.0 migrates the user library only; group library
   items lazily refetch from OpenAlex when viewed.
 - Export / import of the SQLite cache as JSON.
 
@@ -267,7 +284,7 @@ If you uninstall Citegeist, your library is left exactly as it was.
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
-[1.4.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.3.0...v1.4.0
+[2.0.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.3.0...v2.0.0
 [1.3.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/phdemotions/zotero-citegeist/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.1.2...v1.2.0

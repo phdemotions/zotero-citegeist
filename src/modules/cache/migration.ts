@@ -1,5 +1,5 @@
 /**
- * One-shot migration from legacy Extra-field storage (v1.3.x → v1.4.0)
+ * One-shot migration from legacy Extra-field storage (v1.3.x → v2.0.0)
  * and orphan-row garbage collection.
  *
  * Both pieces live here because:
@@ -138,7 +138,7 @@ function buildRowFromLegacy(
   const get = (k: string) => fields.get(`${LEGACY_PREFIX}${k}`);
   const row = emptyRow(libraryID, itemKey);
 
-  // Validate IDs at the legacy trust boundary, symmetric with v1.4.0 runtime
+  // Validate IDs at the legacy trust boundary, symmetric with v2.0.0 runtime
   // writes. Malformed values (hand-edited Extra, corrupted v1.3.x write) must
   // not flow into SQLite where readers would treat them as real OpenAlex IDs.
   row.open_alex_id = parseWorkId(get("openAlexId"));

@@ -405,7 +405,7 @@ Implementation: query Zotero for all valid item keys, `DELETE FROM item_cache WH
 The plan above describes the design as approved for implementation. The
 following behaviors were added during four iterative review rounds applied
 to commits 1–6 on `feat/sqlite-cache-migration`. Treat this section as the
-authoritative description of what actually ships in v1.4.0.
+authoritative description of what actually ships in v2.0.0.
 
 ### Schema
 

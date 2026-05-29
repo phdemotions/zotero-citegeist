@@ -1,6 +1,6 @@
-# Migrating from v1.3.x to v1.4.0
+# Migrating from v1.3.x to v2.0.0
 
-> v1.4.0 moves cached citation data out of Zotero item `Extra` fields into a plugin-owned SQLite database. Storage format changed; UI and feature set didn't.
+> v2.0.0 moves cached citation data out of Zotero item `Extra` fields into a plugin-owned SQLite database. Storage format changed; UI and feature set didn't.
 
 ## Why this change
 
@@ -20,9 +20,9 @@ Four problems with that:
 3. **Orphan data on uninstall.** Removing Citegeist left `Citegeist.*` lines in every item forever.
 4. **Backup-restore staleness.** Restoring an older library backup overwrote fresher cached values silently.
 
-v1.4.0 uses the documented Zotero 7+ plugin storage pattern: a plugin-owned SQLite file opened via `Zotero.DBConnection`. Better BibTeX uses the same pattern.
+v2.0.0 uses the documented Zotero 7+ plugin storage pattern: a plugin-owned SQLite file opened via `Zotero.DBConnection`. Better BibTeX uses the same pattern.
 
-## What v1.4.0 does
+## What v2.0.0 does
 
 ### On first launch
 
@@ -52,8 +52,8 @@ Back up your Zotero data directory:
 
 1. In Zotero: right-click anywhere in the library tree → **Show Data Directory**.
 2. Quit Zotero on every device.
-3. Copy that folder somewhere safe (Time Machine, Dropbox version history, or a sibling `Zotero.backup-pre-v1.4.0`).
-4. Restart Zotero, install v1.4.0.
+3. Copy that folder somewhere safe (Time Machine, Dropbox version history, or a sibling `Zotero.backup-pre-v2.0.0`).
+4. Restart Zotero, install v2.0.0.
 
 To roll back: quit Zotero, swap the folders, reinstall v1.3.x.
 
@@ -73,7 +73,7 @@ Open `Help → Debug Output Logging → View Output` and check for:
 ## UI changes
 
 - Citation columns: same data, now sourced from SQLite via the in-memory mirror.
-- 3-tile metric pane (Citations / FWCI / Percentile) now adapts to Zotero theme. v1.3.x hardcoded dark-theme colors that rendered invisibly on light theme; v1.4.0 inherits the active theme.
+- 3-tile metric pane (Citations / FWCI / Percentile) now adapts to Zotero theme. v1.3.x hardcoded dark-theme colors that rendered invisibly on light theme; v2.0.0 inherits the active theme.
 
 ## Recovery paths
 

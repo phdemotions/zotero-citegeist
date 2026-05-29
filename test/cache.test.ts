@@ -1,5 +1,5 @@
 /**
- * Tests for the SQLite-backed cache module (v1.4.0+).
+ * Tests for the SQLite-backed cache module (v2.0.0+).
  *
  * The cache reads from an in-memory mirror populated at startup. Tests
  * stub `Zotero.DBConnection` with an in-memory fake and exercise the

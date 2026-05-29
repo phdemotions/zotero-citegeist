@@ -339,7 +339,7 @@ describe("fetchAndCacheItem", () => {
     expect(result.status).toBe("ok");
     expect(mockedGetWorkByPMID).toHaveBeenCalledWith("12345678");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
-    // v1.4.0+: cache writes go to SQLite, not the item's Extra field —
+    // v2.0.0+: cache writes go to SQLite, not the item's Extra field —
     // so saveTx is no longer triggered by a normal fetch.
   });
 
@@ -352,7 +352,7 @@ describe("fetchAndCacheItem", () => {
     expect(result.status).toBe("ok");
     expect(mockedGetWorkByArxivId).toHaveBeenCalledWith("2205.01833");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
-    // v1.4.0+: cache writes go to SQLite, not the item's Extra field —
+    // v2.0.0+: cache writes go to SQLite, not the item's Extra field —
     // so saveTx is no longer triggered by a normal fetch.
   });
 
@@ -403,7 +403,7 @@ describe("fetchAndCacheItem", () => {
     expect(result.status).toBe("ok");
     expect(mockedGetWorkByISBN).toHaveBeenCalledWith("9780262046309");
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
-    // v1.4.0+: cache writes go to SQLite, not the item's Extra field —
+    // v2.0.0+: cache writes go to SQLite, not the item's Extra field —
     // so saveTx is no longer triggered by a normal fetch.
   });
 
