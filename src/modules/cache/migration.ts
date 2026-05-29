@@ -513,21 +513,24 @@ export async function migrateFromExtraV1(): Promise<void> {
           // every user-confirmed title match, defeating the whole point of
           // mirroring confirmation state to Extra.
           if (parse.citegeistFields.size === 0) {
-            // Strip any `Citegeist match ID:` lines unconditionally — they
-            // came from v2.0.0 runtime and are not user-typed content. A
-            // valid line gets its work ID recovered into SQLite first; a
-            // malformed line is dropped (the next runtime confirmation
-            // re-emits a fresh, valid line). Without the strip-on-failure
-            // path, a `Citegeist match ID: garbage` line would sit in
-            // Extra forever, surviving reinstalls.
+            // Only strip the `Citegeist match ID:` line(s) when recovery
+            // succeeded. A user maintaining free-form notes might include
+            // `Citegeist match ID: see footnote 3` as their own annotation
+            // — destroying that line would be silent data loss with the
+            // pre-migration JSON backup as the only recovery path. If the
+            // line doesn't parse as a valid W-ID we leave it alone: a
+            // false-positive in the candidate filter is harmless, a
+            // false-positive in the strip is destructive.
             const recovered = recoverConfirmedMatchOnly(item.libraryID, item.key, extra);
-            if (recovered) await upsertRow(recovered);
-            const stripped = setExtraConfirmedMatch(extra.split("\n"), null)
-              .join("\n")
-              .replace(/\n+$/, "");
-            if (stripped !== rawExtra) {
-              item.setField("extra", stripped);
-              await item.saveTx({ skipDateModifiedUpdate: true });
+            if (recovered) {
+              await upsertRow(recovered);
+              const stripped = setExtraConfirmedMatch(extra.split("\n"), null)
+                .join("\n")
+                .replace(/\n+$/, "");
+              if (stripped !== rawExtra) {
+                item.setField("extra", stripped);
+                await item.saveTx({ skipDateModifiedUpdate: true });
+              }
             }
             await checkpointItem(conn, item.libraryID, item.key);
             checkpointed.add(mirrorKey(item.libraryID, item.key));
@@ -576,15 +579,35 @@ export async function migrateFromExtraV1(): Promise<void> {
           // item must not stall the entire migration loop. The per-item
           // try/catch absorbs the throw and bumps unresolvedSkips so the
           // next launch retries.
-          await Promise.race([
-            item.saveTx({ skipDateModifiedUpdate: true }),
-            new Promise<never>((_, reject) =>
-              setTimeout(
-                () => reject(new Error(`saveTx timed out after ${MIGRATION_ITEM_TIMEOUT_MS}ms`)),
-                MIGRATION_ITEM_TIMEOUT_MS,
-              ),
-            ),
-          ]);
+          //
+          // Two pieces of hygiene baked in:
+          //   • clearTimeout on the success path so the timer + closure
+          //     don't accumulate (perf-1). Migrations on large libraries
+          //     would otherwise hold ~3000 live timers + closures at
+          //     steady state.
+          //   • `.catch(noop)` on the saveTx promise BEFORE handing it to
+          //     Promise.race so a late-arriving rejection (after timeout)
+          //     can't surface as an unhandled rejection in Zotero's error
+          //     console (ADV-L-004).
+          const saveTxPromise = item.saveTx({ skipDateModifiedUpdate: true }).catch((late) => {
+            Zotero.debug(
+              `[Citegeist] late saveTx rejection for ${item.libraryID}:${item.key} (already timed out): ${normalizeError(late)}`,
+            );
+          });
+          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              saveTxPromise,
+              new Promise<never>((_, reject) => {
+                timeoutHandle = setTimeout(
+                  () => reject(new Error(`saveTx timed out after ${MIGRATION_ITEM_TIMEOUT_MS}ms`)),
+                  MIGRATION_ITEM_TIMEOUT_MS,
+                );
+              }),
+            ]);
+          } finally {
+            if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+          }
 
           // Step 3 (must follow step 2): checkpoint. Mark the in-memory
           // `checkpointed` Set BEFORE the SQL write — a successful

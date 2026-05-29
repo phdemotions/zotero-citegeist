@@ -977,24 +977,26 @@ describe("migration Extra-field edge cases", () => {
     expect(items.get("MID")!.extra).not.toContain("Citegeist match ID");
   });
 
-  it("strips malformed `Citegeist match ID:` line — never user-typed content", async () => {
-    const extra = "Citegeist match ID: not-a-work-id";
-    const item = mockItem("BAD", extra);
+  it("preserves malformed `Citegeist match ID:` line — could be user-typed content", async () => {
+    // ADV-L-001: a user maintaining their own Extra notes might write
+    // something like `Citegeist match ID: see footnote 3 in MyReviewBook`.
+    // We must NOT destroy it just because the candidate filter matched
+    // the prefix substring. Strip only when recovery succeeded.
+    const extra = "Citegeist match ID: see footnote 3 in my notes";
+    const item = mockItem("USRTXT", extra);
     mockZotero.Items.getAll.mockResolvedValue([item]);
 
     await migrateFromExtraV1();
 
-    // Malformed work ID failed parseWorkId validation; no row recovered,
-    // and the line is stripped (it came from v2.0.0 runtime, never user-
-    // typed). Leaving it would let it sit forever across reinstalls.
     expect(getCachedData(item)).toBeNull();
-    expect(items.get("BAD")!.extra).not.toContain("Citegeist match ID");
+    // Line survives — strip only fires when recovery wrote a real W-ID.
+    expect(items.get("USRTXT")!.extra).toBe(extra);
   });
 
-  it("multi-line match-ID Extra triggers bail (incoherent state)", async () => {
-    // Two mirror lines means runtime invariant was violated by an external
-    // editor or buggy plugin. Bail — do not pick one arbitrarily and
-    // silently destroy the other.
+  it("multi-line match-ID Extra triggers bail without strip (incoherent state preserved)", async () => {
+    // Two mirror lines means runtime invariant was violated. Bail
+    // (no recovery, no row) and leave Extra untouched — the user can
+    // inspect and hand-fix rather than have us pick one arbitrarily.
     const extra = ["Citegeist match ID: W11111", "Citegeist match ID: W22222"].join("\n");
     const item = mockItem("MULTI", extra);
     mockZotero.Items.getAll.mockResolvedValue([item]);
@@ -1002,8 +1004,7 @@ describe("migration Extra-field edge cases", () => {
     await migrateFromExtraV1();
 
     expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBeNull();
-    // Strip still applies — these are unconditionally runtime-managed lines.
-    expect(items.get("MULTI")!.extra).not.toContain("Citegeist match ID");
+    expect(items.get("MULTI")!.extra).toBe(extra);
   });
 });
 
@@ -1384,6 +1385,54 @@ describe("atomic backup write", () => {
     await migrateFromExtraV1();
     // .tmp from a prior crash is removed unconditionally.
     expect(removeSpy.mock.calls.some(([p]) => /\.json\.tmp$/.test(p as string))).toBe(true);
+  });
+});
+
+describe("dismissAsNoMatch atomicity (T-L-1)", () => {
+  it("clears pending block and sets no_match in a single mutateRow call", async () => {
+    const item = mockItem("DISM", "");
+    // Seed a pending suggestion + cached work data.
+    await writePendingSuggestion(
+      item,
+      {
+        id: "https://openalex.org/W42",
+        display_name: "Test",
+        cited_by_count: 5,
+        fwci: null,
+        publication_year: 2020,
+        doi: null,
+      },
+      "medium",
+      0.8,
+    );
+    expect(getPendingSuggestion(item)).not.toBeNull();
+
+    const { dismissAsNoMatch } = await import("../src/modules/cache");
+    await dismissAsNoMatch(item);
+
+    // Both invariants hold at the same observation point.
+    expect(getPendingSuggestion(item)).toBeNull();
+    expect(isNoMatchSuppressed(item, 30)).toBe(true);
+  });
+});
+
+describe("deleteRow migration_progress cascade (T-L-5)", () => {
+  it("clearCache removes the matching migration_progress row", async () => {
+    const item = mockItem("CSC", "");
+    await cacheWorkData(item, {
+      id: "https://openalex.org/W99",
+      cited_by_count: 1,
+      fwci: null,
+      is_retracted: false,
+    } as never);
+    // Force a migration_progress entry as if a prior migration checkpoint ran.
+    fakeDb.progress.set("1:CSC", new Date().toISOString());
+
+    const { clearCache } = await import("../src/modules/cache");
+    await clearCache(item);
+
+    expect(fakeDb.table.has("1:CSC")).toBe(false);
+    expect(fakeDb.progress.has("1:CSC")).toBe(false);
   });
 });
 

@@ -128,11 +128,16 @@ export async function closeCache(): Promise<void> {
     // block Zotero's whole shutdown. Losing a few in-flight writes is
     // preferable to leaving a multi-MB un-checkpointed WAL behind because
     // the user had to force-kill the parent process.
-    const drain = Promise.allSettled([...pendingWrites]);
-    const deadline = new Promise<void>((resolve) =>
-      setTimeout(resolve, CLOSE_CACHE_DRAIN_TIMEOUT_MS),
-    );
-    await Promise.race([drain, deadline]);
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const drain = Promise.allSettled([...pendingWrites]);
+      const deadline = new Promise<void>((resolve) => {
+        timeoutHandle = setTimeout(resolve, CLOSE_CACHE_DRAIN_TIMEOUT_MS);
+      });
+      await Promise.race([drain, deadline]);
+    } finally {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    }
     if (pendingWrites.size > 0) {
       Zotero.debug(
         `[Citegeist] closeCache: ${pendingWrites.size} write(s) still pending after ${CLOSE_CACHE_DRAIN_TIMEOUT_MS}ms — abandoning to unblock shutdown`,
