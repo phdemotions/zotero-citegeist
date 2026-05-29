@@ -1388,6 +1388,36 @@ describe("atomic backup write", () => {
   });
 });
 
+describe("recovery-branch saveTx deadline (REL-M-001)", () => {
+  it("does NOT checkpoint when recovery-branch saveTx rejects fast", async () => {
+    // ADV-001 recovery path: Extra contains only the v2-runtime mirror
+    // line. Migration strips the line after writing a SQLite row — that
+    // strip uses the same saveTxWithDeadline helper as the main path. A
+    // fast rejection must propagate to unresolvedSkips so the user
+    // re-attempts on next launch (parity with the main path).
+    const extra = "Citegeist match ID: W55555";
+    const item = mockItem("RREC", extra);
+    (item.saveTx as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      throw new Error("simulated locked metadata in recovery branch");
+    });
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+    mockZotero.Prefs.set.mockClear();
+
+    await migrateFromExtraV1();
+
+    // SQLite row recovered before the failed saveTx.
+    expect(fakeDb.table.has("1:RREC")).toBe(true);
+    // Item NOT checkpointed.
+    expect(fakeDb.progress.has("1:RREC")).toBe(false);
+    // Completion pref unset.
+    const completionCalls = mockZotero.Prefs.set.mock.calls.filter(
+      ([k, v]: [string, unknown]) =>
+        k === "extensions.zotero.citegeist.migrationV1Complete" && v === true,
+    );
+    expect(completionCalls).toHaveLength(0);
+  });
+});
+
 describe("saveTx fast rejection propagation (C-M-001)", () => {
   it("does NOT checkpoint when saveTx rejects immediately during migration step 2", async () => {
     // Iter L's `.catch(noop)`-before-Promise.race regressed: a saveTx
