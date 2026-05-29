@@ -14,7 +14,7 @@
  *     fields back out.
  */
 
-import { DEFAULT_CACHE_LIFETIME_DAYS } from "../../constants";
+import { DEFAULT_CACHE_LIFETIME_DAYS, PREF_CACHE_LIFETIME_DAYS } from "../../constants";
 import { getRow } from "./db";
 import {
   type AllMetrics,
@@ -59,7 +59,7 @@ function getCacheLifetimeMs(): number {
   if (now - cachedLifetimeReadAt < LIFETIME_MEMO_TTL_MS && cachedLifetimeMs > 0) {
     return cachedLifetimeMs;
   }
-  const rawLifetime = Zotero.Prefs.get("extensions.zotero.citegeist.cacheLifetimeDays");
+  const rawLifetime = Zotero.Prefs.get(PREF_CACHE_LIFETIME_DAYS);
   const lifetimeDays =
     typeof rawLifetime === "number" && Number.isFinite(rawLifetime) && rawLifetime > 0
       ? rawLifetime

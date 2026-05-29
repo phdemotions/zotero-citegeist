@@ -113,6 +113,10 @@ async function doInit(): Promise<void> {
  * Close the DB connection on shutdown. Awaits any in-flight init, then
  * drains pending writes, then closes. The init-await is what prevents
  * doInit from observing a null `db` after we cleared module state.
+ *
+ * `closeDatabase(true)` requests a permanent close — Zotero runs a WAL
+ * checkpoint + truncate on the way out so we don't leave a multi-MB
+ * `-wal` sidecar file behind across the Zotero process shutdown.
  */
 export async function closeCache(): Promise<void> {
   if (initPromise) {
@@ -122,7 +126,7 @@ export async function closeCache(): Promise<void> {
     await Promise.allSettled([...pendingWrites]);
   }
   if (db) {
-    await db.closeDatabase(false);
+    await db.closeDatabase(true);
     db = null;
   }
   mirror = new Map();

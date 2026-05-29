@@ -19,7 +19,11 @@ import { makeFakeDb } from "./_helpers/fakeDb";
 let fakeDb = makeFakeDb();
 
 vi.stubGlobal("PathUtils", { join: (...parts: string[]) => parts.join("/") });
-vi.stubGlobal("IOUtils", { getChildren: vi.fn(async () => []), remove: vi.fn(async () => {}) });
+vi.stubGlobal("IOUtils", {
+  getChildren: vi.fn(async () => []),
+  remove: vi.fn(async () => {}),
+  setPermissions: vi.fn(async () => {}),
+});
 
 // Mock Zotero global
 const mockZotero = {

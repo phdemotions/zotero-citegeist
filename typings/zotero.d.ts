@@ -284,6 +284,11 @@ declare const PathUtils: {
 declare const IOUtils: {
   getChildren(dir: string): Promise<string[]>;
   remove(path: string): Promise<void>;
+  /** Atomic rename. Used to swap a `.tmp` write into its final filename. */
+  move(source: string, dest: string): Promise<void>;
+  exists(path: string): Promise<boolean>;
+  /** Optional on builds that don't expose the chmod helper. POSIX-only effect. */
+  setPermissions?(path: string, options: { unixMode?: number }): Promise<void>;
 };
 
 declare const Services: {

@@ -37,6 +37,21 @@ const PENDING_CLEARED = {
 } as const satisfies Partial<ItemCacheRow>;
 
 /**
+ * Coerce an untrusted numeric to a finite value or null. Rejects NaN and
+ * ±Infinity — these would round-trip to SQLite as text-`NaN`/`Infinity`
+ * (REAL affinity is forgiving) and then poison every downstream comparison.
+ * A null is honest about the absence.
+ */
+function finiteOrNull(v: number | null | undefined): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/** Same as `finiteOrNull` but also requires the value to be a non-negative integer. */
+function nonNegIntOrNull(v: number | null | undefined): number | null {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 && Number.isInteger(v) ? v : null;
+}
+
+/**
  * Pure helper deriving the four citation-derived metric fields from an
  * OpenAlex work. Works with zero citations have no metrics — that invariant
  * lives in one place so future writers can't accidentally diverge.
@@ -52,8 +67,8 @@ function deriveCitationMetrics(work: CacheWorkInput): {
   }
   const cnp = work.citation_normalized_percentile;
   return {
-    fwci: work.fwci ?? null,
-    percentile: cnp ? cnp.value * 100 : null,
+    fwci: finiteOrNull(work.fwci),
+    percentile: cnp ? finiteOrNull(cnp.value * 100) : null,
     isTop1Percent: cnp ? (cnp.is_in_top_1_percent ? 1 : 0) : null,
     isTop10Percent: cnp ? (cnp.is_in_top_10_percent ? 1 : 0) : null,
   };
@@ -87,7 +102,7 @@ export async function cacheWorkData(
     return {
       ...base,
       open_alex_id: openAlexId,
-      cited_by_count: work.cited_by_count,
+      cited_by_count: nonNegIntOrNull(work.cited_by_count),
       fwci: metrics.fwci,
       percentile: metrics.percentile,
       is_top_1_percent: metrics.isTop1Percent,
@@ -95,8 +110,8 @@ export async function cacheWorkData(
       is_retracted: toDbBool(work.is_retracted),
       last_fetched: new Date().toISOString(),
       source_id: sourceId,
-      citedness_2yr: sourceStats ? sourceStats.citedness2yr : base.citedness_2yr,
-      journal_h_index: sourceStats ? sourceStats.hIndex : base.journal_h_index,
+      citedness_2yr: sourceStats ? finiteOrNull(sourceStats.citedness2yr) : base.citedness_2yr,
+      journal_h_index: sourceStats ? nonNegIntOrNull(sourceStats.hIndex) : base.journal_h_index,
       source_issns:
         sourceStats && sourceStats.issns.length > 0
           ? [...sourceStats.issns].join(",")
@@ -209,11 +224,11 @@ export async function writePendingSuggestion(
     ...(existing ?? emptyRow(libraryID, itemKey)),
     pending_open_alex_id: pendingId,
     pending_title: sanitizeForDisplay(work.display_name),
-    pending_cited_by_count: work.cited_by_count,
-    pending_fwci: work.fwci,
-    pending_year: work.publication_year,
+    pending_cited_by_count: nonNegIntOrNull(work.cited_by_count),
+    pending_fwci: finiteOrNull(work.fwci),
+    pending_year: nonNegIntOrNull(work.publication_year),
     pending_tier: tier,
-    pending_confidence: confidence,
+    pending_confidence: finiteOrNull(confidence),
     pending_doi: work.doi ? sanitizeForDisplay(work.doi) : null,
   }));
 }

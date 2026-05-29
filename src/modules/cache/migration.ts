@@ -19,6 +19,9 @@ import {
   MIGRATION_PROGRESS_TICK,
   ORPHAN_GC_CHUNK_SIZE,
   ORPHAN_GC_MIN_INTERVAL_MS,
+  PREF_LAST_BACKUP_PATH,
+  PREF_LAST_ORPHAN_GC_AT,
+  PREF_MIGRATION_COMPLETE,
   SHOW_PROGRESS_UI_THRESHOLD,
 } from "../../constants";
 import { safeParseFloat, safeParseInt } from "../utils";
@@ -334,12 +337,12 @@ export async function migrateFromExtraV1(): Promise<void> {
   // in Extra, something went wrong (manual SQLite deletion, antivirus
   // quarantine, partial profile restore). Clear the pref and re-run rather
   // than silently leaving the user with stripped Extra and no cache.
-  if (Zotero.Prefs.get("extensions.zotero.citegeist.migrationV1Complete")) {
+  if (Zotero.Prefs.get(PREF_MIGRATION_COMPLETE)) {
     if (await shouldForceRerun()) {
       Zotero.debug(
         "[Citegeist] migration pref says complete but state mismatch detected — re-running",
       );
-      trySetPref("extensions.zotero.citegeist.migrationV1Complete", false);
+      trySetPref(PREF_MIGRATION_COMPLETE, false);
     } else {
       return;
     }
@@ -542,7 +545,7 @@ export async function migrateFromExtraV1(): Promise<void> {
   // `unresolvedSkips` — anything > 0 leaves the pref unset so the next
   // launch retries the stragglers.
   if (unresolvedSkips === 0) {
-    trySetPref("extensions.zotero.citegeist.migrationV1Complete", true);
+    trySetPref(PREF_MIGRATION_COMPLETE, true);
   } else {
     Zotero.debug(
       `[Citegeist] migration: ${unresolvedSkips} items left unresolved; ` +
@@ -606,7 +609,7 @@ async function shouldForceRerun(): Promise<boolean> {
  * than refusing to migrate (which would leave the plugin permanently
  * broken on a profile where the data dir is read-only).
  */
-async function writeExtraBackup(candidates: _ZoteroTypes.Item[]): Promise<string | null> {
+async function writeExtraBackup(candidates: _ZoteroTypes.Item[]): Promise<void> {
   try {
     const payload = {
       schema: "citegeist-migration-backup/v1",
@@ -622,16 +625,30 @@ async function writeExtraBackup(candidates: _ZoteroTypes.Item[]): Promise<string
     };
     const filename = `citegeist-migration-backup-${payload.timestamp.replace(/[:.]/g, "-")}.json`;
     const path = PathUtils.join(Zotero.DataDirectory.dir, filename);
-    await Zotero.File.putContentsAsync(path, JSON.stringify(payload, null, 2));
+    // Atomic write: stage to `.tmp`, then rename onto the final path.
+    // A crash between the write and the rename leaves the partial `.tmp`
+    // file behind (cleaned up on next migration via pruneOldBackups's
+    // pattern check would NOT catch it — we explicitly drop `.tmp` files
+    // here too) but never a half-written final file that a recovery script
+    // would parse as authoritative.
+    const tmpPath = `${path}.tmp`;
+    await Zotero.File.putContentsAsync(tmpPath, JSON.stringify(payload, null, 2));
+    // Chmod the .tmp BEFORE the rename so the final file is created with
+    // restricted permissions in one atomic transition — no window where a
+    // world-readable copy exists at the final path.
+    try {
+      await IOUtils.setPermissions?.(tmpPath, { unixMode: 0o600 });
+    } catch (permErr) {
+      Zotero.debug(`[Citegeist] could not chmod backup file (non-fatal): ${String(permErr)}`);
+    }
+    await IOUtils.move(tmpPath, path);
     Zotero.debug(
       `[Citegeist] wrote pre-migration Extra backup: ${path} (${candidates.length} items)`,
     );
-    trySetPref("extensions.zotero.citegeist.lastBackupPath", path);
+    trySetPref(PREF_LAST_BACKUP_PATH, path);
     await pruneOldBackups();
-    return path;
   } catch (e) {
     Zotero.debug(`[Citegeist] FAILED to write pre-migration Extra backup: ${String(e)}`);
-    return null;
   }
 }
 
@@ -645,6 +662,14 @@ async function writeExtraBackup(candidates: _ZoteroTypes.Item[]): Promise<string
 async function pruneOldBackups(): Promise<void> {
   try {
     const entries = await IOUtils.getChildren(Zotero.DataDirectory.dir);
+    // Sweep stranded `.tmp` files from prior crashes — they'd otherwise
+    // accumulate across migration retries. Drop unconditionally; a `.tmp`
+    // is by definition mid-write and never authoritative.
+    for (const p of entries) {
+      if (/citegeist-migration-backup-.+\.json\.tmp$/.test(p)) {
+        await IOUtils.remove(p).catch(() => {});
+      }
+    }
     const backups = entries.filter((p) => /citegeist-migration-backup-.+\.json$/.test(p)).sort();
     const excess = backups.length - MAX_BACKUP_FILES;
     if (excess <= 0) return;
@@ -692,7 +717,7 @@ async function checkpointItem(
  * — group-library items get SQLite rows too, and we must not purge them.
  */
 export async function garbageCollectOrphans(options: { force?: boolean } = {}): Promise<void> {
-  const lastRunRaw = Zotero.Prefs.get("extensions.zotero.citegeist.lastOrphanGcAt");
+  const lastRunRaw = Zotero.Prefs.get(PREF_LAST_ORPHAN_GC_AT);
   const lastRun = typeof lastRunRaw === "number" ? lastRunRaw : 0;
   if (!options.force && Date.now() - lastRun < ORPHAN_GC_MIN_INTERVAL_MS) return;
 
@@ -717,7 +742,7 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
   }
 
   if (orphans.length === 0) {
-    trySetPref("extensions.zotero.citegeist.lastOrphanGcAt", Date.now());
+    trySetPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
     return;
   }
 

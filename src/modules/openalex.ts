@@ -17,6 +17,7 @@ import {
   OPENALEX_RETRY_DELAYS_MS,
   MAX_ABSTRACT_LENGTH,
   MAX_ABSTRACT_POSITION,
+  PREF_MAILTO,
 } from "../constants";
 import { OpenAlexNetworkError, normalizeError, logError } from "./utils";
 
@@ -88,7 +89,7 @@ export interface OpenAlexListResponse {
 
 function getMailto(): string {
   try {
-    const mailto = Zotero.Prefs.get("extensions.zotero.citegeist.mailto") as string;
+    const mailto = Zotero.Prefs.get(PREF_MAILTO) as string;
     return mailto || "";
   } catch {
     return "";

@@ -23,6 +23,7 @@ import {
   FETCH_QUEUE_DEBOUNCE_MS,
   MAX_ATTEMPTED_FETCH_CACHE,
   NO_MATCH_RETRY_DAYS,
+  PREF_AUTO_FETCH,
 } from "../constants";
 
 // Column data keys
@@ -75,7 +76,7 @@ let autoFetchCacheTime = 0;
 function getAutoFetch(): boolean {
   const now = Date.now();
   if (autoFetchCached === null || now - autoFetchCacheTime > AUTO_FETCH_PREF_TTL_MS) {
-    autoFetchCached = Zotero.Prefs.get("extensions.zotero.citegeist.autoFetch") as boolean;
+    autoFetchCached = Zotero.Prefs.get(PREF_AUTO_FETCH) as boolean;
     autoFetchCacheTime = now;
   }
   return autoFetchCached;

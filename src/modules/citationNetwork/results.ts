@@ -14,7 +14,7 @@ import {
 import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../utils";
 import { MAX_RENDERED_RESULTS, type NetworkState } from "./types";
 import { getDefaultCollectionName } from "./actions";
-import { DEFAULT_NETWORK_PAGE_SIZE } from "../../constants";
+import { DEFAULT_NETWORK_PAGE_SIZE, PREF_NETWORK_PAGE_SIZE } from "../../constants";
 
 // ────────────────────────────────────────────────────────
 // Loading & rendering
@@ -37,8 +37,7 @@ export async function loadResults(state: NetworkState, append = false): Promise<
 
   try {
     const perPage =
-      (Zotero.Prefs.get("extensions.zotero.citegeist.networkPageSize") as number) ||
-      DEFAULT_NETWORK_PAGE_SIZE;
+      (Zotero.Prefs.get(PREF_NETWORK_PAGE_SIZE) as number) || DEFAULT_NETWORK_PAGE_SIZE;
     const response =
       state.mode === "citing"
         ? await getCitingWorks(state.work.id, state.cursor, perPage)

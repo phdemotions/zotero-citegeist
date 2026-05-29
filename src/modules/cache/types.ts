@@ -248,11 +248,11 @@ const OPEN_ALEX_SOURCE_ID_RE = /^S\d+$/;
 /** Prefix prepended by OpenAlex to every entity ID it returns. */
 const OPEN_ALEX_URL_PREFIX = "https://openalex.org/";
 
-export function isValidWorkId(v: string | null | undefined): v is string {
+function isValidWorkId(v: string | null | undefined): v is string {
   return typeof v === "string" && OPEN_ALEX_WORK_ID_RE.test(v);
 }
 
-export function isValidSourceId(v: string | null | undefined): v is string {
+function isValidSourceId(v: string | null | undefined): v is string {
   return typeof v === "string" && OPEN_ALEX_SOURCE_ID_RE.test(v);
 }
 

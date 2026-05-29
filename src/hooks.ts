@@ -9,6 +9,7 @@ import { registerMenus, unregisterMenus } from "./modules/menu";
 import { clearSourceStatsCache } from "./modules/openalex";
 import { initCache, closeCache, migrateFromExtraV1, garbageCollectOrphans } from "./modules/cache";
 import { logError } from "./modules/utils";
+import { PREF_LAST_BACKUP_PATH, PREF_MIGRATION_COMPLETE } from "./constants";
 
 const FTL_LINK_ID = "citegeist-ftl-link";
 
@@ -31,9 +32,7 @@ export async function onStartup(data: PluginData): Promise<void> {
   // BEFORE any reader (pane, column) registers. Column dataProvider is
   // synchronous and assumes the mirror is populated.
   let cacheInitFailed = false;
-  const wasMigratedBefore = Zotero.Prefs.get("extensions.zotero.citegeist.migrationV1Complete") as
-    | boolean
-    | undefined;
+  const wasMigratedBefore = Zotero.Prefs.get(PREF_MIGRATION_COMPLETE) as boolean | undefined;
   try {
     await initCache();
     await migrateFromExtraV1();
@@ -55,17 +54,12 @@ export async function onStartup(data: PluginData): Promise<void> {
         "If the problem persists, check that <profile>/citegeist.sqlite is " +
         "not locked or quarantined by antivirus.",
     );
-  } else if (
-    !wasMigratedBefore &&
-    Zotero.Prefs.get("extensions.zotero.citegeist.migrationV1Complete")
-  ) {
+  } else if (!wasMigratedBefore && Zotero.Prefs.get(PREF_MIGRATION_COMPLETE)) {
     // First successful migration of this profile. Surface a one-time
     // alert pointing to the safety-net backup file so users know exactly
     // where to find a verbatim copy of every pre-migration Extra field
     // if they want to audit or restore anything.
-    const backupPath = Zotero.Prefs.get("extensions.zotero.citegeist.lastBackupPath") as
-      | string
-      | undefined;
+    const backupPath = Zotero.Prefs.get(PREF_LAST_BACKUP_PATH) as string | undefined;
     const backupLine = backupPath
       ? `A snapshot of every Extra field Citegeist touched was saved to:\n\n${backupPath}\n\n` +
         "Keep it until you've confirmed everything looks right. If anything is missing, " +

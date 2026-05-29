@@ -42,6 +42,9 @@ vi.stubGlobal("PathUtils", {
 vi.stubGlobal("IOUtils", {
   getChildren: vi.fn(async () => [] as string[]),
   remove: vi.fn(async () => {}),
+  move: vi.fn(async () => {}),
+  exists: vi.fn(async () => false),
+  setPermissions: vi.fn(async () => {}),
 });
 
 const mockZotero = {
@@ -863,7 +866,9 @@ describe("migration Extra backup", () => {
 
     expect(fileWrites).toHaveLength(1);
     const { path, contents } = fileWrites[0];
-    expect(path).toMatch(/citegeist-migration-backup-.*\.json$/);
+    // Atomic write: putContentsAsync writes to `.tmp`, then IOUtils.move
+    // renames onto the final filename. Verify the staged path shape.
+    expect(path).toMatch(/citegeist-migration-backup-.*\.json\.tmp$/);
     expect(path).toContain("/tmp/zotero-test-data/");
 
     const payload = JSON.parse(contents);

@@ -111,13 +111,13 @@ Locally, always verify with `rm -rf node_modules && npm install` before releasin
 
 ## Key Files
 
-| File              | Purpose                                                          |
-| ----------------- | ---------------------------------------------------------------- |
-| `docs/STATUS.md`       | Current project state, what was done last session, upcoming work |
-| `docs/ISSUES.md`       | Open bugs and feature requests with priorities                   |
-| `docs/BACKLOG.md`      | Curated longer-term enhancement ideas                            |
-| `CHANGELOG.md`         | Keep-a-Changelog format, one entry per release                   |
-| `docs/DESIGN.md`       | Architecture decisions and trade-offs                            |
-| `CONTRIBUTING.md`      | Dev setup, commands, PR guidelines                               |
-| `docs/paper/paper.md`  | JOSS paper (in progress)                                         |
-| `CITATION.cff`         | Machine-readable citation metadata                               |
+| File                  | Purpose                                                          |
+| --------------------- | ---------------------------------------------------------------- |
+| `docs/STATUS.md`      | Current project state, what was done last session, upcoming work |
+| `docs/ISSUES.md`      | Open bugs and feature requests with priorities                   |
+| `docs/BACKLOG.md`     | Curated longer-term enhancement ideas                            |
+| `CHANGELOG.md`        | Keep-a-Changelog format, one entry per release                   |
+| `docs/DESIGN.md`      | Architecture decisions and trade-offs                            |
+| `CONTRIBUTING.md`     | Dev setup, commands, PR guidelines                               |
+| `docs/paper/paper.md` | JOSS paper (in progress)                                         |
+| `CITATION.cff`        | Machine-readable citation metadata                               |
