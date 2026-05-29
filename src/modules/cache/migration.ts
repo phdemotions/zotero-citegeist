@@ -101,32 +101,23 @@ interface LegacyParse {
 }
 
 /**
- * Parse the legacy `Citegeist.*` namespace out of an Extra field.
- *
- * Tolerates real-world Extra-field contents:
- *   - CRLF line endings (Windows): `\r\n` and trailing `\r` on each
- *     line are normalized. Without this, Windows-edited Extra would
- *     leave `\r` on every value, fail every `parseWorkId` validation,
- *     and silently null the entire row — silent data loss.
- *   - Leading BOM (`﻿`): some import sources prefix exports with
- *     a UTF-8 BOM, which would otherwise make `startsWith("Citegeist.")`
- *     return false on the first line and skip migration.
- *   - Extra whitespace around values (`Citegeist.openAlexId:  W123 `):
- *     trimmed before storage so validation succeeds.
- *
- * Lines whose key is not in `KNOWN_LEGACY_FIELDS` are preserved in
- * `otherLines` to defend against silent data loss for user-typed notes
- * that happen to start with `Citegeist.`.
- */
-/**
- * Pre-parse normalization. Strips a leading BOM and folds CRLF / CR to
- * LF so downstream split/match logic doesn't have to think about either.
- * Exported (in spirit) via the caller; tests can call this directly.
+ * Strips a leading BOM and folds CRLF / CR to LF so downstream split/match
+ * logic doesn't have to think about either. Callers should always run this
+ * before `parseExtraLegacy`; without it, Windows-edited Extra would leave a
+ * `\r` on every value, fail every `parseWorkId` validation, and silently
+ * null the entire row.
  */
 function normalizeExtraForParse(extra: string): string {
   return extra.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
 }
 
+/**
+ * Parse the legacy `Citegeist.*` namespace out of a normalized Extra field.
+ * Values for known keys are `.trim()`'d so a stray space after the colon
+ * doesn't fail validators downstream. Lines whose key is not in
+ * `KNOWN_LEGACY_FIELDS` are preserved in `otherLines` so user content
+ * starting with `Citegeist.` survives migration verbatim.
+ */
 function parseExtraLegacy(extra: string): LegacyParse {
   const citegeistFields = new Map<string, string>();
   const otherLines: string[] = [];
@@ -376,163 +367,175 @@ export async function migrateFromExtraV1(): Promise<void> {
   let unresolvedSkips = 0;
 
   setMigrationInProgress(true);
+  try {
+    await runMigrationLoop();
+  } finally {
+    setMigrationInProgress(false);
+  }
 
-  await Zotero.Sync.Runner.delaySync(async () => {
-    // Collect candidates across every library the user can write to. Skip
-    // read-only group libraries: Step 1 (SQLite write) would succeed but
-    // Step 2 (saveTx) would throw on every item, leaving migration
-    // permanently unresolved and re-scanning the same items every launch.
-    // Items in read-only libraries still get SQLite rows lazily via the
-    // runtime fetch path; only the Extra strip is impossible.
-    // Candidates: items containing the legacy `Citegeist.*` namespace
-    // OR a runtime `Citegeist match ID:` line. The latter exists only
-    // on items whose user confirmed a title match during a v2.0.0+
-    // session and then downgraded to v1.3.x before re-upgrading; the
-    // line carries recoverable confirmation state we want to migrate
-    // even though there's no `Citegeist.` prefix anywhere on the item.
-    const candidates: _ZoteroTypes.Item[] = [];
-    for (const lib of Zotero.Libraries.getAll()) {
-      if (!lib.editable) continue;
-      const items = await Zotero.Items.getAll(lib.libraryID, false);
-      for (const item of items) {
-        if (item.deleted) continue;
-        if (!item.isRegularItem()) continue;
-        const extra = item.getField("extra");
-        if (!extra) continue;
-        if (extra.includes(LEGACY_PREFIX) || extra.includes(CONFIRMED_MATCH_EXTRA_PREFIX)) {
-          candidates.push(item);
+  /**
+   * Inner closure so the outer try/finally guarantees the in-progress
+   * flag is cleared even if `delaySync`, candidate collection, or the
+   * backup write throws — without the wrap, an unexpected throw would
+   * leave `isMigrationInProgress()` permanently true for the rest of
+   * the session, silently disabling `writeConfirmedMatchToExtra`.
+   */
+  async function runMigrationLoop(): Promise<void> {
+    await Zotero.Sync.Runner.delaySync(async () => {
+      // Collect candidates across every library the user can write to. Skip
+      // read-only group libraries: Step 1 (SQLite write) would succeed but
+      // Step 2 (saveTx) would throw on every item, leaving migration
+      // permanently unresolved and re-scanning the same items every launch.
+      // Items in read-only libraries still get SQLite rows lazily via the
+      // runtime fetch path; only the Extra strip is impossible.
+      // Candidates: items containing the legacy `Citegeist.*` namespace
+      // OR a runtime `Citegeist match ID:` line. The latter exists only
+      // on items whose user confirmed a title match during a v2.0.0+
+      // session and then downgraded to v1.3.x before re-upgrading; the
+      // line carries recoverable confirmation state we want to migrate
+      // even though there's no `Citegeist.` prefix anywhere on the item.
+      const candidates: _ZoteroTypes.Item[] = [];
+      for (const lib of Zotero.Libraries.getAll()) {
+        if (!lib.editable) continue;
+        const items = await Zotero.Items.getAll(lib.libraryID, false);
+        for (const item of items) {
+          if (item.deleted) continue;
+          if (!item.isRegularItem()) continue;
+          const extra = item.getField("extra");
+          if (!extra) continue;
+          if (extra.includes(LEGACY_PREFIX) || extra.includes(CONFIRMED_MATCH_EXTRA_PREFIX)) {
+            candidates.push(item);
+          }
         }
       }
-    }
 
-    const total = candidates.length;
+      const total = candidates.length;
 
-    // SAFETY NET: before touching a single Extra field, write a JSON
-    // snapshot of every candidate's pre-migration Extra to the data dir.
-    // If anything goes wrong — round-trip parse failure misdiagnosed,
-    // saveTx silently corrupts metadata, user reports lost notes — the
-    // user has a full audit log + restoration source.
-    //
-    // The file is also the user's escape hatch: they can manually walk
-    // the JSON entries and re-paste any lost content. We surface the
-    // path to the user via an alert after migration succeeds.
-    if (total > 0) {
-      await writeExtraBackup(candidates);
-    }
+      // SAFETY NET: before touching a single Extra field, write a JSON
+      // snapshot of every candidate's pre-migration Extra to the data dir.
+      // If anything goes wrong — round-trip parse failure misdiagnosed,
+      // saveTx silently corrupts metadata, user reports lost notes — the
+      // user has a full audit log + restoration source.
+      //
+      // The file is also the user's escape hatch: they can manually walk
+      // the JSON entries and re-paste any lost content. We surface the
+      // path to the user via an alert after migration succeeds.
+      if (total > 0) {
+        await writeExtraBackup(candidates);
+      }
 
-    const ui = buildProgressUI(total);
-    let done = 0;
+      const ui = buildProgressUI(total);
+      let done = 0;
 
-    // Adaptive progress tick: small libraries fire every 50 items (snappy);
-    // large libraries throttle to ~200 updates total so we don't thrash the
-    // UI with 1000+ paints during a 50k-item migration.
-    const progressTick = Math.max(MIGRATION_PROGRESS_TICK, Math.floor(total / 200) || 1);
+      // Adaptive progress tick: small libraries fire every 50 items (snappy);
+      // large libraries throttle to ~200 updates total so we don't thrash the
+      // UI with 1000+ paints during a 50k-item migration.
+      const progressTick = Math.max(MIGRATION_PROGRESS_TICK, Math.floor(total / 200) || 1);
 
-    // Load every already-migrated key into a Set once. Replaces N
-    // per-item SELECTs with one SELECT — order-of-magnitude win on first
-    // run of a 50k-item library where every candidate would otherwise pay
-    // a SQLite round trip just to confirm "not yet migrated."
-    const conn0 = requireDb();
-    const checkpointed = new Set<string>();
-    {
-      const rows = await conn0.queryAsync<{ library_id: number; item_key: string }>(
-        `SELECT library_id, item_key FROM migration_progress`,
-      );
-      for (const r of rows) checkpointed.add(mirrorKey(r.library_id, r.item_key));
-    }
+      // Load every already-migrated key into a Set once. Replaces N
+      // per-item SELECTs with one SELECT — order-of-magnitude win on first
+      // run of a 50k-item library where every candidate would otherwise pay
+      // a SQLite round trip just to confirm "not yet migrated."
+      const conn0 = requireDb();
+      const checkpointed = new Set<string>();
+      {
+        const rows = await conn0.queryAsync<{ library_id: number; item_key: string }>(
+          `SELECT library_id, item_key FROM migration_progress`,
+        );
+        for (const r of rows) checkpointed.add(mirrorKey(r.library_id, r.item_key));
+      }
 
-    // Each iteration is wrapped in its own try/catch. A single "poison"
-    // item — corrupt Extra, locked metadata, transient saveTx rejection —
-    // must not block the entire migration. We log and move on; the next
-    // launch will retry that item only (others already have checkpoints).
-    let failureCount = 0;
-    for (const item of candidates) {
-      done++;
-      if (done % progressTick === 0) ui?.update(done, total);
+      // Each iteration is wrapped in its own try/catch. A single "poison"
+      // item — corrupt Extra, locked metadata, transient saveTx rejection —
+      // must not block the entire migration. We log and move on; the next
+      // launch will retry that item only (others already have checkpoints).
+      let failureCount = 0;
+      for (const item of candidates) {
+        done++;
+        if (done % progressTick === 0) ui?.update(done, total);
 
-      try {
-        const conn = requireDb();
+        try {
+          const conn = requireDb();
 
-        if (checkpointed.has(mirrorKey(item.libraryID, item.key))) continue;
+          if (checkpointed.has(mirrorKey(item.libraryID, item.key))) continue;
 
-        const rawExtra = item.getField("extra") ?? "";
-        // Normalize line endings + strip BOM once. parseExtraLegacy and
-        // verifyParseRoundTrip both expect a clean LF-delimited string;
-        // working off the raw `\r\n`-mixed value would corrupt values
-        // (every parseWorkId would fail) AND fail the round-trip check.
-        const extra = normalizeExtraForParse(rawExtra);
-        const parse = parseExtraLegacy(extra);
+          const rawExtra = item.getField("extra") ?? "";
+          // Normalize line endings + strip BOM once. parseExtraLegacy and
+          // verifyParseRoundTrip both expect a clean LF-delimited string;
+          // working off the raw `\r\n`-mixed value would corrupt values
+          // (every parseWorkId would fail) AND fail the round-trip check.
+          const extra = normalizeExtraForParse(rawExtra);
+          const parse = parseExtraLegacy(extra);
 
-        // Defensive checkpoint: zero Citegeist fields means either the item
-        // was already stripped by a prior partial migration, or the file once
-        // had Citegeist data and a user removed it manually. Checkpoint so we
-        // don't keep paying the parse cost on future runs.
-        if (parse.citegeistFields.size === 0) {
+          // Defensive checkpoint: zero Citegeist fields means either the item
+          // was already stripped by a prior partial migration, or the file once
+          // had Citegeist data and a user removed it manually. Checkpoint so we
+          // don't keep paying the parse cost on future runs.
+          if (parse.citegeistFields.size === 0) {
+            await checkpointItem(conn, item.libraryID, item.key);
+            checkpointed.add(mirrorKey(item.libraryID, item.key));
+            continue;
+          }
+
+          if (!verifyParseRoundTrip(extra, parse)) {
+            // Best-effort salvage: the parse identified Citegeist fields but
+            // the round-trip safety check refused (typically duplicate keys
+            // or ambiguous ordering). Persist the SQLite row anyway so the
+            // user keeps their cached metrics, but DO NOT strip Extra — the
+            // ambiguity may indicate the user's data we don't fully
+            // understand. We also don't checkpoint, so the next run revisits
+            // the item. Track the count and refuse to mark migration complete
+            // — round-trip skips must be investigated before we trust the
+            // legacy data is fully migrated.
+            unresolvedSkips++;
+            Zotero.debug(
+              `[Citegeist] migration: salvaging ${item.libraryID}:${item.key} to SQLite but leaving Extra intact — round-trip parse ambiguous`,
+            );
+            try {
+              const salvaged = buildRowFromLegacy(item.libraryID, item.key, parse.citegeistFields);
+              await upsertRow(salvaged);
+            } catch (salvageErr) {
+              Zotero.debug(
+                `[Citegeist] migration: salvage write failed for ${item.libraryID}:${item.key} — ${String(salvageErr)}`,
+              );
+            }
+            continue;
+          }
+
+          const row = buildRowFromLegacy(item.libraryID, item.key, parse.citegeistFields);
+
+          // Step 1: SQLite write
+          await upsertRow(row);
+
+          // Step 2 (must follow step 1): Extra strip — non-Citegeist content
+          // preserved; the single surviving `Citegeist match ID:` line is
+          // re-emitted for confirmed matches so the user's manual curation
+          // survives plugin downgrade. If we stripped Extra before SQLite has
+          // the row, a crash here loses the user's data.
+          const newLines = setExtraConfirmedMatch(parse.otherLines, row.confirmed_open_alex_id);
+          const newExtra = newLines.join("\n").replace(/\n+$/, "");
+          item.setField("extra", newExtra);
+          await item.saveTx({ skipDateModifiedUpdate: true });
+
+          // Step 3 (must follow step 2): checkpoint
           await checkpointItem(conn, item.libraryID, item.key);
           checkpointed.add(mirrorKey(item.libraryID, item.key));
-          continue;
-        }
-
-        if (!verifyParseRoundTrip(extra, parse)) {
-          // Best-effort salvage: the parse identified Citegeist fields but
-          // the round-trip safety check refused (typically duplicate keys
-          // or ambiguous ordering). Persist the SQLite row anyway so the
-          // user keeps their cached metrics, but DO NOT strip Extra — the
-          // ambiguity may indicate the user's data we don't fully
-          // understand. We also don't checkpoint, so the next run revisits
-          // the item. Track the count and refuse to mark migration complete
-          // — round-trip skips must be investigated before we trust the
-          // legacy data is fully migrated.
+        } catch (e) {
+          failureCount++;
           unresolvedSkips++;
           Zotero.debug(
-            `[Citegeist] migration: salvaging ${item.libraryID}:${item.key} to SQLite but leaving Extra intact — round-trip parse ambiguous`,
+            `[Citegeist] migration: error on ${item.libraryID}:${item.key} — ${String(e)} (continuing)`,
           );
-          try {
-            const salvaged = buildRowFromLegacy(item.libraryID, item.key, parse.citegeistFields);
-            await upsertRow(salvaged);
-          } catch (salvageErr) {
-            Zotero.debug(
-              `[Citegeist] migration: salvage write failed for ${item.libraryID}:${item.key} — ${String(salvageErr)}`,
-            );
-          }
-          continue;
         }
-
-        const row = buildRowFromLegacy(item.libraryID, item.key, parse.citegeistFields);
-
-        // Step 1: SQLite write
-        await upsertRow(row);
-
-        // Step 2 (must follow step 1): Extra strip — non-Citegeist content
-        // preserved; the single surviving `Citegeist match ID:` line is
-        // re-emitted for confirmed matches so the user's manual curation
-        // survives plugin downgrade. If we stripped Extra before SQLite has
-        // the row, a crash here loses the user's data.
-        const newLines = setExtraConfirmedMatch(parse.otherLines, row.confirmed_open_alex_id);
-        const newExtra = newLines.join("\n").replace(/\n+$/, "");
-        item.setField("extra", newExtra);
-        await item.saveTx({ skipDateModifiedUpdate: true });
-
-        // Step 3 (must follow step 2): checkpoint
-        await checkpointItem(conn, item.libraryID, item.key);
-        checkpointed.add(mirrorKey(item.libraryID, item.key));
-      } catch (e) {
-        failureCount++;
-        unresolvedSkips++;
-        Zotero.debug(
-          `[Citegeist] migration: error on ${item.libraryID}:${item.key} — ${String(e)} (continuing)`,
-        );
       }
-    }
-    if (failureCount > 0) {
-      Zotero.debug(`[Citegeist] migration: ${failureCount} items skipped due to errors`);
-    }
+      if (failureCount > 0) {
+        Zotero.debug(`[Citegeist] migration: ${failureCount} items skipped due to errors`);
+      }
 
-    ui?.close();
-    Zotero.debug(`[Citegeist] migration complete: ${total} items processed`);
-  });
-
-  setMigrationInProgress(false);
+      ui?.close();
+      Zotero.debug(`[Citegeist] migration complete: ${total} items processed`);
+    });
+  }
 
   // Mark complete only when every candidate processed cleanly. Round-trip
   // skips, salvage-only writes, and per-item errors all increment
