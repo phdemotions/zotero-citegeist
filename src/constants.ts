@@ -61,6 +61,14 @@ export const MAX_BACKUP_FILES = 5;
 /** Minimum interval between orphan-GC sweeps at startup. */
 export const ORPHAN_GC_MIN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+// ── Timeouts ──
+/** Per-item saveTx timeout during migration. A single locked item must
+ *  not stall the entire migration loop. */
+export const MIGRATION_ITEM_TIMEOUT_MS = 30_000;
+/** Max wait for pending writes to drain during cache shutdown. Beyond
+ *  this we abandon stragglers rather than block Zotero shutdown. */
+export const CLOSE_CACHE_DRAIN_TIMEOUT_MS = 5_000;
+
 // ── Preference keys ──
 // Centralized to prevent typos: a misspelled pref name silently fails
 // (Zotero.Prefs.get returns `undefined`) and corrupts state lookups.

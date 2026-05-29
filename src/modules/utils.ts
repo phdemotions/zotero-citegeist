@@ -63,11 +63,13 @@ export function safeParseIntOrNull(val: string | undefined): number | null {
 
 /**
  * Parse a float with NaN safety. Returns null on failure.
+ * Also rejects ±Infinity — those would persist to SQLite and poison every
+ * downstream numeric comparison (sort, threshold filter, derived metric).
  */
 export function safeParseFloat(val: string | undefined): number | null {
   if (val === undefined) return null;
   const parsed = parseFloat(val);
-  return Number.isNaN(parsed) ? null : parsed;
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /**

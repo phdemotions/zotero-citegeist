@@ -16,6 +16,7 @@
 
 import {
   MAX_BACKUP_FILES,
+  MIGRATION_ITEM_TIMEOUT_MS,
   MIGRATION_PROGRESS_TICK,
   ORPHAN_GC_CHUNK_SIZE,
   ORPHAN_GC_MIN_INTERVAL_MS,
@@ -177,6 +178,36 @@ function verifyParseRoundTrip(extra: string, parse: LegacyParse): boolean {
     if (reassembled[i] !== original[i]) return false;
   }
   return true;
+}
+
+/**
+ * Extract a v2.0.0-runtime `Citegeist match ID: Wxxx` line and build a
+ * minimal row carrying just the confirmed match. Returns null when no such
+ * line exists OR the work ID fails validation. Used by the migration loop's
+ * "no legacy fields" branch to recover user-curated confirmation state on
+ * profile-restore paths where citegeist.sqlite is missing but the Extra
+ * mirror survived.
+ */
+function recoverConfirmedMatchOnly(
+  libraryID: number,
+  itemKey: string,
+  extra: string,
+): ItemCacheRow | null {
+  const prefix = `${CONFIRMED_MATCH_EXTRA_PREFIX}:`;
+  for (const line of extra.split("\n")) {
+    if (!line.startsWith(prefix)) continue;
+    const id = parseWorkId(line.substring(prefix.length).trim());
+    if (!id) return null;
+    const row = emptyRow(libraryID, itemKey);
+    row.confirmed_open_alex_id = id;
+    row.match_method = "title-match";
+    // Default to medium tier — runtime confirmation didn't persist the
+    // tier across downgrade, and medium is the conservative choice
+    // (high-tier matches are auto-confirmed in the runtime path).
+    row.match_confidence = "medium";
+    return row;
+  }
+  return null;
 }
 
 function buildRowFromLegacy(
@@ -470,9 +501,26 @@ export async function migrateFromExtraV1(): Promise<void> {
 
           // Defensive checkpoint: zero Citegeist fields means either the item
           // was already stripped by a prior partial migration, or the file once
-          // had Citegeist data and a user removed it manually. Checkpoint so we
-          // don't keep paying the parse cost on future runs.
+          // had Citegeist data and a user removed it manually. BEFORE giving
+          // up, recover the downgrade-safety `Citegeist match ID: Wxxx` line
+          // (written by v2.0.0 runtime confirmTitleMatch) — without this step
+          // a profile-restore that drops citegeist.sqlite silently erases
+          // every user-confirmed title match, defeating the whole point of
+          // mirroring confirmation state to Extra.
           if (parse.citegeistFields.size === 0) {
+            const recovered = recoverConfirmedMatchOnly(item.libraryID, item.key, extra);
+            if (recovered) {
+              await upsertRow(recovered);
+              // Strip the now-redundant `Citegeist match ID:` line — v2.0.0
+              // confirmTitleMatch will re-emit it on next confirmation.
+              const stripped = setExtraConfirmedMatch(extra.split("\n"), null)
+                .join("\n")
+                .replace(/\n+$/, "");
+              if (stripped !== rawExtra) {
+                item.setField("extra", stripped);
+                await item.saveTx({ skipDateModifiedUpdate: true });
+              }
+            }
             await checkpointItem(conn, item.libraryID, item.key);
             checkpointed.add(mirrorKey(item.libraryID, item.key));
             continue;
@@ -516,11 +564,36 @@ export async function migrateFromExtraV1(): Promise<void> {
           const newLines = setExtraConfirmedMatch(parse.otherLines, row.confirmed_open_alex_id);
           const newExtra = newLines.join("\n").replace(/\n+$/, "");
           item.setField("extra", newExtra);
-          await item.saveTx({ skipDateModifiedUpdate: true });
+          // Race the saveTx against a deadline — a single locked / hung
+          // item must not stall the entire migration loop. The per-item
+          // try/catch absorbs the throw and bumps unresolvedSkips so the
+          // next launch retries.
+          await Promise.race([
+            item.saveTx({ skipDateModifiedUpdate: true }),
+            new Promise<never>((_, reject) =>
+              setTimeout(
+                () => reject(new Error(`saveTx timed out after ${MIGRATION_ITEM_TIMEOUT_MS}ms`)),
+                MIGRATION_ITEM_TIMEOUT_MS,
+              ),
+            ),
+          ]);
 
-          // Step 3 (must follow step 2): checkpoint
-          await checkpointItem(conn, item.libraryID, item.key);
+          // Step 3 (must follow step 2): checkpoint. Mark the in-memory
+          // `checkpointed` Set BEFORE the SQL write — a successful
+          // saveTx means the item's data is fully migrated; if the
+          // checkpoint INSERT itself throws (transient SQLite hiccup),
+          // the next launch's defensive `parse.citegeistFields.size === 0`
+          // branch will re-checkpoint cheaply. The previous ordering
+          // would have flipped a successful migration into a permanent
+          // `unresolvedSkips` state, blocking the completion pref forever.
           checkpointed.add(mirrorKey(item.libraryID, item.key));
+          try {
+            await checkpointItem(conn, item.libraryID, item.key);
+          } catch (cpErr) {
+            Zotero.debug(
+              `[Citegeist] migration: checkpoint INSERT failed for ${item.libraryID}:${item.key} — ${String(cpErr)} (item is fully migrated; next launch will re-checkpoint)`,
+            );
+          }
         } catch (e) {
           failureCount++;
           unresolvedSkips++;
@@ -551,13 +624,17 @@ export async function migrateFromExtraV1(): Promise<void> {
     );
   }
 
-  // The checkpoint table has served its purpose; reclaim space.
-  // Wrap in try/catch so a cleanup failure doesn't unset the completion pref.
-  try {
-    const conn = requireDb();
-    await conn.queryAsync(`DELETE FROM migration_progress`);
-  } catch (e) {
-    Zotero.debug(`[Citegeist] migration_progress cleanup failed (non-fatal): ${String(e)}`);
+  // Only drop the checkpoint table on a clean run. If `unresolvedSkips > 0`
+  // we leave checkpoints in place so the next launch can re-iterate only
+  // the unresolved stragglers instead of re-scanning every candidate —
+  // matters on 50k-item libraries with 1% transient errors.
+  if (unresolvedSkips === 0) {
+    try {
+      const conn = requireDb();
+      await conn.queryAsync(`DELETE FROM migration_progress`);
+    } catch (e) {
+      Zotero.debug(`[Citegeist] migration_progress cleanup failed (non-fatal): ${String(e)}`);
+    }
   }
 }
 
@@ -732,11 +809,19 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
   // Snapshot the mirror before iterating. Concurrent writes during GC could
   // otherwise yield entries that didn't exist when `liveComposites` was
   // built, leading to spurious orphan detection.
+  //
+  // ADV-002 guard: rows carrying user-curated state (confirmed_open_alex_id
+  // OR no_match=1) are NEVER deleted, even if their item appears absent
+  // from `liveComposites`. Zotero.Items.getAll excludes trashed items by
+  // default, so an item trashed-then-restored more than ORPHAN_GC_MIN_INTERVAL_MS
+  // later would otherwise lose its curation. Refetchable metrics get
+  // re-fetched cheaply; user decisions cannot be re-derived.
   const orphans: Array<{ libraryID: number; itemKey: string; composite: string }> = [];
   for (const [composite, row] of mirrorSnapshot()) {
-    if (!liveComposites.has(composite)) {
-      orphans.push({ libraryID: row.library_id, itemKey: row.item_key, composite });
-    }
+    if (liveComposites.has(composite)) continue;
+    if (row.confirmed_open_alex_id !== null) continue;
+    if (row.no_match === 1) continue;
+    orphans.push({ libraryID: row.library_id, itemKey: row.item_key, composite });
   }
 
   if (orphans.length === 0) {

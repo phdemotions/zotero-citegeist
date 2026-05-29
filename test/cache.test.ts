@@ -959,18 +959,34 @@ describe("migration Extra-field edge cases", () => {
     expect(getCachedData(item)!.openAlexId).toBe("W90022");
   });
 
-  it("picks up downgrade-replay items containing only a 'Citegeist match ID:' line", async () => {
-    // No `Citegeist.` prefix — only the v2-runtime mirror line.
+  it("recovers user-confirmed match ID into SQLite even when no legacy fields exist", async () => {
+    // ADV-001 fix: profile-restore drops citegeist.sqlite but Extra retains
+    // the v2-runtime downgrade-safety line. Migration must recover the
+    // confirmed work ID into SQLite so the user's match curation survives.
     const extra = "Citegeist match ID: W90023";
     const item = mockItem("MID", extra);
     mockZotero.Items.getAll.mockResolvedValue([item]);
 
     await migrateFromExtraV1();
 
-    // Candidate scan now includes items with CONFIRMED_MATCH_EXTRA_PREFIX.
-    // The Extra line itself isn't parseable as a legacy field but the
-    // defensive-checkpoint branch fires, so the item is processed cleanly.
-    expect(items.get("MID")!.extra).toBe(extra); // line preserved
+    // SQLite row now carries the recovered confirmed_open_alex_id; runtime
+    // confirmTitleMatch will re-emit the Extra line on next confirmation.
+    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("W90023");
+    // Extra was stripped of the redundant mirror line.
+    expect(items.get("MID")!.extra).not.toContain("Citegeist match ID");
+  });
+
+  it("treats invalid match-ID line as no-op recovery (line preserved as user content)", async () => {
+    const extra = "Citegeist match ID: not-a-work-id";
+    const item = mockItem("BAD", extra);
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+
+    await migrateFromExtraV1();
+
+    // Malformed work ID failed parseWorkId validation; no row recovered,
+    // Extra left untouched (user can hand-fix).
+    expect(getCachedData(item)).toBeNull();
+    expect(items.get("BAD")!.extra).toBe(extra);
   });
 });
 
@@ -1351,6 +1367,69 @@ describe("atomic backup write", () => {
     expect(removeSpy.mock.calls.some(([p]) => /\.json\.tmp$/.test(p as string))).toBe(true);
   });
 });
+
+describe("orphan GC user-curated state protection (ADV-002)", () => {
+  it("does not delete rows with confirmed_open_alex_id even when item is absent from library", async () => {
+    // Seed a row representing a user-confirmed match.
+    const item = mockItem("CONF", "");
+    await confirmTitleMatchPreseeded(item, "W77777");
+    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("W77777");
+
+    // Pretend the item is now "absent" (trashed-then-restored after >7 days
+    // would put it in this state during GC because Items.getAll excludes
+    // trashed by default).
+    mockZotero.Items.getAll.mockResolvedValue([]);
+    await garbageCollectOrphans({ force: true });
+
+    // Row survives — confirmed match is user-curated state.
+    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("W77777");
+  });
+
+  it("does not delete rows with no_match=1", async () => {
+    const item = mockItem("NM", "");
+    await writeNoMatch(item);
+    expect(isNoMatchSuppressed(item, 30)).toBe(true);
+    mockZotero.Items.getAll.mockResolvedValue([]);
+    await garbageCollectOrphans({ force: true });
+    expect(isNoMatchSuppressed(item, 30)).toBe(true);
+  });
+
+  it("does delete rows without user-curated state when orphaned", async () => {
+    const item = mockItem("PLN", "");
+    await cacheWorkData(item, {
+      id: "https://openalex.org/W11111",
+      cited_by_count: 3,
+      fwci: null,
+      is_retracted: false,
+    } as never);
+    expect(getCachedCitationCount(item)).toBe(3);
+    mockZotero.Items.getAll.mockResolvedValue([]);
+    await garbageCollectOrphans({ force: true });
+    expect(getCachedCitationCount(item)).toBeNull();
+  });
+});
+
+// Helper for the ADV-002 test: write a confirmed match row without
+// going through the pending-suggestion flow (test isolates GC behavior).
+async function confirmTitleMatchPreseeded(
+  item: _ZoteroTypes.Item,
+  openAlexId: string,
+): Promise<void> {
+  await writePendingSuggestion(
+    item,
+    {
+      id: `https://openalex.org/${openAlexId}`,
+      display_name: "x",
+      cited_by_count: 1,
+      fwci: null,
+      publication_year: 2020,
+      doi: null,
+    },
+    "high",
+    0.95,
+  );
+  await confirmTitleMatch(item, "high");
+}
 
 describe("buildRowFromLegacy strict numeric parsing", () => {
   it("treats garbage citedByCount as null, not 0", async () => {

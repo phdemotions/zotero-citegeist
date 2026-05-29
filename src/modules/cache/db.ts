@@ -16,6 +16,7 @@
  * • `closeCache` waits for all pending writes before closing the DB.
  */
 
+import { CLOSE_CACHE_DRAIN_TIMEOUT_MS } from "../../constants";
 import { COLUMNS, type ItemCacheRow, mirrorKey, rowToParams } from "./types";
 
 /** Pre-computed UPSERT statement. `COLUMNS` is frozen, so this stays valid. */
@@ -123,7 +124,20 @@ export async function closeCache(): Promise<void> {
     await initPromise.catch(() => {});
   }
   if (pendingWrites.size > 0) {
-    await Promise.allSettled([...pendingWrites]);
+    // Cap the drain at CLOSE_CACHE_DRAIN_TIMEOUT_MS so a hung writer can't
+    // block Zotero's whole shutdown. Losing a few in-flight writes is
+    // preferable to leaving a multi-MB un-checkpointed WAL behind because
+    // the user had to force-kill the parent process.
+    const drain = Promise.allSettled([...pendingWrites]);
+    const deadline = new Promise<void>((resolve) =>
+      setTimeout(resolve, CLOSE_CACHE_DRAIN_TIMEOUT_MS),
+    );
+    await Promise.race([drain, deadline]);
+    if (pendingWrites.size > 0) {
+      Zotero.debug(
+        `[Citegeist] closeCache: ${pendingWrites.size} write(s) still pending after ${CLOSE_CACHE_DRAIN_TIMEOUT_MS}ms — abandoning to unblock shutdown`,
+      );
+    }
   }
   if (db) {
     await db.closeDatabase(true);
