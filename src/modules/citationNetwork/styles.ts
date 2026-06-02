@@ -478,16 +478,19 @@ export function getDialogCSS(): string {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
 
-    /* Respect the user's OS-level Reduce Motion preference. The 8-second
-       undo-shrink bar is the most visually loud animation here; honoring
-       reduced motion is non-negotiable for an Apple-Design-Award bar
-       (and for users with vestibular conditions). Collapsing the
-       animation duration to near-zero finishes immediately while
-       preserving the same end state. (ADV-U4) */
+    /* Respect the user's OS-level Reduce Motion preference. Collapses
+       infinite spinners + entrance animations to near-zero. NOTE we
+       intentionally do NOT include .cg-undo-bar — its 8s linear
+       horizontal width shrink is the ONLY visual indicator of how much
+       time remains before the Undo affordance expires, and a smooth
+       horizontal-width transition is generally considered vestibular-
+       safe (no rotation, scaling, parallax, or perspective). Removing
+       it would leave reduced-motion users with no time cue, which
+       violates the same accessibility goal the override is supposed
+       to honor. (ADV-U4, Iter W refinement) */
     @media (prefers-reduced-motion: reduce) {
       .cg-spinner,
       .cg-result-expanded,
-      .cg-undo-bar,
       .cg-skeleton-bar,
       .cg-item-picker,
       .cg-default-dropdown {

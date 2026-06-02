@@ -40,10 +40,13 @@ export function registerMenus(win: Window): void {
     fetchItem.id = MENU_IDS.fetchCitations;
     fetchItem.setAttribute("label", "Fetch Citation Counts");
     fetchItem.setAttribute("image", "chrome://citegeist/content/icons/icon-16.svg");
-    // Use accesskeys that don't collide with Zotero's native item menu
-    // (F = Find Available PDF, R = Restore from Trash). T/I/E/L are
-    // unused on the default English menu. (ADV-U5)
-    fetchItem.setAttribute("accesskey", "T");
+    // Use accesskeys that don't collide with Zotero's native item menu.
+    // Audited against Zotero 7/8 default English: F (Find PDF), R
+    // (Restore), I (Reindex), E (Export), C (Copy/Collection) all
+    // taken. G is unused — pick G for "citeGeist" mnemonic on Fetch.
+    // View-network items get no accesskey (rarely needed; keyboard
+    // users can Tab + Enter). (ADV-U5, Iter W audit)
+    fetchItem.setAttribute("accesskey", "G");
     fetchItem.addEventListener("command", async () => {
       const pane = Zotero.getActiveZoteroPane();
       const items = pane.getSelectedItems();
@@ -88,7 +91,9 @@ export function registerMenus(win: Window): void {
     const citingItem = (doc as XULDocument).createXULElement("menuitem");
     citingItem.id = MENU_IDS.viewCiting;
     citingItem.setAttribute("label", "View Citing Works\u2026");
-    citingItem.setAttribute("accesskey", "I");
+    // No accesskey on View Citing / References — these are infrequent
+    // single-item actions and most candidate letters collide with
+    // Zotero's native menu (Iter W audit).
     citingItem.addEventListener("command", () => {
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
       if (items.length === 1) {
@@ -102,7 +107,7 @@ export function registerMenus(win: Window): void {
     const refsItem = (doc as XULDocument).createXULElement("menuitem");
     refsItem.id = MENU_IDS.viewRefs;
     refsItem.setAttribute("label", "View References\u2026");
-    refsItem.setAttribute("accesskey", "E");
+    // No accesskey — see comment above.
     refsItem.addEventListener("command", () => {
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
       if (items.length === 1) {

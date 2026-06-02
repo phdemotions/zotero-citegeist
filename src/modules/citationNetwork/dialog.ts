@@ -78,8 +78,18 @@ export async function showCitationNetwork(
       }
       activeState = null;
     } else {
-      // No state yet (early-skeleton phase, lost the race) — fall back to
-      // bare remove so we don't strand the overlay.
+      // No state yet (first dialog still in early-skeleton phase, lost
+      // the race). Mark the in-flight invocation as closed via the same
+      // event the `markClosed` listener watches for — without it, the
+      // first dialog's `Promise.all([getWorkByDOI, ...])` resume path
+      // would rely solely on the `activeDialog !== overlay` identity
+      // check (held today, latent footgun if a future refactor reads
+      // `phase` directly). Then drop the overlay. (Iter W note)
+      try {
+        activeDialog.dispatchEvent(new Event("citegeist:dialog-closed"));
+      } catch {
+        /* event dispatch can throw in rare XUL contexts */
+      }
       try {
         activeDialog.remove();
       } catch {
