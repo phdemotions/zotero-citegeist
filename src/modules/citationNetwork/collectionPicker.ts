@@ -275,23 +275,25 @@ export function initDefaultCollectionPicker(state: NetworkState): void {
     }
   });
 
-  // Close on click outside — listen on the dialog (not just the overlay)
-  // so clicks on rows/tabs/search bar also dismiss the dropdown. Without
-  // this, opening the dropdown then clicking a result row left the
-  // dropdown hovering over the row (F6). Restore focus to the chip on
-  // close so keyboard users don't lose their place (a-n 3).
+  // Close on click outside — listen on the dialog only. The dialog is
+  // a child of the overlay so bubbled clicks reach this handler; binding
+  // additionally on the overlay would fire the listener twice (C4).
   const closeOnOutside = (e: Event) => {
     if (dropdown.hidden) return;
-    const target = e.target as Node;
+    const target = e.target as HTMLElement;
     if (chip.contains(target) || dropdown.contains(target)) return;
     dropdown.hidden = true;
     chip.setAttribute("aria-expanded", "false");
-    // Only restore focus when the closing click originated from inside
-    // the dialog; closing via overlay-backdrop click is dialog-shutdown.
-    if (state.dialog.contains(target)) chip.focus();
+    // Only restore focus when the closing click landed on a NON-
+    // interactive element. If the user clicked a tab, result row,
+    // search input, or any other focusable, the browser has already
+    // moved focus there as part of normal click semantics — pulling
+    // focus back to the chip would steal it from the user's intended
+    // target. (ADV-U3)
+    const movedToInteractive = target.closest("button, a, input, select, [tabindex]");
+    if (!movedToInteractive) chip.focus();
   };
   state.dialog.addEventListener("click", closeOnOutside);
-  state.overlay.addEventListener("click", closeOnOutside);
   dropdown.addEventListener("click", (e: Event) => e.stopPropagation());
 }
 

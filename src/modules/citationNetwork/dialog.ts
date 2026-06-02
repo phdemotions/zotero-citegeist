@@ -30,6 +30,16 @@ import {
 } from "./collectionPicker";
 
 export let activeDialog: HTMLElement | null = null;
+/**
+ * Active dialog's state, tracked alongside `activeDialog` so a stacked
+ * open can run the FULL `closeDialog(state)` cleanup (undo timers, picker
+ * overlays, addedThisSession finalization) — not just remove the DOM
+ * node. Without this, dispatching the `citegeist:dialog-closed` event
+ * fired into a void: no listener cleared state, undo timers kept running
+ * against detached DOM, and items added with pending undo were
+ * silently committed. (ADV-U1)
+ */
+let activeState: NetworkState | null = null;
 
 // ────────────────────────────────────────────────────────
 // Entry point
@@ -52,21 +62,29 @@ export async function showCitationNetwork(
   }
 
   if (activeDialog) {
-    // Fire the close event so any in-flight undo timers, picker overlays,
-    // or "added this session" tracking get the same cleanup the explicit
-    // Close button would trigger. Without this, opening a second dialog
-    // while the first had a pending Add-undo timer left the timer firing
-    // against a detached DOM and orphaned the just-added item in trash
-    // (P2.1 — stacked dialogs lose undo state silently).
-    try {
-      activeDialog.dispatchEvent(new Event("citegeist:dialog-closed"));
-    } catch {
-      // Event dispatch can throw in rare XUL contexts — safe to ignore.
-    }
-    try {
-      activeDialog.remove();
-    } catch {
-      /* already gone */
+    // Run the FULL cleanup — undo timers, picker overlays, search debounce
+    // — same as the explicit Close button would trigger. Previously we
+    // dispatched a `citegeist:dialog-closed` event into the void, which
+    // only flipped `phase = "closed"` via the `markClosed` listener and
+    // left every other piece of state intact. The result: stacked-open
+    // would orphan undo timers firing against detached DOM, items added
+    // with pending undo were silently committed without the user ever
+    // seeing the Undo affordance again. (ADV-U1 / P2.1 real fix)
+    if (activeState) {
+      try {
+        closeDialog(activeState);
+      } catch {
+        // Defensive — closeDialog only does DOM remove + Map.clear + Set.clear.
+      }
+      activeState = null;
+    } else {
+      // No state yet (early-skeleton phase, lost the race) — fall back to
+      // bare remove so we don't strand the overlay.
+      try {
+        activeDialog.remove();
+      } catch {
+        /* already gone */
+      }
     }
     activeDialog = null;
   }
@@ -248,6 +266,10 @@ export async function showCitationNetwork(
     pendingAdds: new Set(),
   };
 
+  // Publish so a subsequent stacked-open invocation can run the full
+  // closeDialog cleanup on this state instead of just removing the DOM.
+  activeState = state;
+
   bindDialogEvents(state);
   updateDefaultCollectionLabel(state);
   await loadResults(state);
@@ -341,6 +363,7 @@ export function closeDialog(state: NetworkState): void {
     /* already gone */
   }
   if (activeDialog === state.overlay) activeDialog = null;
+  if (activeState === state) activeState = null;
 }
 
 // ────────────────────────────────────────────────────────
@@ -386,9 +409,13 @@ export function bindDialogEvents(state: NetworkState): void {
       tabEl.setAttribute("tabindex", "0");
       tabPanel?.setAttribute("aria-labelledby", tabEl.id);
     }
-    // Arrow-key navigation within the tablist.
+    // Arrow-key navigation within the tablist. Skip when a load is in
+    // flight so focus + aria-selected + tabindex stay in sync (C2: the
+    // click handler short-circuits on `state.loading`, but focus had
+    // already moved, desyncing roving-tabindex from the active tab).
     tabEl.addEventListener("keydown", (e: KeyboardEvent) => {
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (state.loading) return;
       e.preventDefault();
       const idx = tabs.indexOf(tabEl);
       const next = tabs[(idx + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];

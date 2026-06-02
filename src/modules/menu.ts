@@ -40,7 +40,10 @@ export function registerMenus(win: Window): void {
     fetchItem.id = MENU_IDS.fetchCitations;
     fetchItem.setAttribute("label", "Fetch Citation Counts");
     fetchItem.setAttribute("image", "chrome://citegeist/content/icons/icon-16.svg");
-    fetchItem.setAttribute("accesskey", "F");
+    // Use accesskeys that don't collide with Zotero's native item menu
+    // (F = Find Available PDF, R = Restore from Trash). T/I/E/L are
+    // unused on the default English menu. (ADV-U5)
+    fetchItem.setAttribute("accesskey", "T");
     fetchItem.addEventListener("command", async () => {
       const pane = Zotero.getActiveZoteroPane();
       const items = pane.getSelectedItems();
@@ -85,7 +88,7 @@ export function registerMenus(win: Window): void {
     const citingItem = (doc as XULDocument).createXULElement("menuitem");
     citingItem.id = MENU_IDS.viewCiting;
     citingItem.setAttribute("label", "View Citing Works\u2026");
-    citingItem.setAttribute("accesskey", "C");
+    citingItem.setAttribute("accesskey", "I");
     citingItem.addEventListener("command", () => {
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
       if (items.length === 1) {
@@ -99,7 +102,7 @@ export function registerMenus(win: Window): void {
     const refsItem = (doc as XULDocument).createXULElement("menuitem");
     refsItem.id = MENU_IDS.viewRefs;
     refsItem.setAttribute("label", "View References\u2026");
-    refsItem.setAttribute("accesskey", "R");
+    refsItem.setAttribute("accesskey", "E");
     refsItem.addEventListener("command", () => {
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
       if (items.length === 1) {
@@ -136,7 +139,7 @@ export function registerMenus(win: Window): void {
     fetchAll.id = MENU_IDS.fetchCollection;
     fetchAll.setAttribute("label", "Fetch All Citation Counts (Citegeist)");
     fetchAll.setAttribute("image", "chrome://citegeist/content/icons/icon-16.svg");
-    fetchAll.setAttribute("accesskey", "G");
+    fetchAll.setAttribute("accesskey", "L");
     fetchAll.addEventListener("command", async () => {
       const collection = Zotero.getActiveZoteroPane().getSelectedCollection();
       if (!collection) return;

@@ -477,5 +477,24 @@ export function getDialogCSS(): string {
       border-top: 1px solid rgba(56,104,87,0.06);
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
+
+    /* Respect the user's OS-level Reduce Motion preference. The 8-second
+       undo-shrink bar is the most visually loud animation here; honoring
+       reduced motion is non-negotiable for an Apple-Design-Award bar
+       (and for users with vestibular conditions). Collapsing the
+       animation duration to near-zero finishes immediately while
+       preserving the same end state. (ADV-U4) */
+    @media (prefers-reduced-motion: reduce) {
+      .cg-spinner,
+      .cg-result-expanded,
+      .cg-undo-bar,
+      .cg-skeleton-bar,
+      .cg-item-picker,
+      .cg-default-dropdown {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+      }
+    }
   `;
 }

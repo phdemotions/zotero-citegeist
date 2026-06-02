@@ -109,6 +109,11 @@ export async function addItemToLibrary(
  * 5 seconds so the row's normal layout returns. Reuses any existing error
  * node for the same row to prevent stacking on repeat failures.
  */
+// Per-banner dismiss timers so a retry within the 5s window cancels the
+// prior banner's removal — without this, the prior timer fires at its
+// original deadline and removes the freshly-updated banner early. (C1)
+const rowErrorTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+
 function showRowError(state: NetworkState, workId: string, message: string): void {
   const row = state.dialog.querySelector(
     `.cg-result-item[data-work-id="${workId}"]`,
@@ -119,9 +124,19 @@ function showRowError(state: NetworkState, workId: string, message: string): voi
     banner = state.dialog.ownerDocument.createElement("div");
     banner.className = "cg-row-error";
     row.appendChild(banner);
+  } else {
+    // Existing banner being repurposed for a new message — cancel its
+    // prior auto-dismiss timer first.
+    const prior = rowErrorTimers.get(banner);
+    if (prior) clearTimeout(prior);
   }
   banner.textContent = message;
-  setTimeout(() => banner?.remove(), 5000);
+  const captured = banner;
+  const handle = setTimeout(() => {
+    rowErrorTimers.delete(captured);
+    captured.remove();
+  }, 5000);
+  rowErrorTimers.set(banner, handle);
 }
 
 // ────────────────────────────────────────────────────────

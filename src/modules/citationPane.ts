@@ -106,9 +106,20 @@ function renderEmptyState(
   setSummary: (s: string) => void,
   key: keyof typeof EMPTY_STATES,
 ): void {
+  // Always clear suggestion-only ARIA attributes when transitioning out
+  // of `renderSuggestion`. Without this, the entire pane stays wrapped
+  // in a `role=status aria-live=polite` region and every subsequent
+  // mutation (refresh, confirm-loading, full renderPane) re-announces
+  // the whole tree. (ADV-U2)
+  clearSuggestionAria(container);
   const s = EMPTY_STATES[key];
   container.innerHTML = `<div class="${s.cls}">${s.html}</div>`;
   setSummary(s.summary);
+}
+
+function clearSuggestionAria(container: HTMLElement): void {
+  if (container.getAttribute("role") === "status") container.removeAttribute("role");
+  if (container.hasAttribute("aria-live")) container.removeAttribute("aria-live");
 }
 
 export function registerCitationPane(pluginID: string): void {
@@ -179,6 +190,11 @@ export function registerCitationPane(pluginID: string): void {
             flex-shrink: 0;
           }
           @keyframes cg-spin { to { transform: rotate(360deg); } }
+          /* Respect Reduce Motion at the OS level — the spinner is the
+             only animation in the pane but the same rule applies. */
+          @media (prefers-reduced-motion: reduce) {
+            .cg-loading::before { animation-duration: 0.001ms !important; }
+          }
           .cg-no-identifier { color: var(--fill-secondary); padding: 4px 0; }
 
           .cg-retracted {
@@ -853,7 +869,11 @@ function renderPane(
 ): void {
   const doc = container.ownerDocument;
 
-  // Clear previous content
+  // Clear previous content + any suggestion-era ARIA wrapping. Without
+  // the latter, a confirmed-from-suggestion render leaves the entire
+  // pane inside a `role=status aria-live=polite` region and every
+  // metric mutation re-announces the whole tree. (ADV-U2)
+  clearSuggestionAria(container);
   container.textContent = "";
 
   // ── Retraction banner ──
