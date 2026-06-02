@@ -475,9 +475,15 @@ export function bindDialogEvents(state: NetworkState): void {
     }
 
     // Split button main -> add / undo / file
-    const splitMain = target.closest(".cg-split-main") as HTMLElement | null;
+    const splitMain = target.closest(".cg-split-main") as HTMLButtonElement | null;
     if (splitMain) {
       e.stopPropagation();
+      // Disabled-state re-check at delegation boundary: clicks on the
+      // chrome around a disabled button (.cg-split-btn padding, focus
+      // ring) bubble here even though the inner <button> rejected them.
+      // Without this, a spam-click during the in-flight add could
+      // re-enter and create a duplicate item. (F2 belt-and-suspenders)
+      if (splitMain.disabled) return;
       const workId = splitMain.dataset.workId;
       const action = splitMain.dataset.action;
       if (!workId) return;

@@ -44,7 +44,13 @@ export async function addItemToLibrary(
   ) as HTMLButtonElement | null;
   if (mainBtn) {
     mainBtn.disabled = true;
-    mainBtn.innerHTML = `<span class="cg-spinner"></span> Adding\u2026`;
+    // Use DOM API per CLAUDE.md guidance ("never set .innerHTML directly").
+    // Spinner element + space + label, replacing whatever the button held.
+    mainBtn.textContent = "";
+    const spinner = mainBtn.ownerDocument.createElement("span");
+    spinner.className = "cg-spinner";
+    mainBtn.appendChild(spinner);
+    mainBtn.appendChild(mainBtn.ownerDocument.createTextNode(" Adding\u2026"));
   }
 
   try {
