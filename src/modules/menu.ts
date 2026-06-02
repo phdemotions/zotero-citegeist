@@ -3,6 +3,7 @@
  */
 
 import { fetchAndCacheItems, extractIdentifier } from "./citationService";
+import { invalidateColumnCache } from "./citationColumn";
 import { showCitationNetwork } from "./citationNetwork";
 import { logError } from "./utils";
 
@@ -65,6 +66,18 @@ export function registerMenus(win: Window): void {
       progress.setProgress(100);
       progress.setText(`Done \u2014 ${count} item${count !== 1 ? "s" : ""} updated`);
       progressWin.startCloseTimer(3000);
+
+      // Drop per-item metrics cache + trigger Zotero column repaint so the
+      // user sees the freshly-fetched counts/FWCI/percentile/ranking right
+      // away. The column module's own queue handles repaint internally;
+      // menu-driven fetches bypass that path entirely. Without this, the
+      // SQLite + mirror were updated but the UI kept showing pre-fetch
+      // values until the user sorted/scrolled/clicked.
+      try {
+        invalidateColumnCache();
+      } catch (e) {
+        logError("menu fetch column invalidate", e);
+      }
     });
     itemMenu.appendChild(fetchItem);
 
@@ -149,6 +162,13 @@ export function registerMenus(win: Window): void {
       progress.setProgress(100);
       progress.setText(`Done — ${count} items updated`);
       progressWin.startCloseTimer(3000);
+
+      // Refresh columns — see fetchItem handler above for full rationale.
+      try {
+        invalidateColumnCache();
+      } catch (e) {
+        logError("menu fetch-collection column invalidate", e);
+      }
     });
     collectionMenu.appendChild(fetchAll);
   }

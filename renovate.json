@@ -1,0 +1,70 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommitTypeAll(chore)",
+    ":dependencyDashboard",
+    ":timezone(America/Toronto)",
+    "schedule:weekly"
+  ],
+  "description": "Citegeist dependency policy. GitHub Actions runs the deterministic test suite + lint + typecheck + build on every PR. Auto-merge patch+minor devDeps only when CI passes. Major bumps and Zotero-runtime-sensitive packages always need manual review.",
+  "minimumReleaseAge": "3 days",
+  "vulnerabilityAlerts": {
+    "prCreation": "immediate",
+    "schedule": []
+  },
+  "packageRules": [
+    {
+      "description": "Auto-merge patch + minor devDeps once CI passes.",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "automergeType": "branch",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Group all @types/* under one PR per week.",
+      "matchPackagePatterns": ["^@types/"],
+      "groupName": "type definitions",
+      "automerge": true,
+      "automergeType": "branch",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Pin @types/node to the LTS major matching engines.node (22).",
+      "matchPackageNames": ["@types/node"],
+      "allowedVersions": "<23.0.0"
+    },
+    {
+      "description": "Group ESLint stack; major bumps may change flat-config schema and need manual review.",
+      "matchPackagePatterns": ["eslint", "^@eslint/", "^@typescript-eslint/"],
+      "groupName": "eslint",
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "automergeType": "branch",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Group Vitest ecosystem; majors regularly break ESM/CJS interop, never auto-merge.",
+      "matchPackagePatterns": ["vitest", "^@vitest/"],
+      "groupName": "vitest",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["framework-major"]
+    },
+    {
+      "description": "TypeScript majors break tsc semantics; manual review only.",
+      "matchPackageNames": ["typescript"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["framework-major"]
+    },
+    {
+      "description": "esbuild — the build pipeline depends on its output shape; majors need manual review.",
+      "matchPackageNames": ["esbuild"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["framework-major"]
+    }
+  ]
+}

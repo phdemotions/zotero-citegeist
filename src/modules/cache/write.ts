@@ -127,9 +127,33 @@ export async function cacheWorkData(
  * Wide semantics (preserved from v1.3.0): removes work data, match meta,
  * AND pending suggestion in one call. `citationPane.ts` depends on this
  * coupling — don't narrow the semantics without auditing pane refresh paths.
+ *
+ * Also strips the `Citegeist match ID: Wxxx` mirror line from the item's
+ * Extra field if present. Without this, a refresh after a user-confirmed
+ * title match would leave SQLite saying "no confirmation" while Extra still
+ * claimed one — a future migration / SQLite-loss recovery would resurrect
+ * the confirmation the user intentionally cleared. Plain-typed callers
+ * (just `{ libraryID, key }`) skip the Extra strip; only callers that pass
+ * a full `_ZoteroTypes.Item` get the mirror cleanup.
  */
-export async function clearCache(item: CacheItemKey): Promise<void> {
+export async function clearCache(item: CacheItemKey | _ZoteroTypes.Item): Promise<void> {
   await deleteRow(item.libraryID, item.key);
+  // Detect whether the caller passed a full Item (with getField/saveTx) vs.
+  // just the structural { libraryID, key } shape used by tests + internal code.
+  const maybeFull = item as Partial<_ZoteroTypes.Item>;
+  if (typeof maybeFull.getField === "function" && typeof maybeFull.saveTx === "function") {
+    const fullItem = item as _ZoteroTypes.Item;
+    const extra = fullItem.getField("extra") ?? "";
+    if (extra.includes(CONFIRMED_MATCH_EXTRA_PREFIX)) {
+      const stripped = setExtraConfirmedMatch(extra.split("\n"), null)
+        .join("\n")
+        .replace(/\n+$/, "");
+      if (stripped !== extra) {
+        fullItem.setField("extra", stripped);
+        await fullItem.saveTx();
+      }
+    }
+  }
 }
 
 export async function writeNoMatch(item: CacheItemKey): Promise<void> {

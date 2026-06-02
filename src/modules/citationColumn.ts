@@ -397,7 +397,12 @@ async function processFetchQueue(): Promise<void> {
           const item = Zotero.Items.get(id);
           if (item) {
             const result = await fetchAndCacheItem(item as _ZoteroTypes.Item);
-            if (result.status === "suggestion") {
+            // Invalidate per-id for both "ok" (real metrics) and "suggestion"
+            // (pending preview) so individual rows refresh as soon as their
+            // data lands, instead of waiting for the bulk metricsCache.clear()
+            // + refreshAndMaintainSelection() at the end of the batch. Makes
+            // partial-batch repaints crisper on large queues.
+            if (result.status === "ok" || result.status === "suggestion") {
               invalidateColumnCache(id);
             }
           }
