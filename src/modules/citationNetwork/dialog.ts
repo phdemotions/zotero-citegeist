@@ -52,6 +52,17 @@ export async function showCitationNetwork(
   }
 
   if (activeDialog) {
+    // Fire the close event so any in-flight undo timers, picker overlays,
+    // or "added this session" tracking get the same cleanup the explicit
+    // Close button would trigger. Without this, opening a second dialog
+    // while the first had a pending Add-undo timer left the timer firing
+    // against a detached DOM and orphaned the just-added item in trash
+    // (P2.1 — stacked dialogs lose undo state silently).
+    try {
+      activeDialog.dispatchEvent(new Event("citegeist:dialog-closed"));
+    } catch {
+      // Event dispatch can throw in rare XUL contexts — safe to ignore.
+    }
     try {
       activeDialog.remove();
     } catch {
@@ -234,6 +245,7 @@ export async function showCitationNetwork(
     itemCollections: new Map(),
     createdItemIds: new Map(),
     defaultPickerExpanded: new Set(),
+    pendingAdds: new Set(),
   };
 
   bindDialogEvents(state);
@@ -371,6 +383,13 @@ export function bindDialogEvents(state: NetworkState): void {
     tabEl.addEventListener("click", async () => {
       const newMode = tabEl.dataset.mode as NetworkMode;
       if (newMode === state.mode || state.loading) return;
+      // Cancel any pending debounced search — without this, a mid-typing
+      // tab switch would fire `renderResults` with stale filter against the
+      // brand-new tab's results once the debounce window elapsed (P2.5).
+      if (state.searchTimeout) {
+        clearTimeout(state.searchTimeout);
+        state.searchTimeout = null;
+      }
       state.generation++;
       state.mode = newMode;
       state.results = [];

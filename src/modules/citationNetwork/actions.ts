@@ -22,8 +22,22 @@ export async function addItemToLibrary(
   workId: string,
   collectionIds: Set<number>,
 ): Promise<void> {
+  // Per-workId in-flight gate. The button.disabled write is the first line
+  // of defense, but the click handler is delegated on `body` and a spam
+  // click before the next event-loop tick could still re-enter (delegated
+  // handler reads `disabled` AFTER the click already fired). Also,
+  // `state.createdItemIds.has(workId)` covers the "user already added,
+  // 3-second undo window pending" case \u2014 without it, a second click in
+  // that window would create a duplicate item.
+  if (state.pendingAdds.has(workId)) return;
+  if (state.createdItemIds.has(workId)) return;
+  state.pendingAdds.add(workId);
+
   const work = state.results.find((w) => w.id.replace("https://openalex.org/", "") === workId);
-  if (!work) return;
+  if (!work) {
+    state.pendingAdds.delete(workId);
+    return;
+  }
 
   const mainBtn = state.dialog.querySelector(
     `.cg-split-main[data-work-id="${workId}"]`,
@@ -63,13 +77,45 @@ export async function addItemToLibrary(
     updateRowButton(state, workId);
   } catch (e) {
     Zotero.debug(`[Citegeist] Error adding work ${workId}: ${e}`);
+    // Surface to the user so they don't assume the click missed and spam
+    // it. Without this banner the only signal was the button reverting,
+    // which looks identical to a no-op.
+    showRowError(
+      state,
+      workId,
+      e instanceof Error && /readOnly|read-only|permission/i.test(e.message)
+        ? "Can't add: this library is read-only."
+        : "Add failed — check your connection and try again.",
+    );
     // Restore button
     if (mainBtn) {
       mainBtn.disabled = false;
       const name = getDefaultCollectionName(state);
       mainBtn.textContent = name ? `+ Add to ${name}` : "+ Add to Library";
     }
+  } finally {
+    state.pendingAdds.delete(workId);
   }
+}
+
+/**
+ * Show a transient inline error under a result row. Auto-dismisses after
+ * 5 seconds so the row's normal layout returns. Reuses any existing error
+ * node for the same row to prevent stacking on repeat failures.
+ */
+function showRowError(state: NetworkState, workId: string, message: string): void {
+  const row = state.dialog.querySelector(
+    `.cg-result-item[data-work-id="${workId}"]`,
+  ) as HTMLElement | null;
+  if (!row) return;
+  let banner = row.querySelector(".cg-row-error") as HTMLElement | null;
+  if (!banner) {
+    banner = state.dialog.ownerDocument.createElement("div");
+    banner.className = "cg-row-error";
+    row.appendChild(banner);
+  }
+  banner.textContent = message;
+  setTimeout(() => banner?.remove(), 5000);
 }
 
 // ────────────────────────────────────────────────────────

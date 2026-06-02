@@ -296,6 +296,23 @@ export function getDialogCSS(): string {
     }
     .cg-result-item:focus { outline: none; }
 
+    /* Inline error banner shown under a row when Add fails (read-only
+       library, network drop, validation throw). Auto-dismisses in 5s. */
+    .cg-row-error {
+      margin-top: 6px; padding: 6px 10px; border-radius: 6px;
+      background: rgba(196, 64, 48, 0.10);
+      color: #C44030; font-size: 12px; line-height: 1.4;
+      border: 1px solid rgba(196, 64, 48, 0.30);
+      role: alert;
+    }
+    @media (prefers-color-scheme: dark) {
+      .cg-row-error {
+        background: rgba(220, 90, 70, 0.18);
+        color: #FFB8AC;
+        border-color: rgba(220, 90, 70, 0.40);
+      }
+    }
+
     /* ── Skeleton loading ── */
     .cg-skeleton-row {
       display: flex; align-items: flex-start; gap: 10px;

@@ -108,8 +108,15 @@ export function registerMenus(win: Window): void {
     itemMenu.appendChild(refsItem);
 
     // Hide citing/refs options when multiple items are selected (they only work on single items)
+    // and hide the Fetch entry when no selected items are eligible — a no-op
+    // click looked like the feature was broken.
     itemMenu.addEventListener("popupshowing", () => {
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
+      const eligibleCount = items.filter(
+        (i: _ZoteroTypes.Item) => i.isRegularItem() && extractIdentifier(i) !== null,
+      ).length;
+      fetchItem.hidden = eligibleCount === 0;
+      sep.hidden = eligibleCount === 0 && items.length !== 1;
       const singleWithIdentifier =
         items.length === 1 && items[0].isRegularItem() && extractIdentifier(items[0]) !== null;
       citingItem.hidden = !singleWithIdentifier;

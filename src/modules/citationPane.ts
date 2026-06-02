@@ -30,16 +30,24 @@ import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork } from "./citationNetwork";
 import { escapeHTML, logError, isBookType, toOrdinal } from "./utils";
 
-let refreshing = false;
+/**
+ * Per-item refresh in-flight set. Keyed by Zotero item ID so a refresh
+ * spam-click on item A doesn't silently swallow a legitimate refresh on
+ * item B (the old module-global `refreshing` flag rejected EVERY second
+ * click regardless of which pane fired it).
+ */
+const refreshing = new Set<number>();
 
 /**
- * Generation counter incremented on every item change. Pane async paths
- * snapshot the current value before awaiting and re-check after — a stale
- * resolution (user selected a different item while a fetch was in flight)
- * is dropped instead of stomping the now-current item's container with
- * stale data. Zotero reuses the section's `body` element across selections,
- * so without this guard a slow fetch on item A would overwrite item B's
- * pane.
+ * Generation counter incremented on every item change AND every refresh.
+ * Pane async paths snapshot the current value before awaiting and re-check
+ * after — a stale resolution (user selected a different item OR clicked
+ * refresh mid-confirm) is dropped instead of stomping the now-current
+ * pane state. Zotero reuses the section's `body` element across
+ * selections, so without this guard a slow fetch on item A would
+ * overwrite item B's pane. Refresh increments the same counter so
+ * `onConfirm` (and other in-flight handlers) bail when their state was
+ * invalidated by an intentional user wipe.
  */
 let paneGeneration = 0;
 
@@ -466,7 +474,10 @@ export function registerCitationPane(pluginID: string): void {
       // from the previous item's fetch detects the mismatch on resume and
       // drops its DOM write instead of clobbering the new item's pane.
       paneGeneration++;
-      setEnabled(item.isRegularItem());
+      // Also disable for trashed items — without this the pane stays
+      // interactive on items in the trash, letting users confirm matches
+      // or fetch citations against records that will be hard-deleted.
+      setEnabled(item.isRegularItem() && !item.deleted);
     },
     onRender: ({ body, item, setSectionSummary }) => {
       const container = body.querySelector("#citegeist-content") as HTMLElement;
@@ -540,10 +551,15 @@ export function registerCitationPane(pluginID: string): void {
         icon: "chrome://zotero/skin/16/universal/sync.svg",
         l10nID: "citegeist-pane-refresh",
         onClick: async ({ body, item, setSectionSummary }) => {
-          if (refreshing) return;
-          refreshing = true;
-          // Snapshot generation; item-change mid-refresh would otherwise stomp
-          // the new item's pane with the old fetch result.
+          // Per-item gate: spam-click on item A must not silently swallow a
+          // refresh on item B.
+          if (refreshing.has(item.id)) return;
+          refreshing.add(item.id);
+          // Bump the generation token so any in-flight onConfirm / async
+          // render handler resuming after this `clearCache` call bails
+          // instead of writing stale post-confirm state over the now-empty
+          // pane.
+          paneGeneration++;
           const gen = paneGeneration;
           try {
             const container = body.querySelector("#citegeist-content") as HTMLElement;
@@ -579,7 +595,7 @@ export function registerCitationPane(pluginID: string): void {
               }
             }
           } finally {
-            refreshing = false;
+            refreshing.delete(item.id);
           }
         },
       },
@@ -651,12 +667,37 @@ function renderSuggestion(
   const doc = container.ownerDocument;
   container.textContent = "";
 
-  const makeButton = (label: string, className: string, onClick: () => void): HTMLButtonElement => {
+  /**
+   * Construct a button whose async action is double-click-safe.
+   *
+   * Disables the button (and its siblings) synchronously on click so a
+   * spam-click can't fire two concurrent confirm/dismiss writes before
+   * SQLite mutateRow even has a chance to serialize them. Re-enables in
+   * `finally` so failure modes (network blip, read-only library) leave a
+   * usable retry path — on success the pane has re-rendered and the
+   * buttons are detached anyway, so the re-enable is a no-op.
+   */
+  const makeGuardedButton = (
+    label: string,
+    className: string,
+    action: () => Promise<void>,
+  ): HTMLButtonElement => {
     const btn = doc.createElement("button");
     btn.type = "button";
     btn.className = className;
     btn.textContent = label;
-    btn.addEventListener("click", onClick);
+    btn.addEventListener("click", async () => {
+      if (btn.disabled) return;
+      btn.disabled = true;
+      const siblings = btn.parentElement?.querySelectorAll("button");
+      siblings?.forEach((s) => ((s as HTMLButtonElement).disabled = true));
+      try {
+        await action();
+      } finally {
+        btn.disabled = false;
+        siblings?.forEach((s) => ((s as HTMLButtonElement).disabled = false));
+      }
+    });
     return btn;
   };
 
@@ -742,16 +783,14 @@ function renderSuggestion(
 
     const actions = doc.createElement("div");
     actions.className = "cg-match-actions";
-    actions.appendChild(
-      makeButton("Confirm match", "cg-match-confirm", () => {
-        onConfirm().catch((e) => logError("onConfirm", e));
-      }),
+    const confirmBtn = makeGuardedButton("Confirm match", "cg-match-confirm", () =>
+      onConfirm().catch((e) => logError("onConfirm", e)),
     );
-    actions.appendChild(
-      makeButton("Not this paper", "cg-match-dismiss", () => {
-        onDismiss().catch((e) => logError("onDismiss", e));
-      }),
+    actions.appendChild(confirmBtn);
+    const dismissBtn = makeGuardedButton("Not this paper", "cg-match-dismiss", () =>
+      onDismiss().catch((e) => logError("onDismiss", e)),
     );
+    actions.appendChild(dismissBtn);
     container.appendChild(actions);
   } else {
     // Medium-confidence: show the candidate card, no metrics
@@ -773,16 +812,14 @@ function renderSuggestion(
 
     const actions = doc.createElement("div");
     actions.className = "cg-match-actions";
-    actions.appendChild(
-      makeButton("Confirm match", "cg-match-confirm", () => {
-        onConfirm().catch((e) => logError("onConfirm", e));
-      }),
+    const confirmBtn = makeGuardedButton("Confirm match", "cg-match-confirm", () =>
+      onConfirm().catch((e) => logError("onConfirm", e)),
     );
-    actions.appendChild(
-      makeButton("Not this paper", "cg-match-dismiss", () => {
-        onDismiss().catch((e) => logError("onDismiss", e));
-      }),
+    actions.appendChild(confirmBtn);
+    const dismissBtn = makeGuardedButton("Not this paper", "cg-match-dismiss", () =>
+      onDismiss().catch((e) => logError("onDismiss", e)),
     );
+    actions.appendChild(dismissBtn);
     card.appendChild(actions);
 
     container.appendChild(card);
