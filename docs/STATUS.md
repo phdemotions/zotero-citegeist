@@ -1,7 +1,7 @@
 # Citegeist — Status
 
-> **Last Updated:** 2026-05-29
-> **Phase:** v2.0.0 release candidate — SQLite cache migration on `feat/sqlite-cache-migration`, awaiting 24h personal Zotero test
+> **Last Updated:** 2026-06-02
+> **Phase:** v2.0.0 release candidate — Iters G–Z applied across cache + UX layers, awaiting 24h personal Zotero test on `feat/sqlite-cache-migration`
 > **Build:** Clean
 
 ---
@@ -10,10 +10,10 @@
 
 | Attribute        | Value                                                                          |
 | ---------------- | ------------------------------------------------------------------------------ |
-| **Version**      | 2.0.0 (unreleased)                                                             |
-| **Build Status** | Clean (231 tests passing, typecheck clean, XPI 77.0 KB)                        |
-| **Open Issues**  | P0: 0, P1: 0, P2: 0 (post-Iter J review sweep clean of behavior-bug findings)  |
-| **Stack**        | TypeScript, esbuild, vitest, Zotero 7/8 bootstrap API, plugin-owned SQLite     |
+| **Version**      | 2.0.0 (unreleased — PR #30)                                                    |
+| **Build Status** | Clean (234 tests passing, typecheck clean, XPI 79.0 KB)                        |
+| **Open Issues**  | P0: 0, P1: 0, P2: 0, P3: 0, P4: 0 (Iter Z reviewer declared P4-clean)         |
+| **Stack**        | TypeScript, esbuild, vitest 4.1, Zotero 7.0.10+ bootstrap API, SQLite, Node 22 |
 | **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                          |
 | **Distribution** | GitHub Releases → auto-update via `release` floating tag                       |
 
@@ -21,8 +21,11 @@
 
 ## In Progress
 
-- **v2.0.0 — SQLite cache migration epic.** Storage moved from per-item `Extra` field to plugin-owned `<profile>/citegeist.sqlite`. Crash-safe three-step migration (SQLite write → Extra strip → checkpoint), pre-migration JSON backup safety net, REL-002 force-rerun guard for partial profile restores, ADV-001 confirmed-match recovery from downgrade-mirror lines, ADV-002 user-curated-state protection in orphan GC, per-item saveTx timeout, bounded close-cache drain. Eleven review iterations applied (correctness, security, performance, maintainability, data integrity, frontend races, TS hygiene, reliability, simplicity, adversarial, patterns, project standards).
-- Awaiting Josh's 24h personal Zotero test before tagging v2.0.0.
+- **v2.0.0 — SQLite cache + UX hardening epic.** Storage moved from per-item `Extra` field to plugin-owned `<profile>/citegeist.sqlite`. Crash-safe three-step migration, pre-migration JSON backup safety net, REL-002 force-rerun guard, confirmed-match recovery from downgrade-mirror lines, orphan GC user-curated-state protection, per-item saveTx timeout, bounded close-cache drain.
+- **Iters G–Z applied** (~16 review iterations, ~80 findings across correctness, security, performance, maintainability, data integrity, frontend races, TS hygiene, reliability, simplicity, adversarial, patterns, project standards, julik races, agent-native, scope guardian, code simplicity).
+- **UX layer hardened to Apple Design Award bar:** per-item refresh guards, double-click disable, atomic dismiss, generation tokens against UI/data races, inline error banners, roving tabindex, focus trap rewrite, `aria-live`/`aria-busy`/`aria-controls` on tabs + suggestion, `prefers-reduced-motion` honored (undo-bar intentionally exempt as essential cue), menu accesskeys audited against Zotero native menus.
+- **Dep hygiene:** Node 22 pinned (`.nvmrc` + `engines.node`), CI matrix narrowed, Renovate config added.
+- Branch pushed; PR #30 open. Awaiting 24h personal Zotero test before tagging v2.0.0.
 
 ---
 

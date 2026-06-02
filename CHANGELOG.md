@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — UX hardening (Iters R–Z)
+
+- Per-item refresh-in-flight set (no more module-global flag swallowing
+  legitimate refreshes across panes).
+- Generation token incremented on item-change AND refresh, dropping
+  stale fetch resolutions across pane reuse.
+- Atomic `dismissAsNoMatch` — clears pending suggestion + sets no-match
+  in one SQLite mutateRow so concurrent fetches can't interleave.
+- Double-click guards on every confirm/dismiss/add button: synchronous
+  `disabled = true` + sibling disable; in-flight `Set<workId>` for
+  Add-to-library; re-enable on error for retry.
+- Inline `.cg-row-error` banner under failed Add-to-library rows with
+  read-only-library-aware copy. Auto-dismiss after 5s.
+- Visual feedback when tabs are clicked during a load: dimmed inactive
+  tabs (`.cg-is-loading`), `aria-busy` flips on the panel.
+- Reduced-motion override: all infinite spinners and entrance
+  animations collapse under `prefers-reduced-motion: reduce`. The
+  8-second undo-bar is intentionally exempt — it's the only countdown
+  cue and a linear horizontal shrink is vestibular-safe.
+- Roving tabindex + arrow-key navigation on the Cited By / References
+  tabs (WAI-ARIA tabs pattern). `aria-controls` + `aria-labelledby`
+  on the body panel.
+- `role="status"` + `aria-live="polite"` on the suggestion container so
+  dismiss/confirm transitions are announced; aria-live cleared on
+  every renderPane / renderEmptyState so subsequent metric updates
+  don't re-announce the whole pane.
+- Focus trap rewritten: re-queries on every keydown, filters hidden /
+  offscreen nodes.
+- Outside-click default-collection dropdown closer: listens on the
+  dialog (not just the overlay), restores focus to the chip only when
+  the closing click landed on a non-interactive target.
+- Menu accesskeys: `G` for Fetch Citations (citegeist mnemonic), `I`
+  for Fetch All Citations. View Citing / References left
+  accesskey-free to avoid Zotero native menu collisions.
+- Preferences pane's Check-for-Updates status now has
+  `role="status" aria-live="polite"` so screen-reader users hear the
+  result.
+
+### Changed
+
+- Menu "Fetch Citations" + collection-level "Fetch All Citation Counts"
+  now invalidate the column metrics cache after the batch completes,
+  so columns repaint immediately instead of showing pre-fetch values
+  until the user sorts/scrolls/clicks.
+- `clearCache(item)` now also strips the `Citegeist match ID: Wxxx`
+  mirror line from the item's Extra when called with a full Zotero
+  item. Prevents SQLite/Extra state divergence after a pane refresh.
+- `processFetchQueue` invalidates per-id metrics for both "ok" and
+  "suggestion" results so partial-batch repaints are crisp.
+- CI matrix dropped Node 20; runs on Node 22 LTS only (matches
+  `engines.node >=22.0.0`). `.nvmrc` pinned to 22.22.3.
+
+### Added — dependency hygiene
+
+- `renovate.json` with weekly schedule, auto-merge for devDep
+  patch+minor, `@types/*` grouped, vitest/typescript/esbuild majors
+  flagged for manual review.
+
 ## [2.0.0] — 2026-05-28
 
 > **Major version bump.** v2.0.0 completely revamps how Citegeist stores
