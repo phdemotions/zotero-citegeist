@@ -275,13 +275,23 @@ export function initDefaultCollectionPicker(state: NetworkState): void {
     }
   });
 
-  // Close on click outside
-  state.overlay.addEventListener("click", () => {
-    if (!dropdown.hidden) {
-      dropdown.hidden = true;
-      chip.setAttribute("aria-expanded", "false");
-    }
-  });
+  // Close on click outside — listen on the dialog (not just the overlay)
+  // so clicks on rows/tabs/search bar also dismiss the dropdown. Without
+  // this, opening the dropdown then clicking a result row left the
+  // dropdown hovering over the row (F6). Restore focus to the chip on
+  // close so keyboard users don't lose their place (a-n 3).
+  const closeOnOutside = (e: Event) => {
+    if (dropdown.hidden) return;
+    const target = e.target as Node;
+    if (chip.contains(target) || dropdown.contains(target)) return;
+    dropdown.hidden = true;
+    chip.setAttribute("aria-expanded", "false");
+    // Only restore focus when the closing click originated from inside
+    // the dialog; closing via overlay-backdrop click is dialog-shutdown.
+    if (state.dialog.contains(target)) chip.focus();
+  };
+  state.dialog.addEventListener("click", closeOnOutside);
+  state.overlay.addEventListener("click", closeOnOutside);
   dropdown.addEventListener("click", (e: Event) => e.stopPropagation());
 }
 

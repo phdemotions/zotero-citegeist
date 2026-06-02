@@ -272,10 +272,12 @@ export function buildDialogHTML(title: string): string {
     </div>
     <div class="cg-dialog-tabs" role="tablist" aria-label="Citation direction">
       <div class="cg-tabs-inner">
-        <button class="cg-tab" data-mode="citing" role="tab"
-                aria-selected="false" tabindex="0">Cited By</button>
-        <button class="cg-tab" data-mode="references" role="tab"
-                aria-selected="false" tabindex="0">References</button>
+        <button class="cg-tab" data-mode="citing" role="tab" id="cg-tab-citing"
+                aria-selected="false" aria-controls="cg-dialog-body"
+                tabindex="-1">Cited By</button>
+        <button class="cg-tab" data-mode="references" role="tab" id="cg-tab-references"
+                aria-selected="false" aria-controls="cg-dialog-body"
+                tabindex="-1">References</button>
       </div>
     </div>
     <div class="cg-dialog-toolbar">
@@ -293,7 +295,8 @@ export function buildDialogHTML(title: string): string {
         <option value="year-asc">Oldest</option>
       </select>
     </div>
-    <div class="cg-dialog-body">
+    <div class="cg-dialog-body" id="cg-dialog-body" role="tabpanel"
+         aria-labelledby="cg-tab-citing" aria-live="polite" aria-busy="true">
       <div class="cg-loading-more">Loading\u2026</div>
     </div>
     <div class="cg-dialog-footer">
@@ -372,14 +375,26 @@ export function bindDialogEvents(state: NetworkState): void {
     if (e.target === overlay) closeDialog(state);
   });
 
-  // Tabs
-  const tabs = dialog.querySelectorAll(".cg-tab");
-  tabs.forEach((tab) => {
-    const tabEl = tab as HTMLElement;
-    if (tabEl.dataset.mode === state.mode) {
+  // Tabs — roving-tabindex + arrow-key navigation per WAI-ARIA tabs pattern.
+  const tabs = Array.from(dialog.querySelectorAll(".cg-tab")) as HTMLElement[];
+  const tabPanel = dialog.querySelector("#cg-dialog-body");
+  tabs.forEach((tabEl) => {
+    const isActive = tabEl.dataset.mode === state.mode;
+    if (isActive) {
       tabEl.classList.add("active");
       tabEl.setAttribute("aria-selected", "true");
+      tabEl.setAttribute("tabindex", "0");
+      tabPanel?.setAttribute("aria-labelledby", tabEl.id);
     }
+    // Arrow-key navigation within the tablist.
+    tabEl.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      const idx = tabs.indexOf(tabEl);
+      const next = tabs[(idx + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+      next.focus();
+      (next as HTMLElement).click();
+    });
     tabEl.addEventListener("click", async () => {
       const newMode = tabEl.dataset.mode as NetworkMode;
       if (newMode === state.mode || state.loading) return;
@@ -397,11 +412,14 @@ export function bindDialogEvents(state: NetworkState): void {
       state.cursor = "*";
       state.hasMore = true;
       tabs.forEach((t) => {
-        (t as HTMLElement).classList.remove("active");
-        (t as HTMLElement).setAttribute("aria-selected", "false");
+        t.classList.remove("active");
+        t.setAttribute("aria-selected", "false");
+        t.setAttribute("tabindex", "-1");
       });
       tabEl.classList.add("active");
       tabEl.setAttribute("aria-selected", "true");
+      tabEl.setAttribute("tabindex", "0");
+      tabPanel?.setAttribute("aria-labelledby", tabEl.id);
       await loadResults(state);
     });
   });
@@ -530,40 +548,64 @@ export function bindDialogEvents(state: NetworkState): void {
       }
     }
 
-    // Enter on row -> expand/collapse
-    if (ke.key === "Enter" && target.classList.contains("cg-result-item")) {
-      ke.preventDefault();
-      const workId = target.dataset.workId;
-      if (workId) toggleExpanded(state, workId);
+    // Enter/Escape on row → expand/collapse. Use closest() so the key
+    // fires from anywhere inside the row (title link, badge, or any
+    // focusable child) — not only when focus is on the row element
+    // itself. Without this, tabbing into a link inside the row made
+    // Enter lose its expand behaviour (a-n 1).
+    if (ke.key === "Enter") {
+      const row = target.closest(".cg-result-item") as HTMLElement | null;
+      if (row && !target.matches("button, a, input, select")) {
+        ke.preventDefault();
+        const workId = row.dataset.workId;
+        if (workId) toggleExpanded(state, workId);
+      }
+    }
+    if (ke.key === "Escape") {
+      const row = target.closest(".cg-result-item") as HTMLElement | null;
+      if (row && state.expandedIds.has(row.dataset.workId ?? "")) {
+        ke.preventDefault();
+        const workId = row.dataset.workId;
+        if (workId) toggleExpanded(state, workId);
+      }
     }
   });
 
-  // Infinite scroll
-  body?.addEventListener("scroll", async () => {
-    if (state.loading || !state.hasMore || state.phase === "closed") return;
-    const scrollBottom = body.scrollHeight - body.scrollTop - body.clientHeight;
-    if (scrollBottom < INFINITE_SCROLL_THRESHOLD_PX) await loadResults(state, true);
+  // Infinite scroll — rAF-throttled so a long results list doesn't force
+  // a layout read on every paint. Without this, fast scrolling on 1k+
+  // items measurably jankifies the dialog. (F12)
+  let scrollScheduled = false;
+  body?.addEventListener("scroll", () => {
+    if (scrollScheduled) return;
+    scrollScheduled = true;
+    requestAnimationFrame(async () => {
+      scrollScheduled = false;
+      if (state.loading || !state.hasMore || state.phase === "closed") return;
+      const scrollBottom = body.scrollHeight - body.scrollTop - body.clientHeight;
+      if (scrollBottom < INFINITE_SCROLL_THRESHOLD_PX) await loadResults(state, true);
+    });
   });
 
-  // Focus trap -- keep Tab within dialog
+  // Focus trap — keep Tab within dialog. Re-queries focusables every
+  // keydown so additions/removals (search input show/hide, picker open)
+  // are picked up live. Filters out hidden elements explicitly so the
+  // trap doesn't park focus on `cg-picker-option[hidden]` nodes that
+  // surrounding CSS keeps reachable in the DOM. (P3.1)
   dialog.addEventListener("keydown", (e: Event) => {
     const ke = e as KeyboardEvent;
     if (ke.key !== "Tab") return;
-    const focusable = dialog.querySelectorAll(
-      'button:not([disabled]), [href], input, select, [tabindex]:not([tabindex="-1"])',
+    const all = dialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]):not([hidden]), [href]:not([hidden]), input:not([hidden]), select:not([hidden]), [tabindex]:not([tabindex="-1"]):not([hidden])',
     );
+    const focusable = Array.from(all).filter((el) => el.offsetParent !== null);
     if (focusable.length === 0) return;
-    const first = focusable[0] as HTMLElement;
-    const last = focusable[focusable.length - 1] as HTMLElement;
-    if (
-      ke.shiftKey &&
-      (dialog.ownerDocument.activeElement === first ||
-        (dialog.contains(dialog.ownerDocument.activeElement) &&
-          dialog.ownerDocument.activeElement === first))
-    ) {
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = dialog.ownerDocument.activeElement;
+    if (ke.shiftKey && active === first) {
       ke.preventDefault();
       last.focus();
-    } else if (!ke.shiftKey && dialog.ownerDocument.activeElement === last) {
+    } else if (!ke.shiftKey && active === last) {
       ke.preventDefault();
       first.focus();
     }

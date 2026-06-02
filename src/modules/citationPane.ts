@@ -762,6 +762,11 @@ function renderSuggestion(
   // "Not found" while a confirmable match is visible in the body.
   setSectionSummary("Possible match");
 
+  // role=status announces dismiss/confirm transitions to screen readers
+  // (a-n 7).
+  container.setAttribute("role", "status");
+  container.setAttribute("aria-live", "polite");
+
   if (suggestion.tier === "high") {
     // High-confidence: show a banner above the metrics
     const banner = doc.createElement("div");
@@ -769,14 +774,20 @@ function renderSuggestion(
     banner.innerHTML = `<strong>Matched by title</strong>We couldn\u2019t find a direct identifier, so we matched this item by title, year, and authors. Please confirm this is the right paper.`;
     container.appendChild(banner);
 
-    // Show the metrics speculatively
+    // Show the metrics speculatively. aria-label spells out the tilde so
+    // screen readers say "approximately" rather than ignoring the glyph
+    // entirely; visible glyphs are aria-hidden to avoid double-reading. (P3.5)
     const headline = doc.createElement("div");
     headline.className = "cg-headline";
-    let html = `<span class="cg-headline-count">~${escapeHTML(String(suggestion.citedByCount))}</span>`;
-    html += `<span class="cg-headline-label">citations</span>`;
+    headline.setAttribute(
+      "aria-label",
+      `Approximately ${suggestion.citedByCount} citations${suggestion.fwci !== null ? `, FWCI approximately ${suggestion.fwci.toFixed(2)}` : ""}, pending confirmation`,
+    );
+    let html = `<span class="cg-headline-count" aria-hidden="true">~${escapeHTML(String(suggestion.citedByCount))}</span>`;
+    html += `<span class="cg-headline-label" aria-hidden="true">citations</span>`;
     if (suggestion.fwci !== null) {
-      html += `<span class="cg-headline-sep">\u00B7</span>`;
-      html += `<span class="cg-headline-detail">FWCI <strong>~${escapeHTML(suggestion.fwci.toFixed(2))}</strong></span>`;
+      html += `<span class="cg-headline-sep" aria-hidden="true">\u00B7</span>`;
+      html += `<span class="cg-headline-detail" aria-hidden="true">FWCI <strong>~${escapeHTML(suggestion.fwci.toFixed(2))}</strong></span>`;
     }
     headline.innerHTML = html;
     container.appendChild(headline);

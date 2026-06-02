@@ -296,6 +296,14 @@ export function getDialogCSS(): string {
     }
     .cg-result-item:focus { outline: none; }
 
+    /* While a load is in flight, dim inactive tabs so the user can see
+       their click was ignored. Active tab stays full opacity so the user
+       knows where focus is. (F11) */
+    #citegeist-network-dialog.cg-is-loading .cg-tab:not(.active) {
+      opacity: 0.45;
+      cursor: progress;
+    }
+
     /* Inline error banner shown under a row when Add fails (read-only
        library, network drop, validation throw). Auto-dismisses in 5s. */
     .cg-row-error {
