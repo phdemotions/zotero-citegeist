@@ -144,7 +144,10 @@ export function registerMenus(win: Window): void {
     fetchAll.id = MENU_IDS.fetchCollection;
     fetchAll.setAttribute("label", "Fetch All Citation Counts (Citegeist)");
     fetchAll.setAttribute("image", "chrome://citegeist/content/icons/icon-16.svg");
-    fetchAll.setAttribute("accesskey", "L");
+    // Collection menu's 'L' may collide with 'New Collection' on some
+    // Zotero builds. 'I' (citegeIst mnemonic) is unused on the default
+    // collection context menu. (Iter Y collision audit)
+    fetchAll.setAttribute("accesskey", "I");
     fetchAll.addEventListener("command", async () => {
       const collection = Zotero.getActiveZoteroPane().getSelectedCollection();
       if (!collection) return;
