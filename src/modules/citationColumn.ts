@@ -345,7 +345,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
  * callers; calling with no argument clears all caches but cannot
  * target a Notifier event (no ids to notify about).
  */
-export function invalidateColumnCache(itemId?: number | number[]): void {
+export async function invalidateColumnCache(itemId?: number | number[]): Promise<void> {
   const ids = itemId === undefined ? null : Array.isArray(itemId) ? itemId : [itemId];
   if (ids === null) {
     metricsCache.clear();
@@ -357,6 +357,8 @@ export function invalidateColumnCache(itemId?: number | number[]): void {
     }
   }
   try {
+    // 1. Fire Notifier event — canonical "this item changed" signal
+    //    ItemTreeManager listens for to re-invoke dataProviders.
     if (ids !== null && ids.length > 0) {
       const notifier = (
         Zotero as unknown as {
@@ -365,13 +367,26 @@ export function invalidateColumnCache(itemId?: number | number[]): void {
       ).Notifier;
       notifier?.trigger("modify", "item", ids);
     }
+    // 2. Force the item tree to invalidate + refresh. Different Zotero
+    //    builds expose different repaint APIs; try the most aggressive
+    //    available, fall back to refreshAndMaintainSelection.
     const zp = Zotero.getActiveZoteroPane();
-    if (zp?.itemsView?.refreshAndMaintainSelection) {
-      zp.itemsView.refreshAndMaintainSelection();
+    const view = zp?.itemsView;
+    if (view) {
+      if (typeof view.invalidate === "function") view.invalidate();
+      if (typeof view.refresh === "function") {
+        await view.refresh();
+      } else if (typeof view.refreshAndMaintainSelection === "function") {
+        await view.refreshAndMaintainSelection();
+      }
     }
-  } catch {
-    // Non-critical — the cache clear above already invalidated; the
-    // user's next interaction will re-render with fresh data.
+    Zotero.debug(
+      `[Citegeist] invalidateColumnCache: cleared ${ids === null ? "all" : String(ids.length)} entries, signaled tree refresh`,
+    );
+  } catch (e) {
+    Zotero.debug(
+      `[Citegeist] invalidateColumnCache: refresh dispatch failed (non-fatal): ${String(e)}`,
+    );
   }
 }
 

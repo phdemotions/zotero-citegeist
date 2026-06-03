@@ -70,6 +70,10 @@ declare namespace _ZoteroTypes {
 
   interface ItemsView {
     refreshAndMaintainSelection(): Promise<void>;
+    /** Force a full table re-render — heavier than refreshAndMaintainSelection;
+     *  invalidates row caches and reruns column dataProviders. */
+    refresh?(): Promise<void>;
+    invalidate?(): void;
   }
 
   // Item pane section registration types
