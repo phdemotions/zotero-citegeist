@@ -98,14 +98,12 @@ export function registerMenus(win: Window): void {
       // Hold progress window longer so result is visible even on fast fetches.
       progressWin.startCloseTimer(6000);
 
-      // Drop per-item metrics cache + trigger Zotero column repaint so the
-      // user sees the freshly-fetched counts/FWCI/percentile/ranking right
-      // away. The column module's own queue handles repaint internally;
-      // menu-driven fetches bypass that path entirely. Without this, the
-      // SQLite + mirror were updated but the UI kept showing pre-fetch
-      // values until the user sorted/scrolled/clicked.
+      // Targeted column repaint \u2014 pass the eligible item IDs so the
+      // Notifier event tells Zotero's ItemTreeManager exactly which
+      // rows need re-rendering. Bulk invalidate alone doesn't trigger
+      // a re-paint on rows currently visible.
       try {
-        invalidateColumnCache();
+        invalidateColumnCache(eligible.map((i) => i.id));
       } catch (e) {
         logError("menu fetch column invalidate", e);
       }
@@ -240,7 +238,7 @@ export function registerMenus(win: Window): void {
 
       // Refresh columns — see fetchItem handler above for full rationale.
       try {
-        invalidateColumnCache();
+        invalidateColumnCache(eligible.map((i) => i.id));
       } catch (e) {
         logError("menu fetch-collection column invalidate", e);
       }

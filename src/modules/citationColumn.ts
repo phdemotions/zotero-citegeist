@@ -323,23 +323,55 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
 }
 
 /**
- * Invalidate the per-item metrics cache so columns re-read the Extra field.
+ * Invalidate the per-item metrics cache so columns re-read the SQLite mirror,
+ * then force Zotero's item tree to repaint.
+ *
+ * Three layers of repaint signal because Zotero's column refresh
+ * behavior is inconsistent across views (Library vs. saved searches vs.
+ * collection):
+ *   1. `metricsCache.delete(...)` clears OUR local memo so the next
+ *      `dataProvider` invocation hits the fresh mirror.
+ *   2. `Zotero.Notifier.trigger("modify", "item", ids)` — canonical
+ *      "this item changed" event. ItemTreeManager listens and re-runs
+ *      column dataProviders on the affected rows. Required: without
+ *      it the menu-driven fetch path updated SQLite + mirror but the
+ *      visible columns stayed stale until the user sorted/scrolled
+ *      manually. (Reported during v2.0.0 testing.)
+ *   3. `refreshAndMaintainSelection()` — belt-and-suspenders for
+ *      builds where the Notifier path doesn't fully redraw.
+ *
+ * Pass `itemIds` (preferred) for targeted refresh of just the affected
+ * rows. Plain `itemId` keeps backward compatibility with existing
+ * callers; calling with no argument clears all caches but cannot
+ * target a Notifier event (no ids to notify about).
  */
-export function invalidateColumnCache(itemId?: number): void {
-  if (itemId !== undefined) {
-    metricsCache.delete(itemId);
-    rankingCache.delete(itemId);
-  } else {
+export function invalidateColumnCache(itemId?: number | number[]): void {
+  const ids = itemId === undefined ? null : Array.isArray(itemId) ? itemId : [itemId];
+  if (ids === null) {
     metricsCache.clear();
     rankingCache.clear();
+  } else {
+    for (const id of ids) {
+      metricsCache.delete(id);
+      rankingCache.delete(id);
+    }
   }
   try {
+    if (ids !== null && ids.length > 0) {
+      const notifier = (
+        Zotero as unknown as {
+          Notifier?: { trigger: (...args: unknown[]) => Promise<unknown> };
+        }
+      ).Notifier;
+      notifier?.trigger("modify", "item", ids);
+    }
     const zp = Zotero.getActiveZoteroPane();
     if (zp?.itemsView?.refreshAndMaintainSelection) {
       zp.itemsView.refreshAndMaintainSelection();
     }
   } catch {
-    // Non-critical
+    // Non-critical — the cache clear above already invalidated; the
+    // user's next interaction will re-render with fresh data.
   }
 }
 
