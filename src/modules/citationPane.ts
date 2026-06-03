@@ -122,19 +122,32 @@ function clearSuggestionAria(container: HTMLElement): void {
   if (container.hasAttribute("aria-live")) container.removeAttribute("aria-live");
 }
 
+let paneRegistered = false;
 export function registerCitationPane(pluginID: string): void {
-  Zotero.ItemPaneManager.registerSection({
-    paneID: PANE_ID,
-    pluginID,
-    header: {
-      l10nID: "citegeist-pane-header",
-      icon: "chrome://citegeist/content/icons/icon-16.svg",
-    },
-    sidenav: {
-      l10nID: "citegeist-pane-sidenav",
-      icon: "chrome://citegeist/content/icons/icon-20.svg",
-    },
-    bodyXHTML: `
+  if (paneRegistered) return;
+  paneRegistered = true;
+  // Defensive unregister — same rationale as the column path: a prior
+  // plugin instance lingering in Zotero's section registry would make
+  // `registerSection` throw "paneID must be unique" and the section
+  // never wires. Ignore any unregister error (paneID isn't there).
+  try {
+    Zotero.ItemPaneManager.unregisterSection(PANE_ID);
+  } catch {
+    // Expected when the section isn't already registered.
+  }
+  try {
+    Zotero.ItemPaneManager.registerSection({
+      paneID: PANE_ID,
+      pluginID,
+      header: {
+        l10nID: "citegeist-pane-header",
+        icon: "chrome://citegeist/content/icons/icon-16.svg",
+      },
+      sidenav: {
+        l10nID: "citegeist-pane-sidenav",
+        icon: "chrome://citegeist/content/icons/icon-20.svg",
+      },
+      bodyXHTML: `
       <div id="citegeist-pane-root" xmlns="http://www.w3.org/1999/xhtml">
         <style>
           /*
@@ -485,138 +498,142 @@ export function registerCitationPane(pluginID: string): void {
         <div id="citegeist-content"></div>
       </div>
     `,
-    onItemChange: ({ item, setEnabled }) => {
-      // Bump the generation token so any in-flight onAsyncRender / onConfirm
-      // from the previous item's fetch detects the mismatch on resume and
-      // drops its DOM write instead of clobbering the new item's pane.
-      paneGeneration++;
-      // Also disable for trashed items — without this the pane stays
-      // interactive on items in the trash, letting users confirm matches
-      // or fetch citations against records that will be hard-deleted.
-      setEnabled(item.isRegularItem() && !item.deleted);
-    },
-    onRender: ({ body, item, setSectionSummary }) => {
-      const container = body.querySelector("#citegeist-content") as HTMLElement;
-      if (!container) return;
+      onItemChange: ({ item, setEnabled }) => {
+        // Bump the generation token so any in-flight onAsyncRender / onConfirm
+        // from the previous item's fetch detects the mismatch on resume and
+        // drops its DOM write instead of clobbering the new item's pane.
+        paneGeneration++;
+        // Also disable for trashed items — without this the pane stays
+        // interactive on items in the trash, letting users confirm matches
+        // or fetch citations against records that will be hard-deleted.
+        setEnabled(item.isRegularItem() && !item.deleted);
+      },
+      onRender: ({ body, item, setSectionSummary }) => {
+        const container = body.querySelector("#citegeist-content") as HTMLElement;
+        if (!container) return;
 
-      const cached = getCachedData(item);
-      if (cached) {
-        renderPane(container, cached, item);
-        setSectionSummary(citationSummary(cached.citedByCount, item));
-        return;
-      }
-
-      // Check for a pending unconfirmed suggestion from a previous fetch
-      const suggestion = getPendingSuggestion(item);
-      if (suggestion) {
-        renderSuggestion(container, suggestion, item, setSectionSummary);
-        return;
-      }
-
-      if (!extractIdentifier(item)) {
-        renderEmptyState(container, setSectionSummary, "noIdentifier");
-        return;
-      }
-
-      renderEmptyState(container, setSectionSummary, "loading");
-    },
-    onAsyncRender: async ({ body, item, setSectionSummary }) => {
-      const container = body.querySelector("#citegeist-content") as HTMLElement;
-      if (!container) return;
-
-      // If we already rendered cached data in onRender and it's fresh, skip
-      const alreadyCached = getCachedData(item);
-      if (alreadyCached && !isCacheStale(item)) return;
-
-      // If a suggestion is already rendered (from a prior fetch stored in Extra), skip
-      if (!alreadyCached && getPendingSuggestion(item)) return;
-
-      // Snapshot the generation BEFORE the await so a mid-fetch item
-      // change is detected on resume. Without this, Zotero's body-element
-      // reuse would have us writing item A's data into item B's pane.
-      const gen = paneGeneration;
-      const result = await fetchAndCacheItem(item);
-      if (gen !== paneGeneration) return;
-
-      if (result.status === "ok") {
-        const freshData = getCachedData(item);
-        if (freshData) {
-          renderPane(container, freshData, item, result.work);
-          setSectionSummary(citationSummary(freshData.citedByCount, item));
-          invalidateColumnCache(item.id);
+        const cached = getCachedData(item);
+        if (cached) {
+          renderPane(container, cached, item);
+          setSectionSummary(citationSummary(cached.citedByCount, item));
+          return;
         }
-      } else if (result.status === "suggestion") {
+
+        // Check for a pending unconfirmed suggestion from a previous fetch
         const suggestion = getPendingSuggestion(item);
         if (suggestion) {
           renderSuggestion(container, suggestion, item, setSectionSummary);
-          invalidateColumnCache(item.id);
+          return;
         }
-      } else if (result.status === "error" && !alreadyCached) {
-        const key =
-          result.error === "network"
-            ? "unavailable"
-            : result.error === "no-match"
-              ? "notFoundTitle"
-              : "notFound";
-        renderEmptyState(container, setSectionSummary, key);
-      }
-    },
-    sectionButtons: [
-      {
-        type: "refresh",
-        icon: "chrome://zotero/skin/16/universal/sync.svg",
-        l10nID: "citegeist-pane-refresh",
-        onClick: async ({ body, item, setSectionSummary }) => {
-          // Per-item gate: spam-click on item A must not silently swallow a
-          // refresh on item B.
-          if (refreshing.has(item.id)) return;
-          refreshing.add(item.id);
-          // Bump the generation token so any in-flight onConfirm / async
-          // render handler resuming after this `clearCache` call bails
-          // instead of writing stale post-confirm state over the now-empty
-          // pane.
-          paneGeneration++;
-          const gen = paneGeneration;
-          try {
-            const container = body.querySelector("#citegeist-content") as HTMLElement;
-            if (container) renderEmptyState(container, setSectionSummary, "refreshing");
-            await clearCache(item); // wide-clear: also nukes pending suggestion
-            const result = await fetchAndCacheItem(item);
-            if (gen !== paneGeneration) return;
-            const cached = getCachedData(item);
-            if (container) {
-              if (cached) {
-                renderPane(
-                  container,
-                  cached,
-                  item,
-                  result.status === "ok" ? result.work : undefined,
-                );
-                setSectionSummary(citationSummary(cached.citedByCount, item));
-                invalidateColumnCache(item.id);
-              } else if (result.status === "suggestion") {
-                const suggestion = getPendingSuggestion(item);
-                if (suggestion) {
-                  renderSuggestion(container, suggestion, item, setSectionSummary);
-                  invalidateColumnCache(item.id);
-                }
-              } else {
-                renderEmptyState(
-                  container,
-                  setSectionSummary,
-                  result.status === "error" && result.error === "network"
-                    ? "unavailable"
-                    : "notFound",
-                );
-              }
-            }
-          } finally {
-            refreshing.delete(item.id);
-          }
-        },
+
+        if (!extractIdentifier(item)) {
+          renderEmptyState(container, setSectionSummary, "noIdentifier");
+          return;
+        }
+
+        renderEmptyState(container, setSectionSummary, "loading");
       },
-    ],
-  });
+      onAsyncRender: async ({ body, item, setSectionSummary }) => {
+        const container = body.querySelector("#citegeist-content") as HTMLElement;
+        if (!container) return;
+
+        // If we already rendered cached data in onRender and it's fresh, skip
+        const alreadyCached = getCachedData(item);
+        if (alreadyCached && !isCacheStale(item)) return;
+
+        // If a suggestion is already rendered (from a prior fetch stored in Extra), skip
+        if (!alreadyCached && getPendingSuggestion(item)) return;
+
+        // Snapshot the generation BEFORE the await so a mid-fetch item
+        // change is detected on resume. Without this, Zotero's body-element
+        // reuse would have us writing item A's data into item B's pane.
+        const gen = paneGeneration;
+        const result = await fetchAndCacheItem(item);
+        if (gen !== paneGeneration) return;
+
+        if (result.status === "ok") {
+          const freshData = getCachedData(item);
+          if (freshData) {
+            renderPane(container, freshData, item, result.work);
+            setSectionSummary(citationSummary(freshData.citedByCount, item));
+            invalidateColumnCache(item.id);
+          }
+        } else if (result.status === "suggestion") {
+          const suggestion = getPendingSuggestion(item);
+          if (suggestion) {
+            renderSuggestion(container, suggestion, item, setSectionSummary);
+            invalidateColumnCache(item.id);
+          }
+        } else if (result.status === "error" && !alreadyCached) {
+          const key =
+            result.error === "network"
+              ? "unavailable"
+              : result.error === "no-match"
+                ? "notFoundTitle"
+                : "notFound";
+          renderEmptyState(container, setSectionSummary, key);
+        }
+      },
+      sectionButtons: [
+        {
+          type: "refresh",
+          icon: "chrome://zotero/skin/16/universal/sync.svg",
+          l10nID: "citegeist-pane-refresh",
+          onClick: async ({ body, item, setSectionSummary }) => {
+            // Per-item gate: spam-click on item A must not silently swallow a
+            // refresh on item B.
+            if (refreshing.has(item.id)) return;
+            refreshing.add(item.id);
+            // Bump the generation token so any in-flight onConfirm / async
+            // render handler resuming after this `clearCache` call bails
+            // instead of writing stale post-confirm state over the now-empty
+            // pane.
+            paneGeneration++;
+            const gen = paneGeneration;
+            try {
+              const container = body.querySelector("#citegeist-content") as HTMLElement;
+              if (container) renderEmptyState(container, setSectionSummary, "refreshing");
+              await clearCache(item); // wide-clear: also nukes pending suggestion
+              const result = await fetchAndCacheItem(item);
+              if (gen !== paneGeneration) return;
+              const cached = getCachedData(item);
+              if (container) {
+                if (cached) {
+                  renderPane(
+                    container,
+                    cached,
+                    item,
+                    result.status === "ok" ? result.work : undefined,
+                  );
+                  setSectionSummary(citationSummary(cached.citedByCount, item));
+                  invalidateColumnCache(item.id);
+                } else if (result.status === "suggestion") {
+                  const suggestion = getPendingSuggestion(item);
+                  if (suggestion) {
+                    renderSuggestion(container, suggestion, item, setSectionSummary);
+                    invalidateColumnCache(item.id);
+                  }
+                } else {
+                  renderEmptyState(
+                    container,
+                    setSectionSummary,
+                    result.status === "error" && result.error === "network"
+                      ? "unavailable"
+                      : "notFound",
+                  );
+                }
+              }
+            } finally {
+              refreshing.delete(item.id);
+            }
+          },
+        },
+      ],
+    });
+  } catch (e) {
+    paneRegistered = false;
+    Zotero.debug(`[Citegeist] registerCitationPane failed: ${String(e)}`);
+  }
 
   Zotero.debug("[Citegeist] Citation pane section registered");
 }
@@ -1016,5 +1033,10 @@ function renderPane(
 }
 
 export function unregisterCitationPane(): void {
-  Zotero.ItemPaneManager.unregisterSection(PANE_ID);
+  try {
+    Zotero.ItemPaneManager.unregisterSection(PANE_ID);
+  } catch (e) {
+    Zotero.debug(`[Citegeist] unregisterCitationPane: ${String(e)}`);
+  }
+  paneRegistered = false;
 }

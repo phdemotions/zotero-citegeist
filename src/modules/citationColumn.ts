@@ -168,10 +168,42 @@ function getRanking(item: _ZoteroTypes.Item): JournalRanking | null {
 
 export async function registerCitationColumn(pluginID: string): Promise<void> {
   if (registered) return;
+  // Flip the flag BEFORE the first await so a parallel/re-entrant call
+  // (Zotero fires onStartup + onMainWindowLoad on the same launch and
+  // can race) doesn't try to register again mid-flight. Previous code
+  // set `registered = true` only at the END — every register call
+  // racing past the guard hit "dataKey must be unique" and silently
+  // never wired its dataProvider, leaving columns blank.
+  registered = true;
+
+  // Defensive unregister: if a prior plugin instance is still alive
+  // in Zotero's registry (uninstall left a stale entry, or a previous
+  // session crashed before unregister fired), the new register would
+  // also throw. Drop any existing registration first; ignore errors
+  // (each unregister rejects with `undefined` if the key isn't there).
+  for (const key of ALL_COLUMNS) {
+    try {
+      await Zotero.ItemTreeManager.unregisterColumn(key);
+    } catch {
+      // Expected when the column isn't already registered.
+    }
+  }
+
+  // Wrap each register in try/catch so a single duplicate doesn't
+  // poison the rest of the sequence — without this, the first column
+  // collision aborted the whole `await` chain and the 8 remaining
+  // columns silently never registered.
+  const safeRegister = async (options: _ZoteroTypes.RegisterColumnOptions) => {
+    try {
+      await Zotero.ItemTreeManager.registerColumn(options);
+    } catch (e) {
+      Zotero.debug(`[Citegeist] registerColumn failed for ${options.dataKey}: ${String(e)}`);
+    }
+  };
 
   // ── Article-level columns ──
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_CITATIONS,
     label: "Citations",
     pluginID,
@@ -195,7 +227,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_FWCI,
     label: "FWCI",
     pluginID,
@@ -218,7 +250,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_PERCENTILE,
     label: "Percentile",
     pluginID,
@@ -238,7 +270,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
 
   // ── Journal-level columns (from OpenAlex source stats) ──
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_CITEDNESS,
     label: `Citedness`,
     pluginID,
@@ -253,7 +285,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_HINDEX,
     label: "J. H-Index",
     pluginID,
@@ -270,7 +302,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
 
   // ── Ranking columns (bundled lookup, no API calls) ──
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_UTD24,
     label: `UTD24`,
     pluginID,
@@ -282,7 +314,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_FT50,
     label: `FT50`,
     pluginID,
@@ -294,7 +326,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_ABDC,
     label: `ABDC '${RANKING_VERSIONS.abdc.slice(2)}`,
     pluginID,
@@ -306,7 +338,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_AJG,
     label: `AJG '${RANKING_VERSIONS.ajg.slice(2)}`,
     pluginID,
@@ -318,7 +350,6 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  registered = true;
   Zotero.debug("[Citegeist] All columns registered (9 total: article, journal, rankings)");
 }
 
