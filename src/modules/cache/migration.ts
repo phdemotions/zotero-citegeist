@@ -343,8 +343,10 @@ function buildProgressUI(total: number): MigrationProgressUI | null {
   try {
     win = new Zotero.ProgressWindow({ closeOnClick: false });
     win.changeHeadline("Citegeist: migrating cache (one-time)");
+    // Explicit-color PNG — ProgressWindow loses `context-fill` and falls
+    // back to a red loading curve that misreads as an error.
     progressItem = new win.ItemProgress(
-      "chrome://citegeist/content/icons/icon-16.svg",
+      "chrome://citegeist/content/icons/icon-16-color.png",
       `0 / ${total}`,
     );
     win.show();

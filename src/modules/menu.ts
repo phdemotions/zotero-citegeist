@@ -71,8 +71,13 @@ export function registerMenus(win: Window): void {
 
       const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
       progressWin.changeHeadline("Citegeist: Fetching Citations");
+      // Use the explicit-color PNG inside the ProgressWindow \u2014 the SVG's
+      // `context-fill` keyword fails to resolve there and Zotero falls
+      // back to the default red loading curve, which (a) clashes with
+      // citegeist's sage brand and (b) reads as an error indicator,
+      // which it isn't.
       const progress = new progressWin.ItemProgress(
-        "chrome://citegeist/content/icons/icon-16.svg",
+        "chrome://citegeist/content/icons/icon-16-color.png",
         `Fetching ${eligible.length} item${eligible.length !== 1 ? "s" : ""}\u2026`,
       );
       progressWin.show();
@@ -208,8 +213,9 @@ export function registerMenus(win: Window): void {
 
       const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
       progressWin.changeHeadline("Citegeist: Fetching Citations");
+      // Explicit-color PNG — see fetchItem handler for rationale.
       const progress = new progressWin.ItemProgress(
-        "chrome://citegeist/content/icons/icon-16.svg",
+        "chrome://citegeist/content/icons/icon-16-color.png",
         `Fetching ${eligible.length} item${eligible.length === 1 ? "" : "s"}…`,
       );
       progressWin.show();
