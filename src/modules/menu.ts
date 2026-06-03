@@ -55,7 +55,19 @@ export function registerMenus(win: Window): void {
       const eligible = items.filter(
         (i: _ZoteroTypes.Item) => i.isRegularItem() && extractIdentifier(i) !== null,
       );
-      if (eligible.length === 0) return;
+      // Modal alert when nothing is eligible \u2014 popupshowing already hides
+      // the menu item in that case, but a programmatic invocation or a
+      // mid-popup selection change can land here with eligible.length=0.
+      if (eligible.length === 0) {
+        Services.prompt.alert(
+          win,
+          "Citegeist: Nothing to fetch",
+          items.length === 0
+            ? "No items selected."
+            : `None of the ${items.length} selected item${items.length === 1 ? "" : "s"} has a recognized identifier (DOI, PMID, arXiv ID, or ISBN).`,
+        );
+        return;
+      }
 
       const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
       progressWin.changeHeadline("Citegeist: Fetching Citations");
@@ -65,14 +77,26 @@ export function registerMenus(win: Window): void {
       );
       progressWin.show();
 
-      const count = await fetchAndCacheItems(eligible, (current, total) => {
-        progress.setProgress((current / total) * 100);
-        progress.setText(`${current}/${total} items fetched`);
-      });
+      let count = 0;
+      try {
+        count = await fetchAndCacheItems(eligible, (current, total) => {
+          progress.setProgress((current / total) * 100);
+          progress.setText(`${current}/${total} items fetched`);
+        });
+      } catch (e) {
+        logError("menu fetch batch", e);
+        progress.setProgress(100);
+        progress.setText("Citegeist: fetch failed \u2014 see Debug Output");
+        progressWin.startCloseTimer(5000);
+        return;
+      }
 
       progress.setProgress(100);
-      progress.setText(`Done \u2014 ${count} item${count !== 1 ? "s" : ""} updated`);
-      progressWin.startCloseTimer(3000);
+      progress.setText(
+        `Done \u2014 ${count} of ${eligible.length} item${eligible.length === 1 ? "" : "s"} updated`,
+      );
+      // Hold progress window longer so result is visible even on fast fetches.
+      progressWin.startCloseTimer(6000);
 
       // Drop per-item metrics cache + trigger Zotero column repaint so the
       // user sees the freshly-fetched counts/FWCI/percentile/ranking right
@@ -164,26 +188,55 @@ export function registerMenus(win: Window): void {
       };
       collectRecursive(collection);
 
+      const totalItems = allItems.size;
       const eligible = [...allItems.values()].filter(
         (i) => i.isRegularItem() && extractIdentifier(i) !== null,
       );
+
+      // Hard fallback when nothing is eligible — the ProgressWindow's
+      // corner notification is easy to miss, leaving the user thinking
+      // the menu click did nothing. A modal alert makes the empty result
+      // unambiguous + tells the user WHY (no DOI/PMID/arXiv/ISBN).
+      if (eligible.length === 0) {
+        Services.prompt.alert(
+          win,
+          "Citegeist: Nothing to fetch",
+          totalItems === 0
+            ? "This collection is empty."
+            : `None of the ${totalItems} item${totalItems === 1 ? "" : "s"} in this collection has a recognized identifier (DOI, PMID, arXiv ID, or ISBN). Add an identifier to the items you want citation data for, then try again.`,
+        );
+        return;
+      }
 
       const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
       progressWin.changeHeadline("Citegeist: Fetching Citations");
       const progress = new progressWin.ItemProgress(
         "chrome://citegeist/content/icons/icon-16.svg",
-        `Fetching ${eligible.length} items…`,
+        `Fetching ${eligible.length} item${eligible.length === 1 ? "" : "s"}…`,
       );
       progressWin.show();
 
-      const count = await fetchAndCacheItems(eligible, (current, total) => {
-        progress.setProgress((current / total) * 100);
-        progress.setText(`${current}/${total} items fetched`);
-      });
+      let count = 0;
+      try {
+        count = await fetchAndCacheItems(eligible, (current, total) => {
+          progress.setProgress((current / total) * 100);
+          progress.setText(`${current}/${total} items fetched`);
+        });
+      } catch (e) {
+        logError("menu fetch-collection batch", e);
+        progress.setProgress(100);
+        progress.setText("Citegeist: fetch failed — see Debug Output");
+        progressWin.startCloseTimer(5000);
+        return;
+      }
 
       progress.setProgress(100);
-      progress.setText(`Done — ${count} items updated`);
-      progressWin.startCloseTimer(3000);
+      progress.setText(
+        `Done — ${count} of ${eligible.length} item${eligible.length === 1 ? "" : "s"} updated`,
+      );
+      // Hold the progress window longer so the result is visible even on
+      // fast fetches that would otherwise flash and disappear.
+      progressWin.startCloseTimer(6000);
 
       // Refresh columns — see fetchItem handler above for full rationale.
       try {
