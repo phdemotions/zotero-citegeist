@@ -251,6 +251,10 @@ declare const Zotero: {
       options: _ZoteroTypes.RegisterColumnOptions,
     ): Promise<string>;
     unregisterColumn(dataKey: string): Promise<void>;
+    /** Force a full column refresh — invalidates internal column caches
+     *  AND re-invokes every dataProvider. Use after external data
+     *  changes that don't propagate via Zotero's item notifier. */
+    refreshColumns(): void;
   };
   ItemPaneManager: {
     registerSection(options: _ZoteroTypes.RegisterSectionOptions): void;

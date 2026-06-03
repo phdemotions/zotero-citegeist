@@ -179,7 +179,27 @@ export function requireDb(): _ZoteroTypes.DBConnection {
 }
 
 export function getRow(libraryID: number, itemKey: string): ItemCacheRow | undefined {
-  return mirror.get(mirrorKey(libraryID, itemKey));
+  const row = mirror.get(mirrorKey(libraryID, itemKey));
+  // One-shot debug — fires once per unique key per session so logs
+  // don't explode. Lets us verify the column read path matches what
+  // upsertRow wrote.
+  if (!getRowLoggedKeys.has(mirrorKey(libraryID, itemKey))) {
+    getRowLoggedKeys.add(mirrorKey(libraryID, itemKey));
+    Zotero.debug(
+      `[Citegeist] getRow: lib=${libraryID} key=${itemKey} -> ${row ? `count=${row.cited_by_count}` : "MISS"} (mirror.size=${mirror.size})`,
+    );
+  }
+  return row;
+}
+
+// Keys we've already logged once via getRow — prevents the log
+// firing on every dataProvider invocation (Zotero calls dataProvider
+// multiple times per item per redraw).
+const getRowLoggedKeys = new Set<string>();
+
+/** Test-only: clear the getRow log dedup. */
+export function _resetGetRowLog(): void {
+  getRowLoggedKeys.clear();
 }
 
 /**
@@ -244,6 +264,9 @@ export async function upsertRow(row: ItemCacheRow): Promise<void> {
     const conn = requireDb();
     await conn.queryAsync(UPSERT_SQL, rowToParams(row));
     mirror.set(mirrorKey(row.library_id, row.item_key), row);
+    Zotero.debug(
+      `[Citegeist] upsertRow: lib=${row.library_id} key=${row.item_key} count=${row.cited_by_count} mirror.size=${mirror.size}`,
+    );
   });
 }
 

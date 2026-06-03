@@ -357,8 +357,24 @@ export async function invalidateColumnCache(itemId?: number | number[]): Promise
     }
   }
   try {
-    // 1. Fire Notifier event — canonical "this item changed" signal
-    //    ItemTreeManager listens for to re-invoke dataProviders.
+    // **PRIMARY**: `Zotero.ItemTreeManager.refreshColumns()` is the
+    // public API specifically built for "external data changed,
+    // re-invoke every dataProvider on every visible row". Discovered
+    // by reading the Zotero source at
+    // chrome/content/zotero/xpcom/pluginAPI/itemTreeManager.js
+    // (`refreshColumns() { this._columnManager.refresh(); }`).
+    //
+    // Notifier.trigger alone is necessary but NOT sufficient —
+    // synthetic notifier events without an actual `item.dataModified`
+    // change don't always re-run custom column dataProviders.
+    const refreshFn = (Zotero.ItemTreeManager as unknown as { refreshColumns?: () => void })
+      .refreshColumns;
+    if (typeof refreshFn === "function") {
+      refreshFn.call(Zotero.ItemTreeManager);
+    }
+
+    // **Belt-and-suspenders**: fire the canonical Notifier event so
+    // anything else watching for per-item changes also gets the signal.
     if (ids !== null && ids.length > 0) {
       const notifier = (
         Zotero as unknown as {
@@ -367,21 +383,22 @@ export async function invalidateColumnCache(itemId?: number | number[]): Promise
       ).Notifier;
       notifier?.trigger("modify", "item", ids);
     }
-    // 2. Force the item tree to invalidate + refresh. Different Zotero
-    //    builds expose different repaint APIs; try the most aggressive
-    //    available, fall back to refreshAndMaintainSelection.
-    const zp = Zotero.getActiveZoteroPane();
-    const view = zp?.itemsView;
-    if (view) {
-      if (typeof view.invalidate === "function") view.invalidate();
-      if (typeof view.refresh === "function") {
-        await view.refresh();
-      } else if (typeof view.refreshAndMaintainSelection === "function") {
-        await view.refreshAndMaintainSelection();
+
+    // **Fallback** for older builds without refreshColumns.
+    if (typeof refreshFn !== "function") {
+      const zp = Zotero.getActiveZoteroPane();
+      const view = zp?.itemsView;
+      if (view) {
+        if (typeof view.invalidate === "function") view.invalidate();
+        if (typeof view.refresh === "function") {
+          await view.refresh();
+        } else if (typeof view.refreshAndMaintainSelection === "function") {
+          await view.refreshAndMaintainSelection();
+        }
       }
     }
     Zotero.debug(
-      `[Citegeist] invalidateColumnCache: cleared ${ids === null ? "all" : String(ids.length)} entries, signaled tree refresh`,
+      `[Citegeist] invalidateColumnCache: cleared ${ids === null ? "all" : String(ids.length)} entries, refreshColumns=${typeof refreshFn === "function"}`,
     );
   } catch (e) {
     Zotero.debug(
