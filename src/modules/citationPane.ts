@@ -123,15 +123,34 @@ function clearSuggestionAria(container: HTMLElement): void {
 }
 
 let paneRegistered = false;
+let paneRegisteredPluginID: string | null = null;
+
+/**
+ * Same as the column module's `namespacedColumnKey` — Zotero stores
+ * `ItemPaneManager` sections under `CSS.escape(${pluginID}-${paneID})`.
+ * Unregister with the un-prefixed paneID silently fails, the stale
+ * section stays, and the next register throws "paneID must be unique".
+ */
+function namespacedPaneKey(pluginID: string, paneID: string): string {
+  const raw = `${pluginID}-${paneID}`;
+  type CSSWithEscape = { escape: (s: string) => string };
+  const cssGlobal = (globalThis as unknown as { CSS?: CSSWithEscape }).CSS;
+  if (cssGlobal && typeof cssGlobal.escape === "function") {
+    return cssGlobal.escape(raw);
+  }
+  return raw.replace(/[@.]/g, "\\$&");
+}
+
 export function registerCitationPane(pluginID: string): void {
   if (paneRegistered) return;
   paneRegistered = true;
-  // Defensive unregister — same rationale as the column path: a prior
-  // plugin instance lingering in Zotero's section registry would make
-  // `registerSection` throw "paneID must be unique" and the section
-  // never wires. Ignore any unregister error (paneID isn't there).
+  paneRegisteredPluginID = pluginID;
+  // Defensive unregister with namespaced key (see namespacedPaneKey).
+  // Without the prefix, Zotero can't find the entry and the next
+  // register throws "paneID must be unique" — exactly the error the
+  // user reported.
   try {
-    Zotero.ItemPaneManager.unregisterSection(PANE_ID);
+    Zotero.ItemPaneManager.unregisterSection(namespacedPaneKey(pluginID, PANE_ID));
   } catch {
     // Expected when the section isn't already registered.
   }
@@ -1033,10 +1052,13 @@ function renderPane(
 }
 
 export function unregisterCitationPane(): void {
-  try {
-    Zotero.ItemPaneManager.unregisterSection(PANE_ID);
-  } catch (e) {
-    Zotero.debug(`[Citegeist] unregisterCitationPane: ${String(e)}`);
+  if (paneRegisteredPluginID) {
+    try {
+      Zotero.ItemPaneManager.unregisterSection(namespacedPaneKey(paneRegisteredPluginID, PANE_ID));
+    } catch (e) {
+      Zotero.debug(`[Citegeist] unregisterCitationPane: ${String(e)}`);
+    }
+    paneRegisteredPluginID = null;
   }
   paneRegistered = false;
 }

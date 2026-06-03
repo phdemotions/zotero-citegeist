@@ -50,10 +50,28 @@ const ALL_COLUMNS = [
 ];
 
 let registered = false;
+let registeredPluginID: string | null = null;
 let fetchTimer: ReturnType<typeof setTimeout> | null = null;
 let processingQueue = false;
 const fetchQueue = new Set<number>();
 const fetchAttempted = new Set<number>();
+
+/**
+ * Build the same namespaced key Zotero stores internally for a
+ * registered column: `CSS.escape(${pluginID}-${dataKey})`. Required
+ * for `unregisterColumn` to find the entry — the un-prefixed key
+ * silently fails. See pluginAPIBase._namespacedMainKey for the source
+ * of truth.
+ */
+function namespacedColumnKey(pluginID: string, dataKey: string): string {
+  const raw = `${pluginID}-${dataKey}`;
+  type CSSWithEscape = { escape: (s: string) => string };
+  const cssGlobal = (globalThis as unknown as { CSS?: CSSWithEscape }).CSS;
+  if (cssGlobal && typeof cssGlobal.escape === "function") {
+    return cssGlobal.escape(raw);
+  }
+  return raw.replace(/[@.]/g, "\\$&");
+}
 
 /**
  * Per-render-tick memo so all 9 columns share one `queueFetch` decision and
@@ -176,14 +194,19 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
   // never wired its dataProvider, leaving columns blank.
   registered = true;
 
-  // Defensive unregister: if a prior plugin instance is still alive
-  // in Zotero's registry (uninstall left a stale entry, or a previous
-  // session crashed before unregister fired), the new register would
-  // also throw. Drop any existing registration first; ignore errors
-  // (each unregister rejects with `undefined` if the key isn't there).
+  // FIRST PRINCIPLES: Zotero's pluginAPIBase stores registered keys
+  // as `CSS.escape(${pluginID}-${dataKey})` — see
+  // chrome/content/zotero/xpcom/pluginAPI/pluginAPIBase.mjs
+  // `_namespacedMainKey()`. Calling `unregisterColumn("citegeist-fwci")`
+  // looks up the un-prefixed key and silently fails (registry only
+  // knows the namespaced form). Stale columns from a prior plugin
+  // lifetime stay, and the next `registerColumn` throws
+  // "dataKey must be unique" on the namespaced form — exactly the
+  // error the user reported.
+  registeredPluginID = pluginID;
   for (const key of ALL_COLUMNS) {
     try {
-      await Zotero.ItemTreeManager.unregisterColumn(key);
+      await Zotero.ItemTreeManager.unregisterColumn(namespacedColumnKey(pluginID, key));
     } catch {
       // Expected when the column isn't already registered.
     }
@@ -459,12 +482,15 @@ export function unregisterCitationColumn(): void {
   processingQueue = false;
   registered = false;
 
-  for (const key of ALL_COLUMNS) {
-    try {
-      Zotero.ItemTreeManager.unregisterColumn(key);
-    } catch {
-      // Column may already be removed
+  if (registeredPluginID) {
+    for (const key of ALL_COLUMNS) {
+      try {
+        Zotero.ItemTreeManager.unregisterColumn(namespacedColumnKey(registeredPluginID, key));
+      } catch {
+        // Column may already be removed
+      }
     }
+    registeredPluginID = null;
   }
 }
 
