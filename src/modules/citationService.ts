@@ -237,22 +237,45 @@ async function attemptTitleSearch(item: _ZoteroTypes.Item): Promise<FetchResult>
 }
 
 /**
- * Batch fetch citation data for multiple items.
- * Returns count of successfully fetched items.
+ * Breakdown returned by `fetchAndCacheItems` — lets the UI describe
+ * what actually happened instead of conflating "no work needed" with
+ * "failed". User reported the old "Done — 0 items updated" message
+ * after running Fetch Citations on a library that had already been
+ * auto-fetched: every item came back `"cached"` (data still fresh)
+ * but the menu copy implied total failure.
+ */
+export interface FetchBatchResult {
+  /** Items where a new OpenAlex fetch landed fresh data. */
+  fresh: number;
+  /** Items whose cache was still within the lifetime window — no API call. */
+  cached: number;
+  /** Items with an unconfirmed title-match suggestion now pending. */
+  suggestion: number;
+  /** Items the fetch attempt couldn't resolve (network / not-found / no-match). */
+  errors: number;
+}
+
+/**
+ * Batch fetch citation data for multiple items. Returns a breakdown
+ * so callers can show a useful summary.
  */
 export async function fetchAndCacheItems(
   items: _ZoteroTypes.Item[],
   onProgress?: (current: number, total: number) => void,
-): Promise<number> {
+): Promise<FetchBatchResult> {
   const eligible = items.filter((item) => item.isRegularItem());
 
-  let fetched = 0;
+  const out: FetchBatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0 };
 
   for (let i = 0; i < eligible.length; i++) {
     try {
       const result = await fetchAndCacheItem(eligible[i]);
-      if (result.status === "ok") fetched++;
+      if (result.status === "ok") out.fresh++;
+      else if (result.status === "cached") out.cached++;
+      else if (result.status === "suggestion") out.suggestion++;
+      else out.errors++;
     } catch (e) {
+      out.errors++;
       logError(`fetchAndCacheItems item ${eligible[i].id}`, e);
     }
 
@@ -263,7 +286,7 @@ export async function fetchAndCacheItems(
     }
   }
 
-  return fetched;
+  return out;
 }
 
 export { getCachedData };

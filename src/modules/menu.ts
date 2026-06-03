@@ -16,6 +16,31 @@ const MENU_IDS = {
   collectionSeparator: "citegeist-collection-menu-separator",
 };
 
+/**
+ * Render a one-line summary of a batch fetch for the ProgressWindow.
+ *
+ * "Done — 0 of N updated" (old copy) confused users who'd already run
+ * auto-fetch: every item came back `"cached"` (still fresh, no API
+ * call needed) so the counter showed 0 even though the columns now
+ * displayed real data. New copy distinguishes:
+ *   • `fresh` — new data landed on this batch
+ *   • `cached` — already up to date, no fetch needed
+ *   • `suggestion` — title-match pending in the pane
+ *   • `errors` — not-found / network / no-match
+ */
+function summarizeBatch(
+  r: { fresh: number; cached: number; suggestion: number; errors: number },
+  total: number,
+): string {
+  const parts: string[] = [];
+  if (r.fresh > 0) parts.push(`${r.fresh} updated`);
+  if (r.cached > 0) parts.push(`${r.cached} already up to date`);
+  if (r.suggestion > 0) parts.push(`${r.suggestion} need confirmation`);
+  if (r.errors > 0) parts.push(`${r.errors} couldn't be matched`);
+  if (parts.length === 0) parts.push(`${total} processed`);
+  return `Done — ${parts.join(", ")}`;
+}
+
 export function registerMenus(win: Window): void {
   const doc = win.document;
   const itemMenu = doc.getElementById("zotero-itemmenu");
@@ -82,9 +107,14 @@ export function registerMenus(win: Window): void {
       );
       progressWin.show();
 
-      let count = 0;
+      let result: { fresh: number; cached: number; suggestion: number; errors: number } = {
+        fresh: 0,
+        cached: 0,
+        suggestion: 0,
+        errors: 0,
+      };
       try {
-        count = await fetchAndCacheItems(eligible, (current, total) => {
+        result = await fetchAndCacheItems(eligible, (current, total) => {
           progress.setProgress((current / total) * 100);
           progress.setText(`${current}/${total} items fetched`);
         });
@@ -97,9 +127,7 @@ export function registerMenus(win: Window): void {
       }
 
       progress.setProgress(100);
-      progress.setText(
-        `Done \u2014 ${count} of ${eligible.length} item${eligible.length === 1 ? "" : "s"} updated`,
-      );
+      progress.setText(summarizeBatch(result, eligible.length));
       // Hold progress window longer so result is visible even on fast fetches.
       progressWin.startCloseTimer(6000);
 
@@ -220,9 +248,14 @@ export function registerMenus(win: Window): void {
       );
       progressWin.show();
 
-      let count = 0;
+      let result: { fresh: number; cached: number; suggestion: number; errors: number } = {
+        fresh: 0,
+        cached: 0,
+        suggestion: 0,
+        errors: 0,
+      };
       try {
-        count = await fetchAndCacheItems(eligible, (current, total) => {
+        result = await fetchAndCacheItems(eligible, (current, total) => {
           progress.setProgress((current / total) * 100);
           progress.setText(`${current}/${total} items fetched`);
         });
@@ -235,9 +268,7 @@ export function registerMenus(win: Window): void {
       }
 
       progress.setProgress(100);
-      progress.setText(
-        `Done — ${count} of ${eligible.length} item${eligible.length === 1 ? "" : "s"} updated`,
-      );
+      progress.setText(summarizeBatch(result, eligible.length));
       // Hold the progress window longer so the result is visible even on
       // fast fetches that would otherwise flash and disappear.
       progressWin.startCloseTimer(6000);
