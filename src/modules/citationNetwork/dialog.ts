@@ -614,14 +614,27 @@ export function bindDialogEvents(state: NetworkState): void {
     }
   });
 
-  // Infinite scroll — rAF-throttled so a long results list doesn't force
-  // a layout read on every paint. Without this, fast scrolling on 1k+
+  // Infinite scroll — throttled so a long results list doesn't force a
+  // layout read on every paint. Without this, fast scrolling on 1k+
   // items measurably jankifies the dialog. (F12)
+  //
+  // Use `state.win.requestAnimationFrame` (NOT the bare global) — Zotero's
+  // XUL sandbox does not expose `requestAnimationFrame` as a global, so
+  // `requestAnimationFrame(...)` threw ReferenceError on every scroll
+  // event. Fall back to `setTimeout(fn, 16)` (~60Hz) on builds that
+  // don't expose the per-window rAF either.
+  const win = state.win as Window & {
+    requestAnimationFrame?: (cb: FrameRequestCallback) => number;
+  };
+  const schedule: (cb: FrameRequestCallback) => unknown =
+    typeof win.requestAnimationFrame === "function"
+      ? win.requestAnimationFrame.bind(win)
+      : (cb) => setTimeout(() => cb(0), 16);
   let scrollScheduled = false;
   body?.addEventListener("scroll", () => {
     if (scrollScheduled) return;
     scrollScheduled = true;
-    requestAnimationFrame(async () => {
+    schedule(async () => {
       scrollScheduled = false;
       if (state.loading || !state.hasMore || state.phase === "closed") return;
       const scrollBottom = body.scrollHeight - body.scrollTop - body.clientHeight;

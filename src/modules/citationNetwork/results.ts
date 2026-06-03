@@ -328,9 +328,10 @@ export async function toggleExpanded(state: NetworkState, workId: string): Promi
       text = null;
     }
     state.abstractCache.set(workId, text);
-    const live = state.dialog.querySelector(
-      `.cg-result-expanded[data-expanded-for="${CSS.escape(workId)}"]`,
-    );
+    // OpenAlex workId matches /^W\d+$/ — alphanumeric, no quotes or
+    // special chars — so CSS.escape is unnecessary AND the global is
+    // not exposed in Zotero's XUL sandbox (throws ReferenceError there).
+    const live = state.dialog.querySelector(`.cg-result-expanded[data-expanded-for="${workId}"]`);
     const loadingEl = live?.querySelector(".cg-abstract-loading");
     if (loadingEl) {
       loadingEl.className = text ? "cg-abstract-text" : "cg-abstract-none";
