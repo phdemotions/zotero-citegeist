@@ -373,15 +373,21 @@ export async function invalidateColumnCache(itemId?: number | number[]): Promise
       refreshFn.call(Zotero.ItemTreeManager);
     }
 
-    // **Belt-and-suspenders**: fire the canonical Notifier event so
-    // anything else watching for per-item changes also gets the signal.
+    // **Belt-and-suspenders**: fire the canonical "redraw" Notifier
+    // event so item tree handles targeted per-row invalidation. The
+    // "redraw" action is documented in chrome/content/zotero/itemTree.jsx
+    // — it calls `tree.invalidateRow(row)` for the supplied ids
+    // (lighter than the full `refreshColumns` reset above, and
+    // targeted to only the affected rows). Earlier code used "modify"
+    // which is the EVENT FOR ITEM-CONTENT CHANGES, not "this row's
+    // cached data needs re-evaluation"; the latter is "redraw".
     if (ids !== null && ids.length > 0) {
       const notifier = (
         Zotero as unknown as {
           Notifier?: { trigger: (...args: unknown[]) => Promise<unknown> };
         }
       ).Notifier;
-      notifier?.trigger("modify", "item", ids);
+      notifier?.trigger("redraw", "item", ids);
     }
 
     // **Fallback** for older builds without refreshColumns.
