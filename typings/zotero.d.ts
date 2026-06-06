@@ -188,6 +188,8 @@ declare const Zotero: {
   getActiveZoteroPane(): {
     getSelectedItems(asIDs?: boolean): _ZoteroTypes.Item[];
     getSelectedCollection(): _ZoteroTypes.Collection | null;
+    /** Returns the library ID of the currently selected library or collection. */
+    getSelectedLibraryID?(): number | undefined;
     itemsView?: _ZoteroTypes.ItemsView;
   };
   Item: new (itemType: string) => _ZoteroTypes.Item;

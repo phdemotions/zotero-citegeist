@@ -71,8 +71,10 @@ export function extractIdentifier(item: _ZoteroTypes.Item): ItemIdentifier | nul
 
   const extra = (item.getField("extra") as string) || "";
 
+  const extraLines = extra.split("\n");
+
   // 2. PMID from Extra field (Zotero convention: "PMID: 12345678")
-  for (const line of extra.split("\n")) {
+  for (const line of extraLines) {
     const m = line.match(/^pmid:\s*(\d{1,10})\s*$/i);
     if (m) {
       const pmid = normalizePMID(m[1]);
@@ -81,7 +83,7 @@ export function extractIdentifier(item: _ZoteroTypes.Item): ItemIdentifier | nul
   }
 
   // 3. arXiv from Extra field (Zotero convention: "arXiv: 2205.01833")
-  for (const line of extra.split("\n")) {
+  for (const line of extraLines) {
     const m = line.match(/^arxiv:\s*(\S+)\s*$/i);
     if (m) {
       const id = normalizeArxivId(m[1]);

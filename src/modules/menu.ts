@@ -16,6 +16,9 @@ const MENU_IDS = {
   collectionSeparator: "citegeist-collection-menu-separator",
 };
 
+/** Shape shared by both batch-fetch handlers. */
+type BatchResult = { fresh: number; cached: number; suggestion: number; errors: number };
+
 /**
  * Render a one-line summary of a batch fetch for the ProgressWindow.
  *
@@ -28,10 +31,7 @@ const MENU_IDS = {
  *   • `suggestion` — title-match pending in the pane
  *   • `errors` — not-found / network / no-match
  */
-function summarizeBatch(
-  r: { fresh: number; cached: number; suggestion: number; errors: number },
-  total: number,
-): string {
+function summarizeBatch(r: BatchResult, total: number): string {
   const parts: string[] = [];
   if (r.fresh > 0) parts.push(`${r.fresh} updated`);
   if (r.cached > 0) parts.push(`${r.cached} already up to date`);
@@ -39,6 +39,19 @@ function summarizeBatch(
   if (r.errors > 0) parts.push(`${r.errors} couldn't be matched`);
   if (parts.length === 0) parts.push(`${total} processed`);
   return `Done — ${parts.join(", ")}`;
+}
+
+/** Recursively gather all items from a collection and its subcollections. */
+function gatherCollectionItems(
+  col: _ZoteroTypes.Collection,
+  out: Map<number, _ZoteroTypes.Item>,
+): void {
+  for (const item of col.getChildItems()) {
+    if (!out.has(item.id)) out.set(item.id, item);
+  }
+  for (const child of col.getChildCollections()) {
+    gatherCollectionItems(child, out);
+  }
 }
 
 export function registerMenus(win: Window): void {
@@ -107,7 +120,7 @@ export function registerMenus(win: Window): void {
       );
       progressWin.show();
 
-      let result: { fresh: number; cached: number; suggestion: number; errors: number } = {
+      let result: BatchResult = {
         fresh: 0,
         cached: 0,
         suggestion: 0,
@@ -204,20 +217,25 @@ export function registerMenus(win: Window): void {
     // collection context menu. (Iter Y collision audit)
     fetchAll.setAttribute("accesskey", "I");
     fetchAll.addEventListener("command", async () => {
-      const collection = Zotero.getActiveZoteroPane().getSelectedCollection();
-      if (!collection) return;
+      const pane = Zotero.getActiveZoteroPane();
+      const collection = pane.getSelectedCollection();
 
-      // Recursively gather items from this collection and all subcollections
+      // Gather items from the selected collection or the whole library when a
+      // library root node (e.g. "My Library") is right-clicked — those nodes
+      // don't return a collection from getSelectedCollection().
       const allItems = new Map<number, _ZoteroTypes.Item>();
-      const collectRecursive = (col: _ZoteroTypes.Collection) => {
-        for (const item of col.getChildItems()) {
-          if (!allItems.has(item.id)) allItems.set(item.id, item);
-        }
-        for (const child of col.getChildCollections()) {
-          collectRecursive(child);
-        }
-      };
-      collectRecursive(collection);
+      if (collection) {
+        gatherCollectionItems(collection, allItems);
+      } else {
+        // Library root — getSelectedCollection() returns null for root nodes.
+        // Use || (not ??) so a falsy 0 also falls back to the user library.
+        // Pass onlyTopLevel=false for consistency with the collection branch —
+        // isRegularItem() below is the single source of truth for eligibility.
+        const rawLibraryID = pane.getSelectedLibraryID?.();
+        const libraryID = rawLibraryID || Zotero.Libraries.userLibraryID;
+        const libraryItems = await Zotero.Items.getAll(libraryID, false);
+        for (const item of libraryItems) allItems.set(item.id, item);
+      }
 
       const totalItems = allItems.size;
       const eligible = [...allItems.values()].filter(
@@ -228,13 +246,14 @@ export function registerMenus(win: Window): void {
       // corner notification is easy to miss, leaving the user thinking
       // the menu click did nothing. A modal alert makes the empty result
       // unambiguous + tells the user WHY (no DOI/PMID/arXiv/ISBN).
+      const scope = collection ? "collection" : "library";
       if (eligible.length === 0) {
         Services.prompt.alert(
           win,
           "Citegeist: Nothing to fetch",
           totalItems === 0
-            ? "This collection is empty."
-            : `None of the ${totalItems} item${totalItems === 1 ? "" : "s"} in this collection has a recognized identifier (DOI, PMID, arXiv ID, or ISBN). Add an identifier to the items you want citation data for, then try again.`,
+            ? `This ${scope} is empty.`
+            : `None of the ${totalItems} item${totalItems === 1 ? "" : "s"} in this ${scope} has a recognized identifier (DOI, PMID, arXiv ID, or ISBN). Add an identifier to the items you want citation data for, then try again.`,
         );
         return;
       }
@@ -248,7 +267,7 @@ export function registerMenus(win: Window): void {
       );
       progressWin.show();
 
-      let result: { fresh: number; cached: number; suggestion: number; errors: number } = {
+      let result: BatchResult = {
         fresh: 0,
         cached: 0,
         suggestion: 0,
