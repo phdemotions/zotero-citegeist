@@ -200,9 +200,11 @@ describe("cacheWorkData → read round-trip", () => {
     expect(m.sourceISSNs).toEqual(["1234-5678"]);
   });
 
-  it("suppresses fwci when cited_by_count is 0", async () => {
+  it("preserves fwci from OpenAlex even when cited_by_count is 0", async () => {
+    // Zero-citation works can still have valid FWCI/percentile from OpenAlex.
+    // We no longer suppress them — the gate was silently dropping real data.
     await cacheWorkData(mockItem("A"), makeWork({ cited_by_count: 0, fwci: 1.5 }));
-    expect(getCachedData(mockItem("A"))!.fwci).toBeNull();
+    expect(getCachedData(mockItem("A"))!.fwci).toBe(1.5);
   });
 
   it("getCachedCountAndStaleness reads single round of mirror", async () => {

@@ -130,6 +130,8 @@ function showStartupAlert(title: string, body: string): void {
 export async function onShutdown(_data: PluginData): Promise<void> {
   Zotero.debug("[Citegeist] Shutting down");
 
+  const win = Zotero.getMainWindow() as Window | null;
+  if (win) unregisterMenus(win);
   unregisterCitationColumn();
   unregisterCitationPane();
   clearSourceStatsCache();

@@ -651,7 +651,7 @@ export function registerCitationPane(pluginID: string): void {
     });
   } catch (e) {
     paneRegistered = false;
-    Zotero.debug(`[Citegeist] registerCitationPane failed: ${String(e)}`);
+    logError("registerCitationPane", e);
   }
 
   Zotero.debug("[Citegeist] Citation pane section registered");
@@ -1056,7 +1056,7 @@ export function unregisterCitationPane(): void {
     try {
       Zotero.ItemPaneManager.unregisterSection(namespacedPaneKey(paneRegisteredPluginID, PANE_ID));
     } catch (e) {
-      Zotero.debug(`[Citegeist] unregisterCitationPane: ${String(e)}`);
+      logError("unregisterCitationPane", e);
     }
     paneRegisteredPluginID = null;
   }

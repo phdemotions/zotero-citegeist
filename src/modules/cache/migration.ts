@@ -575,7 +575,7 @@ export async function migrateFromExtraV1(): Promise<void> {
               const stripped = setExtraConfirmedMatch(extra.split("\n"), null)
                 .join("\n")
                 .replace(/\n+$/, "");
-              if (stripped !== rawExtra) {
+              if (stripped !== extra) {
                 item.setField("extra", stripped);
                 // Race against deadline — recovery-branch items get the
                 // same hung-item protection the main path does. Without
@@ -583,9 +583,19 @@ export async function migrateFromExtraV1(): Promise<void> {
                 // subsequent candidate (REL-M-001).
                 await saveTxWithDeadline(item);
               }
+              await checkpointItem(conn, item.libraryID, item.key);
+              checkpointed.add(mirrorKey(item.libraryID, item.key));
+            } else if (!extra.includes(CONFIRMED_MATCH_EXTRA_PREFIX)) {
+              // Genuinely clean — no legacy fields, no confirmed-match line.
+              await checkpointItem(conn, item.libraryID, item.key);
+              checkpointed.add(mirrorKey(item.libraryID, item.key));
+            } else {
+              // Has a confirmed-match line that didn't parse as a valid W-ID.
+              // Leave un-checkpointed so future runs can revisit.
+              Zotero.debug(
+                `[Citegeist] migration: unparseable confirmed-match line in ${item.libraryID}/${item.key} — skipping checkpoint`,
+              );
             }
-            await checkpointItem(conn, item.libraryID, item.key);
-            checkpointed.add(mirrorKey(item.libraryID, item.key));
             continue;
           }
 
@@ -712,7 +722,7 @@ async function shouldForceRerun(): Promise<boolean> {
       for (const item of items) {
         if (item.deleted || !item.isRegularItem()) continue;
         const extra = item.getField("extra");
-        if (extra && extra.includes(LEGACY_PREFIX)) return true;
+        if (extra && (extra.includes(LEGACY_PREFIX) || extra.includes(CONFIRMED_MATCH_EXTRA_PREFIX))) return true;
       }
     }
     return false;

@@ -220,7 +220,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     try {
       await Zotero.ItemTreeManager.registerColumn(options);
     } catch (e) {
-      Zotero.debug(`[Citegeist] registerColumn failed for ${options.dataKey}: ${String(e)}`);
+      logError("registerColumn", e);
     }
   };
 
@@ -461,9 +461,7 @@ export async function invalidateColumnCache(itemId?: number | number[]): Promise
       `[Citegeist] invalidateColumnCache: cleared ${ids === null ? "all" : String(ids.length)} entries, refreshColumns=${typeof refreshFn === "function"}`,
     );
   } catch (e) {
-    Zotero.debug(
-      `[Citegeist] invalidateColumnCache: refresh dispatch failed (non-fatal): ${String(e)}`,
-    );
+    logError("invalidateColumnCache refresh", e);
   }
 }
 

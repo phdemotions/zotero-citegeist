@@ -6,7 +6,7 @@
  * consolidated in `renderCollectionOptions`.
  */
 
-import { escapeHTML, safeInnerHTML } from "../utils";
+import { escapeHTML, logError, safeInnerHTML } from "../utils";
 import type { CollectionNode, NetworkState } from "./types";
 import { addItemToLibrary, updateAllAddButtons } from "./actions";
 
@@ -437,7 +437,7 @@ export async function updateItemCollections(
     await item.saveTx();
     state.itemCollections.set(doi, new Set(newCols));
   } catch (e) {
-    Zotero.debug(`[Citegeist] Error updating collections for ${workId}: ${e}`);
+    logError("updateItemCollections", e);
   }
 }
 
@@ -508,7 +508,7 @@ export function buildCollectionTree(): CollectionNode[] {
     };
     walk(false, 0);
   } catch (e) {
-    Zotero.debug(`[Citegeist] Error building collection tree: ${e}`);
+    logError("buildCollectionTree", e);
   }
   return nodes;
 }
@@ -529,7 +529,7 @@ export async function getItemCollections(doi: string): Promise<Set<number>> {
       }
     }
   } catch (e) {
-    Zotero.debug(`[Citegeist] Error getting item collections for DOI ${doi}: ${e}`);
+    logError("getItemCollections", e);
   }
   return cols;
 }

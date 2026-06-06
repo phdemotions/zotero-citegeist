@@ -185,7 +185,7 @@ export function getTitleMatchMeta(item: CacheItemKey): TitleMatchMeta {
 export function isNoMatchSuppressed(item: CacheItemKey, retryDays: number): boolean {
   const row = getRow(item.libraryID, item.key);
   if (!row || row.no_match !== 1) return false;
-  if (!row.no_match_timestamp) return true;
+  if (!row.no_match_timestamp) return false;
   const age = Date.now() - new Date(row.no_match_timestamp).getTime();
   return age < retryDays * 24 * 60 * 60 * 1000;
 }

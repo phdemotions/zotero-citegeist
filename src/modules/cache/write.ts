@@ -53,8 +53,8 @@ function nonNegIntOrNull(v: number | null | undefined): number | null {
 
 /**
  * Pure helper deriving the four citation-derived metric fields from an
- * OpenAlex work. Works with zero citations have no metrics — that invariant
- * lives in one place so future writers can't accidentally diverge.
+ * OpenAlex work. Returns null for any field OpenAlex doesn't provide;
+ * zero-citation metrics (fwci=0, percentile=0) are preserved as-is.
  */
 function deriveCitationMetrics(work: CacheWorkInput): {
   fwci: number | null;
@@ -62,9 +62,6 @@ function deriveCitationMetrics(work: CacheWorkInput): {
   isTop1Percent: DbBool;
   isTop10Percent: DbBool;
 } {
-  if (work.cited_by_count <= 0) {
-    return { fwci: null, percentile: null, isTop1Percent: null, isTop10Percent: null };
-  }
   const cnp = work.citation_normalized_percentile;
   return {
     fwci: finiteOrNull(work.fwci),
@@ -101,6 +98,8 @@ export async function cacheWorkData(
     const base = existing ?? emptyRow(libraryID, itemKey);
     return {
       ...base,
+      no_match: 0 as DbBool,
+      no_match_timestamp: null,
       open_alex_id: openAlexId,
       cited_by_count: nonNegIntOrNull(work.cited_by_count),
       fwci: metrics.fwci,
@@ -161,6 +160,7 @@ export async function writeNoMatch(item: CacheItemKey): Promise<void> {
   const itemKey = item.key;
   await mutateRow(libraryID, itemKey, (existing) => ({
     ...(existing ?? emptyRow(libraryID, itemKey)),
+    ...PENDING_CLEARED,
     no_match: 1,
     no_match_timestamp: new Date().toISOString(),
   }));
@@ -290,7 +290,12 @@ export async function clearPendingSuggestion(item: CacheItemKey): Promise<void> 
  * one-shot legacy migration, both of which need the same line-rewrite rule.
  */
 export function setExtraConfirmedMatch(lines: string[], openAlexId: string | null): string[] {
-  const filtered = lines.filter((l) => !l.startsWith(`${CONFIRMED_MATCH_EXTRA_PREFIX}:`));
+  const prefix = `${CONFIRMED_MATCH_EXTRA_PREFIX}:`;
+  const filtered = lines.filter((l) => {
+    if (!l.startsWith(prefix)) return true;
+    const id = l.slice(prefix.length).trim();
+    return !parseWorkId(id); // keep if not a valid W-ID (e.g. user notes)
+  });
   if (openAlexId) filtered.push(`${CONFIRMED_MATCH_EXTRA_PREFIX}: ${openAlexId}`);
   return filtered;
 }

@@ -50,6 +50,8 @@ export async function loadResults(state: NetworkState, append = false): Promise<
 
     if (gen !== state.generation || state.phase === "closed") {
       state.loading = false;
+      body?.setAttribute("aria-busy", "false");
+      state.dialog.classList.remove("cg-is-loading");
       return;
     }
 
@@ -70,6 +72,8 @@ export async function loadResults(state: NetworkState, append = false): Promise<
   } catch (e) {
     if (gen !== state.generation || state.phase === "closed") {
       state.loading = false;
+      body?.setAttribute("aria-busy", "false");
+      state.dialog.classList.remove("cg-is-loading");
       return;
     }
     logError("loadResults", e);
@@ -273,7 +277,7 @@ export async function toggleExpanded(state: NetworkState, workId: string): Promi
     if (itemEl) {
       itemEl.setAttribute("aria-expanded", "false");
       const hint = itemEl.querySelector(".cg-expand-hint");
-      if (hint) hint.innerHTML = `<span class="cg-expand-chevron">\u25B8</span>Abstract`;
+      if (hint) safeInnerHTML(hint, `<span class="cg-expand-chevron">\u25B8</span>Abstract`);
     }
     return;
   }
@@ -282,7 +286,7 @@ export async function toggleExpanded(state: NetworkState, workId: string): Promi
   if (!itemEl) return;
   itemEl.setAttribute("aria-expanded", "true");
   const hint = itemEl.querySelector(".cg-expand-hint");
-  if (hint) hint.innerHTML = `<span class="cg-expand-chevron">\u25BE</span>Hide abstract`;
+  if (hint) safeInnerHTML(hint, `<span class="cg-expand-chevron">\u25BE</span>Hide abstract`);
 
   // Create expanded element
   const doc = state.dialog.ownerDocument;

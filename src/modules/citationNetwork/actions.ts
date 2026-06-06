@@ -5,7 +5,7 @@
 import { getSourceStats, type OpenAlexWork } from "../openalex";
 import { cacheWorkData } from "../cache";
 import { invalidateColumnCache } from "../citationColumn";
-import { escapeHTML, safeInnerHTML } from "../utils";
+import { escapeHTML, logError, safeInnerHTML } from "../utils";
 import { SURNAME_PREFIXES, UNDO_TIMEOUT_MS, type NetworkState } from "./types";
 
 // ────────────────────────────────────────────────────────
@@ -82,7 +82,7 @@ export async function addItemToLibrary(
 
     updateRowButton(state, workId);
   } catch (e) {
-    Zotero.debug(`[Citegeist] Error adding work ${workId}: ${e}`);
+    logError("addItemToLibrary", e);
     // Surface to the user so they don't assume the click missed and spam
     // it. Without this banner the only signal was the button reverting,
     // which looks identical to a no-op.
@@ -165,7 +165,7 @@ export async function handleUndo(state: NetworkState, workId: string): Promise<v
         await item.saveTx();
       }
     } catch (e) {
-      Zotero.debug(`[Citegeist] Error undoing add for ${workId}: ${e}`);
+      logError("handleUndo", e);
     }
     state.createdItemIds.delete(workId);
   }
@@ -382,7 +382,7 @@ export async function getExistingDOIs(): Promise<Set<string>> {
       }
     }
   } catch (e) {
-    Zotero.debug(`[Citegeist] Error getting existing DOIs: ${e}`);
+    logError("getExistingDOIs", e);
   }
   return dois;
 }
