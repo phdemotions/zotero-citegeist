@@ -99,6 +99,11 @@ const EMPTY_STATES = {
     cls: "cg-no-identifier",
   },
   confirmLoading: { html: "Loading…", summary: "Loading…", cls: "cg-loading" },
+  matchSaved: {
+    html: "Match confirmed — the metrics didn’t load just yet. Use the refresh button to try again.",
+    summary: "Confirmed",
+    cls: "cg-loading",
+  },
 } as const;
 
 function renderEmptyState(
@@ -422,11 +427,65 @@ export function registerCitationPane(pluginID: string): void {
           .cg-match-card-meta {
             color: var(--fill-secondary, #8e8e93);
             font-size: 11px;
+            margin-bottom: 2px;
+          }
+          .cg-match-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 6px;
+          }
+          .cg-match-eyebrow {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--fill-secondary, #8e8e93);
+          }
+          .cg-match-chip {
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 999px;
+            white-space: nowrap;
+            background: var(--cg-sage-bg);
+            color: var(--cg-text-secondary);
+          }
+          .cg-match-chip-strong {
+            background: var(--cg-amber-bg);
+            color: var(--cg-amber-fg-strong);
+          }
+          .cg-match-prompt {
+            font-size: 11px;
+            line-height: 1.45;
+            color: var(--fill-secondary, #8e8e93);
             margin-bottom: 8px;
+          }
+          .cg-match-legend {
+            font-size: 10px;
+            color: var(--fill-secondary, #8e8e93);
+            opacity: 0.85;
+            margin-bottom: 10px;
           }
           .cg-match-actions {
             display: flex;
             gap: 6px;
+          }
+          #citegeist-pane-root .cg-match-confirm:disabled,
+          #citegeist-pane-root .cg-match-dismiss:disabled {
+            opacity: 0.55;
+            cursor: default;
+          }
+          #citegeist-pane-root .cg-match-verify {
+            display: inline-block;
+            margin-top: 8px;
+            font-size: 11px;
+            color: var(--cg-sage-fg, #8FAD9F);
+            text-decoration: none;
+          }
+          #citegeist-pane-root .cg-match-verify:hover {
+            text-decoration: underline;
           }
           #citegeist-pane-root .cg-match-confirm {
             flex: 1;
@@ -774,21 +833,21 @@ function renderSuggestion(
         renderPane(container, fresh, item, result.status === "ok" ? result.work : undefined);
         setSectionSummary(citationSummary(fresh.citedByCount, item));
       } else if (result.status === "error") {
-        // Confirmation persisted in SQLite (confirmed_open_alex_id is set),
-        // but the follow-up fetch failed (network blip, transient 5xx).
-        // Without this branch the pane stays on `confirmLoading` forever,
-        // hiding the fact that the user's curation actually succeeded.
-        renderEmptyState(
-          container,
-          setSectionSummary,
-          result.error === "network" ? "unavailable" : "notFound",
-        );
+        // Confirmation persisted in SQLite (confirmed_open_alex_id is set), but
+        // the follow-up fetch failed (network blip, transient 5xx). Show a
+        // POSITIVE "match saved" state — NOT "Not found", which made a
+        // successful confirmation read as a failure (W2). Metrics retry on the
+        // next refresh / auto-fetch.
+        renderEmptyState(container, setSectionSummary, "matchSaved");
       }
       invalidateColumnCache(item.id);
 
-      // DOI population bonus: if matched work has a DOI and item doesn't, offer to add it
+      // DOI graduation: if the matched work has a DOI the item lacks, offer to
+      // add it — regardless of whether metrics loaded. The DOI is the durable
+      // win (it permanently graduates the item out of title search), so don't
+      // gate it on `fresh` (W3).
       const itemDoi = (item.getField("DOI") as string) || "";
-      if (suggestion.doi && !itemDoi.trim() && fresh) {
+      if (suggestion.doi && !itemDoi.trim()) {
         renderDoiPrompt(container, item, suggestion.doi);
       }
     } catch (e) {
@@ -819,74 +878,97 @@ function renderSuggestion(
   container.setAttribute("role", "status");
   container.setAttribute("aria-live", "polite");
 
-  if (suggestion.tier === "high") {
-    // High-confidence: show a banner above the metrics
-    const banner = doc.createElement("div");
-    banner.className = "cg-match-banner";
-    banner.innerHTML = `<strong>Matched by title</strong>We couldn\u2019t find a direct identifier, so we matched this item by title, year, and authors. Please confirm this is the right paper.`;
-    container.appendChild(banner);
+  // One unified card for both tiers \u2014 the only difference is the confidence
+  // chip. The high tier previously showed speculative metrics with NO title,
+  // authors, or year, so the user was asked to confirm an invisible paper.
+  const isStrong = suggestion.tier === "high";
+  const confidencePct = Math.max(0, Math.min(100, Math.round((suggestion.confidence ?? 0) * 100)));
 
-    // Show the metrics speculatively. aria-label spells out the tilde so
-    // screen readers say "approximately" rather than ignoring the glyph
-    // entirely; visible glyphs are aria-hidden to avoid double-reading. (P3.5)
-    const headline = doc.createElement("div");
-    headline.className = "cg-headline";
-    headline.setAttribute(
-      "aria-label",
-      `Approximately ${suggestion.citedByCount} citations${suggestion.fwci !== null ? `, FWCI approximately ${suggestion.fwci.toFixed(2)}` : ""}, pending confirmation`,
-    );
-    let html = `<span class="cg-headline-count" aria-hidden="true">~${escapeHTML(String(suggestion.citedByCount))}</span>`;
-    html += `<span class="cg-headline-label" aria-hidden="true">citations</span>`;
-    if (suggestion.fwci !== null) {
-      html += `<span class="cg-headline-sep" aria-hidden="true">\u00B7</span>`;
-      html += `<span class="cg-headline-detail" aria-hidden="true">FWCI <strong>~${escapeHTML(suggestion.fwci.toFixed(2))}</strong></span>`;
-    }
-    headline.innerHTML = html;
-    container.appendChild(headline);
+  const card = doc.createElement("div");
+  card.className = "cg-match-card";
 
-    const actions = doc.createElement("div");
-    actions.className = "cg-match-actions";
-    const confirmBtn = makeGuardedButton("Confirm match", "cg-match-confirm", () =>
+  // Header: "POSSIBLE MATCH" eyebrow + a confidence chip.
+  const headerRow = doc.createElement("div");
+  headerRow.className = "cg-match-header";
+  const eyebrow = doc.createElement("span");
+  eyebrow.className = "cg-match-eyebrow";
+  eyebrow.textContent = "Possible match";
+  headerRow.appendChild(eyebrow);
+  const chip = doc.createElement("span");
+  chip.className = isStrong ? "cg-match-chip cg-match-chip-strong" : "cg-match-chip";
+  chip.textContent = `${isStrong ? "Strong" : "Possible"} \u00B7 ${confidencePct}%`;
+  headerRow.appendChild(chip);
+  card.appendChild(headerRow);
+
+  // What this is + the ask.
+  const prompt = doc.createElement("div");
+  prompt.className = "cg-match-prompt";
+  prompt.textContent =
+    "No exact identifier \u2014 we matched this item to OpenAlex by title and year. Is this the right paper?";
+  card.appendChild(prompt);
+
+  // Candidate identity so the decision is informed.
+  const titleDiv = doc.createElement("div");
+  titleDiv.className = "cg-match-card-title";
+  titleDiv.textContent = suggestion.title;
+  card.appendChild(titleDiv);
+
+  const meta = doc.createElement("div");
+  meta.className = "cg-match-card-meta";
+  const parts: string[] = [];
+  if (suggestion.year !== null) parts.push(String(suggestion.year));
+  parts.push(`~${suggestion.citedByCount} citation${suggestion.citedByCount === 1 ? "" : "s"}`);
+  if (suggestion.fwci !== null) parts.push(`FWCI ~${suggestion.fwci.toFixed(2)}`);
+  meta.textContent = parts.join(" \u00B7 ");
+  // Spell out the tilde for screen readers ("approximately") so the speculative
+  // metrics aren't read as exact.
+  meta.setAttribute(
+    "aria-label",
+    `Candidate ${suggestion.title}${suggestion.year !== null ? `, ${suggestion.year}` : ""}, approximately ${suggestion.citedByCount} citations${suggestion.fwci !== null ? `, FWCI approximately ${suggestion.fwci.toFixed(2)}` : ""}`,
+  );
+  card.appendChild(meta);
+
+  const legend = doc.createElement("div");
+  legend.className = "cg-match-legend";
+  legend.textContent = "~ estimated until you confirm";
+  card.appendChild(legend);
+
+  // Primary / secondary actions.
+  const actions = doc.createElement("div");
+  actions.className = "cg-match-actions";
+  actions.appendChild(
+    makeGuardedButton("Confirm match", "cg-match-confirm", () =>
       onConfirm().catch((e) => logError("onConfirm", e)),
-    );
-    actions.appendChild(confirmBtn);
-    const dismissBtn = makeGuardedButton("Not this paper", "cg-match-dismiss", () =>
+    ),
+  );
+  actions.appendChild(
+    makeGuardedButton("Not this paper", "cg-match-dismiss", () =>
       onDismiss().catch((e) => logError("onDismiss", e)),
-    );
-    actions.appendChild(dismissBtn);
-    container.appendChild(actions);
-  } else {
-    // Medium-confidence: show the candidate card, no metrics
-    const card = doc.createElement("div");
-    card.className = "cg-match-card";
+    ),
+  );
+  card.appendChild(actions);
 
-    const titleDiv = doc.createElement("div");
-    titleDiv.className = "cg-match-card-title";
-    titleDiv.textContent = suggestion.title;
-    card.appendChild(titleDiv);
-
-    const meta = doc.createElement("div");
-    meta.className = "cg-match-card-meta";
-    const parts: string[] = suggestion.year !== null ? [String(suggestion.year)] : [];
-    if (suggestion.citedByCount > 0) parts.push(`${suggestion.citedByCount} citations`);
-    if (suggestion.fwci !== null) parts.push(`FWCI ${suggestion.fwci.toFixed(2)}`);
-    meta.textContent = parts.join(" \u00B7 ");
-    card.appendChild(meta);
-
-    const actions = doc.createElement("div");
-    actions.className = "cg-match-actions";
-    const confirmBtn = makeGuardedButton("Confirm match", "cg-match-confirm", () =>
-      onConfirm().catch((e) => logError("onConfirm", e)),
-    );
-    actions.appendChild(confirmBtn);
-    const dismissBtn = makeGuardedButton("Not this paper", "cg-match-dismiss", () =>
-      onDismiss().catch((e) => logError("onDismiss", e)),
-    );
-    actions.appendChild(dismissBtn);
-    card.appendChild(actions);
-
-    container.appendChild(card);
+  // Non-destructive escape: open the candidate on OpenAlex to verify before
+  // deciding. Only link a well-formed work id.
+  const oaMatch = (suggestion.openAlexId || "").match(/W\d+/);
+  if (oaMatch) {
+    const verify = doc.createElement("a");
+    verify.className = "cg-match-verify";
+    verify.textContent = "View candidate on OpenAlex \u2197";
+    const url = `https://openalex.org/${oaMatch[0]}`;
+    verify.setAttribute("href", url);
+    verify.addEventListener("click", (e) => {
+      e.preventDefault();
+      try {
+        Zotero.launchURL(url);
+      } catch (err) {
+        logError("match verify launchURL", err);
+      }
+    });
+    card.appendChild(verify);
   }
+
+  container.appendChild(card);
 }
 
 /**
