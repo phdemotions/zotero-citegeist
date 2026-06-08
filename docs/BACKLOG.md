@@ -139,18 +139,3 @@ The citation network browser now sorts the **loaded page** of results client-sid
 
 This is a refinement of the now-shipped redesign (header with source metadata + cited-by stat, new sort modes, hide-in-library filter — see the [toolbar mockup](mockups/citation-network-toolbar-ux.html)). It mainly matters for source papers with hundreds of citing works, where the most-cited result may sit beyond the first loaded page.
 
----
-
-## Migrate context menus to Zotero's MenuManager API
-
-**Labels:** `enhancement`, `tech-debt`
-
-Citegeist wires its right-click menu items via direct DOM manipulation (`createXULElement` + `addEventListener` on `zotero-itemmenu` / `zotero-collectionmenu`), with a per-window register/unregister lifecycle. Zotero 7 added a higher-level `Zotero.MenuManager` API for registering menus declaratively (targets, l10n IDs, `onShowing` / `onCommand` callbacks) with automatic lifecycle handling.
-
-**Scope:**
-
-- Register item and collection menus through `Zotero.MenuManager` where available, with the current DOM approach as a fallback for builds that lack it.
-- Roll back a partial registration cleanly if one target fails.
-- Add the `MenuManager` / `RegisterMenuOptions` / `MenuContext` type declarations to `typings/zotero.d.ts` (absent today).
-
-**Note for implementers:** a previous session drafted vitest specs for this against a `registerMenus(pluginID, win)` signature and a MenuManager stub; they were removed from the 2.0 release. The current DOM-based menu behavior remains covered by `test/collection-menu.test.ts`.

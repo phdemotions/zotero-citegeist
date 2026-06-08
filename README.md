@@ -34,7 +34,7 @@ No account, API key, or subscription — the only optional setting is your email
 
 ## Install
 
-> **Requires [Zotero 7 or later](https://www.zotero.org/downloads/)**. Citegeist does not work with Zotero 6.
+> **Requires [Zotero 7 or later](https://www.zotero.org/downloads/)** (tested through Zotero 9). Citegeist does not work with Zotero 6.
 
 1. Download **[citegeist.xpi](https://github.com/phdemotions/zotero-citegeist/releases/latest)** from the latest release (click the `.xpi` file under "Assets" to download it)
 2. Open Zotero

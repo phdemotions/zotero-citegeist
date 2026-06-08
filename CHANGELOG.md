@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Right-click menus now register through Zotero 8+'s official `Zotero.MenuManager`
+  API when it's available (Zotero 8 and 9), falling back to the existing direct
+  DOM injection on Zotero 7.0.x. Same menu items and behavior on every supported
+  version; on Zotero 8+ the modern API brings declarative registration and
+  automatic cleanup on shutdown. Menu labels on the MenuManager path come from
+  the bundled FTL (`citegeist-menu-*`).
+
 ## [2.0.0] — 2026-06-07
 
 > **Major version bump.** v2.0.0 completely revamps how Citegeist stores

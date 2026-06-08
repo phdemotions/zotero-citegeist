@@ -5,7 +5,7 @@
 
 import { registerCitationColumn, unregisterCitationColumn } from "./modules/citationColumn";
 import { registerCitationPane, unregisterCitationPane } from "./modules/citationPane";
-import { registerMenus, unregisterMenus } from "./modules/menu";
+import { registerMenus, unregisterMenus, setMenuPluginID } from "./modules/menu";
 import { clearSourceStatsCache } from "./modules/openalex";
 import { initCache, closeCache, migrateFromExtraV1, garbageCollectOrphans } from "./modules/cache";
 import { logError } from "./modules/utils";
@@ -31,6 +31,7 @@ export async function onStartup(data: PluginData): Promise<void> {
   pluginID = data.id;
   rootURI = data.rootURI;
   cacheReady = false;
+  setMenuPluginID(pluginID);
   Zotero.debug(`[Citegeist] Starting v${data.version}`);
 
   // Initialize the plugin-owned SQLite cache and warm the in-memory mirror
