@@ -30,6 +30,13 @@ export const FETCH_BATCH_SIZE = 2;
 export const FETCH_BATCH_DELAY_MS = 500;
 /** Delay between calls in a bulk batch fetch (menu-triggered). */
 export const BULK_FETCH_DELAY_MS = 100;
+/**
+ * Debounce for the coalesced column repaint. A burst of per-item cache
+ * invalidations (a collection/library fetch resolving item by item) collapses
+ * into ONE `refreshAndMaintainSelection()` shortly after the last one, so rows
+ * fill in progressively without thrashing the item tree.
+ */
+export const COLUMN_REPAINT_DEBOUNCE_MS = 150;
 
 // ── Citation network dialog ──
 /** Max results rendered in the dialog (soft cap for performance). */
