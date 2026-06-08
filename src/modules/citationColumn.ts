@@ -18,6 +18,7 @@ import { getCachedSourceISSNs } from "./openalex";
 import { logError, isBookType } from "./utils";
 import {
   AUTO_FETCH_PREF_TTL_MS,
+  COLUMN_REPAINT_DEBOUNCE_MS,
   FETCH_BATCH_DELAY_MS,
   FETCH_BATCH_SIZE,
   FETCH_QUEUE_DEBOUNCE_MS,
@@ -55,6 +56,34 @@ let fetchTimer: ReturnType<typeof setTimeout> | null = null;
 let processingQueue = false;
 const fetchQueue = new Set<number>();
 const fetchAttempted = new Set<number>();
+let repaintTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Coalesced, reliable column repaint. `invalidateColumnCache` clears the per-row
+ * memo and fires the lightweight refreshColumns/Notifier signals, but on Zotero
+ * 9 those don't reliably re-run custom column dataProviders —
+ * `refreshAndMaintainSelection()` does. Debounced so a burst of per-item
+ * invalidations (a collection/library fetch landing row by row) collapses into
+ * ONE refresh instead of N, so rows fill in progressively without thrash.
+ */
+function scheduleColumnRepaint(): void {
+  if (repaintTimer) return;
+  repaintTimer = setTimeout(() => {
+    repaintTimer = null;
+    try {
+      const view = Zotero.getActiveZoteroPane()?.itemsView;
+      if (view?.refreshAndMaintainSelection) {
+        void view.refreshAndMaintainSelection();
+      } else if (view?.refresh) {
+        void view.refresh();
+      } else if (view?.invalidate) {
+        view.invalidate();
+      }
+    } catch (e) {
+      logError("scheduleColumnRepaint", e);
+    }
+  }, COLUMN_REPAINT_DEBOUNCE_MS);
+}
 
 /**
  * Build the same namespaced key Zotero stores internally for a
@@ -431,30 +460,15 @@ export async function invalidateColumnCache(itemId?: number | number[]): Promise
     }
   }
   try {
-    // **PRIMARY**: `Zotero.ItemTreeManager.refreshColumns()` is the
-    // public API specifically built for "external data changed,
-    // re-invoke every dataProvider on every visible row". Discovered
-    // by reading the Zotero source at
-    // chrome/content/zotero/xpcom/pluginAPI/itemTreeManager.js
-    // (`refreshColumns() { this._columnManager.refresh(); }`).
-    //
-    // Notifier.trigger alone is necessary but NOT sufficient —
-    // synthetic notifier events without an actual `item.dataModified`
-    // change don't always re-run custom column dataProviders.
+    // Lightweight, immediate signals: ask Zotero to refresh its column manager
+    // and fire the targeted "redraw" Notifier for the affected rows. Necessary
+    // but NOT sufficient on Zotero 9 — neither reliably re-runs a custom column
+    // dataProvider — so we ALSO schedule the coalesced reliable repaint below.
     const refreshFn = (Zotero.ItemTreeManager as unknown as { refreshColumns?: () => void })
       .refreshColumns;
     if (typeof refreshFn === "function") {
       refreshFn.call(Zotero.ItemTreeManager);
     }
-
-    // **Belt-and-suspenders**: fire the canonical "redraw" Notifier
-    // event so item tree handles targeted per-row invalidation. The
-    // "redraw" action is documented in chrome/content/zotero/itemTree.jsx
-    // — it calls `tree.invalidateRow(row)` for the supplied ids
-    // (lighter than the full `refreshColumns` reset above, and
-    // targeted to only the affected rows). Earlier code used "modify"
-    // which is the EVENT FOR ITEM-CONTENT CHANGES, not "this row's
-    // cached data needs re-evaluation"; the latter is "redraw".
     if (ids !== null && ids.length > 0) {
       const notifier = (
         Zotero as unknown as {
@@ -464,22 +478,13 @@ export async function invalidateColumnCache(itemId?: number | number[]): Promise
       notifier?.trigger("redraw", "item", ids);
     }
 
-    // **Fallback** for older builds without refreshColumns.
-    if (typeof refreshFn !== "function") {
-      const zp = Zotero.getActiveZoteroPane();
-      const view = zp?.itemsView;
-      if (view) {
-        if (typeof view.invalidate === "function") view.invalidate();
-        if (typeof view.refresh === "function") {
-          await view.refresh();
-        } else if (typeof view.refreshAndMaintainSelection === "function") {
-          await view.refreshAndMaintainSelection();
-        }
-      }
-    }
-    Zotero.debug(
-      `[Citegeist] invalidateColumnCache: cleared ${ids === null ? "all" : String(ids.length)} entries, refreshColumns=${typeof refreshFn === "function"}`,
-    );
+    // **Reliable repaint.** `refreshAndMaintainSelection()` is what actually
+    // re-evaluates custom dataProviders on Zotero 8/9. It used to be gated
+    // behind `refreshColumns` being ABSENT — so on 8/9 (where refreshColumns
+    // exists) it never ran, and batch / collection / library fetches updated
+    // the cache but never repainted the columns. Always schedule it now; the
+    // debounce coalesces a burst of per-item invalidations into one refresh.
+    scheduleColumnRepaint();
   } catch (e) {
     logError("invalidateColumnCache refresh", e);
   }
@@ -564,15 +569,7 @@ async function processFetchQueue(): Promise<void> {
 
   processingQueue = false;
   metricsCache.clear();
-
-  try {
-    const zp = Zotero.getActiveZoteroPane();
-    if (zp?.itemsView?.refreshAndMaintainSelection) {
-      await zp.itemsView.refreshAndMaintainSelection();
-    }
-  } catch {
-    // Non-critical
-  }
+  scheduleColumnRepaint();
 
   if (fetchQueue.size > 0 && !fetchTimer && registered) {
     fetchTimer = setTimeout(processFetchQueue, FETCH_QUEUE_DEBOUNCE_MS);

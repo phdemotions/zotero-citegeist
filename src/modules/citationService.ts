@@ -264,14 +264,23 @@ export interface FetchBatchResult {
 export async function fetchAndCacheItems(
   items: _ZoteroTypes.Item[],
   onProgress?: (current: number, total: number) => void,
+  /**
+   * Fired right after each item's fetch resolves, with the item id and the
+   * result status. Lets callers repaint that row's columns AS data lands
+   * (progressive updates over a long collection/library fetch) instead of
+   * waiting for the whole batch to finish.
+   */
+  onItemDone?: (itemId: number, status: string) => void,
 ): Promise<FetchBatchResult> {
   const eligible = items.filter((item) => item.isRegularItem());
 
   const out: FetchBatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0 };
 
   for (let i = 0; i < eligible.length; i++) {
+    let status = "error";
     try {
       const result = await fetchAndCacheItem(eligible[i]);
+      status = result.status;
       if (result.status === "ok") out.fresh++;
       else if (result.status === "cached") out.cached++;
       else if (result.status === "suggestion") out.suggestion++;
@@ -281,6 +290,7 @@ export async function fetchAndCacheItems(
       logError(`fetchAndCacheItems item ${eligible[i].id}`, e);
     }
 
+    onItemDone?.(eligible[i].id, status);
     onProgress?.(i + 1, eligible.length);
 
     if (i < eligible.length - 1) {

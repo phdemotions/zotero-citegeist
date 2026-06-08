@@ -143,6 +143,7 @@ describe("library root (getSelectedCollection returns null)", () => {
         expect.objectContaining({ id: 2 }),
       ]),
       expect.any(Function),
+      expect.any(Function),
     );
   });
 
@@ -198,6 +199,7 @@ describe("collection selected (getSelectedCollection returns a collection)", () 
     expect(mocks.fetchAndCacheItems).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ id: 5 })]),
       expect.any(Function),
+      expect.any(Function),
     );
   });
 
@@ -243,5 +245,46 @@ describe("collection selected (getSelectedCollection returns a collection)", () 
     const calledWith: _ZoteroTypes.Item[] = mocks.fetchAndCacheItems.mock.calls[0][0];
     const ids = calledWith.map((i) => i.id);
     expect(ids.filter((id) => id === 99)).toHaveLength(1);
+  });
+});
+
+describe("progressive column repaint", () => {
+  it("invalidates each row's columns as its fetch lands, not just at the end", async () => {
+    selectedCollection = makeCollection([makeItem(1), makeItem(2), makeItem(3)]);
+    // Drive the per-item callback the way the real batch loop does.
+    mocks.fetchAndCacheItems.mockImplementationOnce(
+      async (
+        items: Array<{ id: number }>,
+        _onProgress: unknown,
+        onItemDone?: (id: number, status: string) => void,
+      ) => {
+        for (const it of items) onItemDone?.(it.id, "ok");
+        return { fresh: items.length, cached: 0, suggestion: 0, errors: 0 };
+      },
+    );
+    await triggerFetchAll();
+    // Each item's row was invalidated individually (progressive), not only via
+    // a single end-of-batch array invalidation.
+    expect(mocks.invalidateColumnCache).toHaveBeenCalledWith(1);
+    expect(mocks.invalidateColumnCache).toHaveBeenCalledWith(2);
+    expect(mocks.invalidateColumnCache).toHaveBeenCalledWith(3);
+  });
+
+  it("does not invalidate rows whose fetch errored", async () => {
+    selectedCollection = makeCollection([makeItem(1), makeItem(2)]);
+    mocks.fetchAndCacheItems.mockImplementationOnce(
+      async (
+        items: Array<{ id: number }>,
+        _onProgress: unknown,
+        onItemDone?: (id: number, status: string) => void,
+      ) => {
+        onItemDone?.(items[0].id, "ok");
+        onItemDone?.(items[1].id, "error");
+        return { fresh: 1, cached: 0, suggestion: 0, errors: 1 };
+      },
+    );
+    await triggerFetchAll();
+    expect(mocks.invalidateColumnCache).toHaveBeenCalledWith(1);
+    expect(mocks.invalidateColumnCache).not.toHaveBeenCalledWith(2);
   });
 });

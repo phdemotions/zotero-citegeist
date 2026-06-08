@@ -170,10 +170,21 @@ async function runFetchSelected(win: Window): Promise<void> {
 
   let result: BatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0 };
   try {
-    result = await fetchAndCacheItems(eligible, (current, total) => {
-      progress.setProgress((current / total) * 100);
-      progress.setText(`${current}/${total} items fetched`);
-    });
+    result = await fetchAndCacheItems(
+      eligible,
+      (current, total) => {
+        progress.setProgress((current / total) * 100);
+        progress.setText(`${current}/${total} items fetched`);
+      },
+      (itemId, status) => {
+        // Repaint each row's columns the moment its data lands, so a long
+        // collection/library fetch fills in progressively instead of all at
+        // the end. The repaint is coalesced/debounced inside the column module.
+        if (status === "ok" || status === "suggestion") {
+          invalidateColumnCache(itemId);
+        }
+      },
+    );
   } catch (e) {
     logError("menu fetch batch", e);
     progress.setProgress(100);
@@ -249,10 +260,21 @@ async function runFetchCollection(win: Window): Promise<void> {
 
   let result: BatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0 };
   try {
-    result = await fetchAndCacheItems(eligible, (current, total) => {
-      progress.setProgress((current / total) * 100);
-      progress.setText(`${current}/${total} items fetched`);
-    });
+    result = await fetchAndCacheItems(
+      eligible,
+      (current, total) => {
+        progress.setProgress((current / total) * 100);
+        progress.setText(`${current}/${total} items fetched`);
+      },
+      (itemId, status) => {
+        // Repaint each row's columns the moment its data lands, so a long
+        // collection/library fetch fills in progressively instead of all at
+        // the end. The repaint is coalesced/debounced inside the column module.
+        if (status === "ok" || status === "suggestion") {
+          invalidateColumnCache(itemId);
+        }
+      },
+    );
   } catch (e) {
     logError("menu fetch-collection batch", e);
     progress.setProgress(100);
