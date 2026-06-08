@@ -12,8 +12,8 @@ class CitegeistPlugin {
     await onStartup(data);
   }
 
-  shutdown(data: { id: string; version: string; rootURI: string; reason: number }) {
-    onShutdown(data);
+  async shutdown(data: { id: string; version: string; rootURI: string; reason: number }) {
+    await onShutdown(data);
   }
 
   onMainWindowLoad(win: Window) {

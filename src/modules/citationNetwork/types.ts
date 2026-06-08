@@ -78,4 +78,8 @@ export interface NetworkState {
   createdItemIds: Map<string, number>;
   /** Expanded parent IDs in the default collection picker */
   defaultPickerExpanded: Set<number>;
+  /** Work IDs with an `addItemToLibrary` call in flight. Synchronous gate
+   *  against spam-click; cleared in the finally block once the create +
+   *  cache write resolves (success or error). */
+  pendingAdds: Set<string>;
 }

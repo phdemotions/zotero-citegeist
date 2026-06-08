@@ -12,7 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22]
+        # Node 22 LTS only — vitest 4.x + std-env 4.x require Node >=22.19
+        # and package.json `engines.node` is pinned to ">=22.0.0".
+        node-version: [22]
     steps:
       - uses: actions/checkout@v4
 

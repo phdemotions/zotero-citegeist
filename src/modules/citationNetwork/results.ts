@@ -14,7 +14,7 @@ import {
 import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../utils";
 import { MAX_RENDERED_RESULTS, type NetworkState } from "./types";
 import { getDefaultCollectionName } from "./actions";
-import { DEFAULT_NETWORK_PAGE_SIZE } from "../../constants";
+import { DEFAULT_NETWORK_PAGE_SIZE, PREF_NETWORK_PAGE_SIZE } from "../../constants";
 
 // ────────────────────────────────────────────────────────
 // Loading & rendering
@@ -25,6 +25,11 @@ export async function loadResults(state: NetworkState, append = false): Promise<
   state.loading = true;
   const gen = state.generation;
   const body = state.dialog.querySelector(".cg-dialog-body") as HTMLElement;
+  // Mark the tablist + panel as busy so screen readers announce the
+  // pending fetch AND CSS can dim non-active tabs to indicate clicks
+  // will be rejected until the current load finishes (F11).
+  body?.setAttribute("aria-busy", "true");
+  state.dialog.classList.add("cg-is-loading");
 
   if (!append) {
     safeInnerHTML(body, `<div class="cg-loading-more">Loading\u2026</div>`);
@@ -37,8 +42,7 @@ export async function loadResults(state: NetworkState, append = false): Promise<
 
   try {
     const perPage =
-      (Zotero.Prefs.get("extensions.zotero.citegeist.networkPageSize") as number) ||
-      DEFAULT_NETWORK_PAGE_SIZE;
+      (Zotero.Prefs.get(PREF_NETWORK_PAGE_SIZE) as number) || DEFAULT_NETWORK_PAGE_SIZE;
     const response =
       state.mode === "citing"
         ? await getCitingWorks(state.work.id, state.cursor, perPage)
@@ -46,6 +50,8 @@ export async function loadResults(state: NetworkState, append = false): Promise<
 
     if (gen !== state.generation || state.phase === "closed") {
       state.loading = false;
+      body?.setAttribute("aria-busy", "false");
+      state.dialog.classList.remove("cg-is-loading");
       return;
     }
 
@@ -66,6 +72,8 @@ export async function loadResults(state: NetworkState, append = false): Promise<
   } catch (e) {
     if (gen !== state.generation || state.phase === "closed") {
       state.loading = false;
+      body?.setAttribute("aria-busy", "false");
+      state.dialog.classList.remove("cg-is-loading");
       return;
     }
     logError("loadResults", e);
@@ -80,6 +88,8 @@ export async function loadResults(state: NetworkState, append = false): Promise<
   }
 
   state.loading = false;
+  body?.setAttribute("aria-busy", "false");
+  state.dialog.classList.remove("cg-is-loading");
 }
 
 export function renderResults(state: NetworkState, filter = ""): void {
@@ -267,7 +277,7 @@ export async function toggleExpanded(state: NetworkState, workId: string): Promi
     if (itemEl) {
       itemEl.setAttribute("aria-expanded", "false");
       const hint = itemEl.querySelector(".cg-expand-hint");
-      if (hint) hint.innerHTML = `<span class="cg-expand-chevron">\u25B8</span>Abstract`;
+      if (hint) safeInnerHTML(hint, `<span class="cg-expand-chevron">\u25B8</span>Abstract`);
     }
     return;
   }
@@ -276,7 +286,7 @@ export async function toggleExpanded(state: NetworkState, workId: string): Promi
   if (!itemEl) return;
   itemEl.setAttribute("aria-expanded", "true");
   const hint = itemEl.querySelector(".cg-expand-hint");
-  if (hint) hint.innerHTML = `<span class="cg-expand-chevron">\u25BE</span>Hide abstract`;
+  if (hint) safeInnerHTML(hint, `<span class="cg-expand-chevron">\u25BE</span>Hide abstract`);
 
   // Create expanded element
   const doc = state.dialog.ownerDocument;
@@ -306,28 +316,30 @@ export async function toggleExpanded(state: NetworkState, workId: string): Promi
 
   itemEl.insertAdjacentElement("afterend", expandedEl);
 
-  // Fetch abstract on-demand
+  // Fetch abstract on-demand. On resume we re-query for the current
+  // `[data-expanded-for]` node in the live body rather than writing to the
+  // captured `expandedEl` — a search/sort/tab-switch between expand-click
+  // and fetch-resolution detaches the original node, and updating it
+  // would silently change nothing visible (F5).
   if (needsFetch) {
+    let text: string | null = null;
     try {
       const fullWork = await getWorkById(workId);
-      const text = fullWork?.abstract_inverted_index
+      text = fullWork?.abstract_inverted_index
         ? reconstructAbstract(fullWork.abstract_inverted_index)
         : null;
-      state.abstractCache.set(workId, text);
-
-      // Update DOM if still expanded
-      const loadingEl = expandedEl.querySelector(".cg-abstract-loading");
-      if (loadingEl) {
-        loadingEl.className = text ? "cg-abstract-text" : "cg-abstract-none";
-        loadingEl.textContent = text || "No abstract available";
-      }
     } catch {
-      state.abstractCache.set(workId, null);
-      const loadingEl = expandedEl.querySelector(".cg-abstract-loading");
-      if (loadingEl) {
-        loadingEl.className = "cg-abstract-none";
-        loadingEl.textContent = "No abstract available";
-      }
+      text = null;
+    }
+    state.abstractCache.set(workId, text);
+    // OpenAlex workId matches /^W\d+$/ — alphanumeric, no quotes or
+    // special chars — so CSS.escape is unnecessary AND the global is
+    // not exposed in Zotero's XUL sandbox (throws ReferenceError there).
+    const live = state.dialog.querySelector(`.cg-result-expanded[data-expanded-for="${workId}"]`);
+    const loadingEl = live?.querySelector(".cg-abstract-loading");
+    if (loadingEl) {
+      loadingEl.className = text ? "cg-abstract-text" : "cg-abstract-none";
+      loadingEl.textContent = text || "No abstract available";
     }
   }
 }

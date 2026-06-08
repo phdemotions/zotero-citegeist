@@ -5,7 +5,7 @@
 import { getSourceStats, type OpenAlexWork } from "../openalex";
 import { cacheWorkData } from "../cache";
 import { invalidateColumnCache } from "../citationColumn";
-import { escapeHTML, safeInnerHTML } from "../utils";
+import { escapeHTML, logError, safeInnerHTML } from "../utils";
 import { SURNAME_PREFIXES, UNDO_TIMEOUT_MS, type NetworkState } from "./types";
 
 // ────────────────────────────────────────────────────────
@@ -22,15 +22,35 @@ export async function addItemToLibrary(
   workId: string,
   collectionIds: Set<number>,
 ): Promise<void> {
+  // Per-workId in-flight gate. The button.disabled write is the first line
+  // of defense, but the click handler is delegated on `body` and a spam
+  // click before the next event-loop tick could still re-enter (delegated
+  // handler reads `disabled` AFTER the click already fired). Also,
+  // `state.createdItemIds.has(workId)` covers the "user already added,
+  // 3-second undo window pending" case \u2014 without it, a second click in
+  // that window would create a duplicate item.
+  if (state.pendingAdds.has(workId)) return;
+  if (state.createdItemIds.has(workId)) return;
+  state.pendingAdds.add(workId);
+
   const work = state.results.find((w) => w.id.replace("https://openalex.org/", "") === workId);
-  if (!work) return;
+  if (!work) {
+    state.pendingAdds.delete(workId);
+    return;
+  }
 
   const mainBtn = state.dialog.querySelector(
     `.cg-split-main[data-work-id="${workId}"]`,
   ) as HTMLButtonElement | null;
   if (mainBtn) {
     mainBtn.disabled = true;
-    mainBtn.innerHTML = `<span class="cg-spinner"></span> Adding\u2026`;
+    // Use DOM API per CLAUDE.md guidance ("never set .innerHTML directly").
+    // Spinner element + space + label, replacing whatever the button held.
+    mainBtn.textContent = "";
+    const spinner = mainBtn.ownerDocument.createElement("span");
+    spinner.className = "cg-spinner";
+    mainBtn.appendChild(spinner);
+    mainBtn.appendChild(mainBtn.ownerDocument.createTextNode(" Adding\u2026"));
   }
 
   try {
@@ -62,14 +82,61 @@ export async function addItemToLibrary(
 
     updateRowButton(state, workId);
   } catch (e) {
-    Zotero.debug(`[Citegeist] Error adding work ${workId}: ${e}`);
+    logError("addItemToLibrary", e);
+    // Surface to the user so they don't assume the click missed and spam
+    // it. Without this banner the only signal was the button reverting,
+    // which looks identical to a no-op.
+    showRowError(
+      state,
+      workId,
+      e instanceof Error && /readOnly|read-only|permission/i.test(e.message)
+        ? "Can't add: this library is read-only."
+        : "Add failed — check your connection and try again.",
+    );
     // Restore button
     if (mainBtn) {
       mainBtn.disabled = false;
       const name = getDefaultCollectionName(state);
       mainBtn.textContent = name ? `+ Add to ${name}` : "+ Add to Library";
     }
+  } finally {
+    state.pendingAdds.delete(workId);
   }
+}
+
+/**
+ * Show a transient inline error under a result row. Auto-dismisses after
+ * 5 seconds so the row's normal layout returns. Reuses any existing error
+ * node for the same row to prevent stacking on repeat failures.
+ */
+// Per-banner dismiss timers so a retry within the 5s window cancels the
+// prior banner's removal — without this, the prior timer fires at its
+// original deadline and removes the freshly-updated banner early. (C1)
+const rowErrorTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+
+function showRowError(state: NetworkState, workId: string, message: string): void {
+  const row = state.dialog.querySelector(
+    `.cg-result-item[data-work-id="${workId}"]`,
+  ) as HTMLElement | null;
+  if (!row) return;
+  let banner = row.querySelector(".cg-row-error") as HTMLElement | null;
+  if (!banner) {
+    banner = state.dialog.ownerDocument.createElement("div");
+    banner.className = "cg-row-error";
+    row.appendChild(banner);
+  } else {
+    // Existing banner being repurposed for a new message — cancel its
+    // prior auto-dismiss timer first.
+    const prior = rowErrorTimers.get(banner);
+    if (prior) clearTimeout(prior);
+  }
+  banner.textContent = message;
+  const captured = banner;
+  const handle = setTimeout(() => {
+    rowErrorTimers.delete(captured);
+    captured.remove();
+  }, 5000);
+  rowErrorTimers.set(banner, handle);
 }
 
 // ────────────────────────────────────────────────────────
@@ -98,7 +165,7 @@ export async function handleUndo(state: NetworkState, workId: string): Promise<v
         await item.saveTx();
       }
     } catch (e) {
-      Zotero.debug(`[Citegeist] Error undoing add for ${workId}: ${e}`);
+      logError("handleUndo", e);
     }
     state.createdItemIds.delete(workId);
   }
@@ -315,7 +382,7 @@ export async function getExistingDOIs(): Promise<Set<string>> {
       }
     }
   } catch (e) {
-    Zotero.debug(`[Citegeist] Error getting existing DOIs: ${e}`);
+    logError("getExistingDOIs", e);
   }
   return dois;
 }

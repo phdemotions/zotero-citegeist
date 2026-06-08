@@ -50,12 +50,26 @@ export function safeParseInt(val: string | undefined, fallback: number = 0): num
 }
 
 /**
+ * Strict integer parse for migration trust boundaries. Returns null on any
+ * non-numeric input rather than silently coercing to a fallback — callers
+ * persisting values from hand-edited Extra fields must distinguish "user
+ * typed garbage" from "user typed 0".
+ */
+export function safeParseIntOrNull(val: string | undefined): number | null {
+  if (val === undefined) return null;
+  const parsed = parseInt(val, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
  * Parse a float with NaN safety. Returns null on failure.
+ * Also rejects ±Infinity — those would persist to SQLite and poison every
+ * downstream numeric comparison (sort, threshold filter, derived metric).
  */
 export function safeParseFloat(val: string | undefined): number | null {
   if (val === undefined) return null;
   const parsed = parseFloat(val);
-  return Number.isNaN(parsed) ? null : parsed;
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /**

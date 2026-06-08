@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "__addonName__",
   "version": "__buildVersion__",
-  "description": "Citation intelligence powered by OpenAlex — counts, networks, and one-click import.",
+  "description": "Citation intelligence powered by OpenAlex — counts, networks, and one-click import. Configure your OpenAlex email and other settings in Zotero → Settings → Citegeist (not in this Add-ons window).",
   "author": "Josh Gonzales",
   "icons": {
     "48": "content/icons/icon-48.png",
@@ -12,7 +12,7 @@
     "zotero": {
       "id": "__addonID__",
       "update_url": "https://github.com/phdemotions/zotero-citegeist/releases/download/release/update.json",
-      "strict_min_version": "6.999",
+      "strict_min_version": "7.0.10",
       "strict_max_version": "9.*"
     }
   }

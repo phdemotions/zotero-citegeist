@@ -4,17 +4,46 @@
  * Design language: Opus Vita family — Citegeist · Sententia · Marginalia.
  * Slate (dark) palette variant:
  *   Ink ramp  — green-undertoned near-black neutrals
- *   Sage ramp — primary accent (#8FAD9F on dark, replaces blue throughout)
+ *   Sage ramp — primary accent (#8FAD9F on dark, #2F6B5A on light, replaces blue throughout)
  *   Amber     — evidence weight only (not used in this dialog)
  * Typography: Inter for UI labels; system serif fallback for editorial elements.
  */
 
 export function getDialogCSS(): string {
   return `
-    /* ── Dialog root: Slate palette — green-undertoned dark ── */
+    /* ── Dialog root: Slate palette — green-undertoned ── */
+    /* Tokens use light-dark() so the dialog adapts to Zotero's theme.
+       Light mode = warm off-white sage tint; dark mode = original slate.
+       Firefox 128+ honors light-dark(); Zotero 9 ships on Firefox 128+. */
     #citegeist-network-dialog {
-      background-color: #141D18;
-      color: #E7EEE9;
+      --cg-bg-primary: light-dark(#F8FAF9, #141D18);
+      --cg-bg-secondary: light-dark(#EFF3F1, #1A2520);
+      --cg-bg-elevated: light-dark(#FFFFFF, #1E2A24);
+      --cg-text-primary: light-dark(#1A2820, #E7EEE9);
+      --cg-text-secondary: light-dark(#46554C, #9CAAA3);
+      --cg-text-tertiary: light-dark(#6B7A72, #788780);
+      --cg-text-quaternary: light-dark(#8A998F, #586860);
+      --cg-text-hover: light-dark(#28362E, #BFCBC5);
+      --cg-sage-accent: light-dark(#2F6B5A, #8FAD9F);
+      --cg-sage-accent-strong: light-dark(#214A3F, #B6C9BD);
+      --cg-sage-tint-04: light-dark(rgba(60,110,95,0.04), var(--cg-sage-tint-04));
+      --cg-sage-tint-06: light-dark(rgba(60,110,95,0.06), var(--cg-sage-tint-06));
+      --cg-sage-tint-08: light-dark(rgba(60,110,95,0.08), var(--cg-sage-tint-08));
+      --cg-sage-tint-10: light-dark(rgba(60,110,95,0.10), var(--cg-sage-tint-10));
+      --cg-sage-tint-12: light-dark(rgba(60,110,95,0.12), var(--cg-sage-tint-12));
+      --cg-sage-tint-15: light-dark(rgba(60,110,95,0.15), var(--cg-sage-tint-15));
+      --cg-sage-tint-16: light-dark(rgba(60,110,95,0.16), var(--cg-sage-tint-16));
+      --cg-sage-tint-22: light-dark(rgba(60,110,95,0.22), rgba(56,104,87,0.22));
+      --cg-sage-accent-tint-12: light-dark(rgba(47,107,90,0.12), var(--cg-sage-accent-tint-12));
+      --cg-sage-accent-tint-25: light-dark(rgba(47,107,90,0.25), var(--cg-sage-accent-tint-25));
+      --cg-focus-ring: light-dark(#2F6B5A, #8FAD9F);
+      --cg-red-fg: light-dark(#C44030, #FF453A);
+      --cg-red-fg-hover: light-dark(#A43020, #FF6961);
+      --cg-red-bg: light-dark(rgba(196,64,48,0.10), rgba(255,69,58,0.12));
+      --cg-red-bg-hover: light-dark(rgba(196,64,48,0.18), rgba(255,69,58,0.22));
+
+      background-color: var(--cg-bg-primary);
+      color: var(--cg-text-primary);
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       font-feature-settings: 'kern' 1, 'liga' 1;
     }
@@ -24,27 +53,27 @@ export function getDialogCSS(): string {
     .cg-dialog-header {
       display: flex; align-items: center; gap: 10px;
       padding: 12px 14px;
-      border-bottom: 1px solid rgba(56,104,87,0.15);
+      border-bottom: 1px solid var(--cg-sage-tint-15);
       flex-shrink: 0;
     }
     .cg-close-btn {
       width: 24px; height: 24px; border-radius: 6px;
-      border: none; background: rgba(255,69,58,0.12); color: #ff453a;
+      border: none; background: var(--cg-red-bg); color: var(--cg-red-fg);
       font-size: 15px; line-height: 1; cursor: pointer;
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0; padding: 0;
       transition: background 0.12s, color 0.12s;
     }
-    .cg-close-btn:hover { background: rgba(255,69,58,0.22); color: #ff6961; }
-    .cg-close-btn:focus-visible { outline: 2px solid #8FAD9F; outline-offset: 1px; }
+    .cg-close-btn:hover { background: var(--cg-red-bg-hover); color: var(--cg-red-fg-hover); }
+    .cg-close-btn:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 1px; }
     .cg-header-text { flex: 1; min-width: 0; }
     .cg-dialog-title {
-      font-size: 11px; font-weight: 500; color: var(--fill-secondary, #9CAAA3);
+      font-size: 11px; font-weight: 500; color: var(--cg-text-secondary);
       font-style: italic; letter-spacing: 0;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
     .cg-dialog-subtitle {
-      font-size: 13px; font-weight: 600; color: var(--fill-primary, #E7EEE9);
+      font-size: 13px; font-weight: 600; color: var(--cg-text-primary);
       margin-top: 1px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -54,58 +83,58 @@ export function getDialogCSS(): string {
     .cg-dialog-tabs {
       display: flex; gap: 1px; padding: 8px 14px;
       flex-shrink: 0;
-      background: rgba(56,104,87,0.04);
-      border-bottom: 1px solid rgba(56,104,87,0.10);
+      background: var(--cg-sage-tint-04);
+      border-bottom: 1px solid var(--cg-sage-tint-10);
     }
     .cg-tabs-inner {
       display: flex; gap: 1px;
-      background: rgba(56,104,87,0.08);
+      background: var(--cg-sage-tint-08);
       border-radius: 7px; padding: 2px;
     }
     .cg-tab {
       padding: 7px 16px; font-size: 11px; font-weight: 500; min-height: 24px;
       cursor: pointer; border: none; background: transparent;
-      color: #9CAAA3; border-radius: 5px;
+      color: var(--cg-text-secondary); border-radius: 5px;
       transition: background 0.15s, color 0.15s;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
-    .cg-tab.active { background: rgba(56,104,87,0.16); color: #E7EEE9; font-weight: 600; }
-    .cg-tab:hover:not(.active) { color: #BFCBC5; }
-    .cg-tab:focus-visible { outline: 2px solid #8FAD9F; outline-offset: 1px; }
+    .cg-tab.active { background: var(--cg-sage-tint-16); color: var(--cg-text-primary); font-weight: 600; }
+    .cg-tab:hover:not(.active) { color: var(--cg-text-hover); }
+    .cg-tab:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 1px; }
 
     /* ── Toolbar ── */
     .cg-dialog-toolbar {
       display: flex; align-items: center; gap: 8px;
       padding: 8px 14px;
-      border-bottom: 1px solid rgba(56,104,87,0.10);
+      border-bottom: 1px solid var(--cg-sage-tint-10);
       flex-shrink: 0;
     }
     .cg-search-wrap { flex: 1; position: relative; }
     .cg-search-icon {
       position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
-      color: var(--fill-quaternary, #586860); font-size: 12px; pointer-events: none;
+      color: var(--cg-text-quaternary); font-size: 12px; pointer-events: none;
     }
     .cg-search-input {
       width: 100%; padding: 6px 10px 6px 28px;
-      border: 1px solid rgba(56,104,87,0.15);
+      border: 1px solid var(--cg-sage-tint-15);
       border-radius: 7px; font-size: 12px;
-      background: rgba(56,104,87,0.06); color: var(--fill-primary, #E7EEE9); outline: none;
+      background: var(--cg-sage-tint-06); color: var(--cg-text-primary); outline: none;
       transition: border-color 0.15s, box-shadow 0.15s;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
     .cg-search-input:focus {
       border-color: rgba(143,173,159,0.4);
-      box-shadow: 0 0 0 3px rgba(143,173,159,0.12);
-      background: rgba(56,104,87,0.08);
+      box-shadow: 0 0 0 3px var(--cg-sage-accent-tint-12);
+      background: var(--cg-sage-tint-08);
     }
-    .cg-search-input::placeholder { color: var(--fill-quaternary, #586860); }
+    .cg-search-input::placeholder { color: var(--cg-text-quaternary); }
     .cg-sort-select {
-      padding: 6px 8px; border: 1px solid rgba(56,104,87,0.15);
+      padding: 6px 8px; border: 1px solid var(--cg-sage-tint-15);
       border-radius: 7px; font-size: 11px;
-      background: rgba(56,104,87,0.06); color: var(--fill-secondary, #BFCBC5); cursor: pointer;
+      background: var(--cg-sage-tint-06); color: var(--cg-text-hover); cursor: pointer;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
-    .cg-sort-select:focus-visible { outline: 2px solid #8FAD9F; outline-offset: 1px; }
+    .cg-sort-select:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 1px; }
 
     /* ── Results body ── */
     .cg-dialog-body { flex: 1; overflow-y: auto; padding: 0; min-height: 300px; }
@@ -115,37 +144,37 @@ export function getDialogCSS(): string {
     .cg-result-item {
       display: flex; align-items: flex-start; gap: 10px;
       padding: 13px 14px;
-      border-bottom: 1px solid rgba(56,104,87,0.12);
+      border-bottom: 1px solid var(--cg-sage-tint-12);
       cursor: pointer;
       transition: background 0.1s;
     }
-    .cg-result-item:hover { background: rgba(56,104,87,0.08); }
+    .cg-result-item:hover { background: var(--cg-sage-tint-08); }
     .cg-result-content { flex: 1; min-width: 0; }
     .cg-result-title {
       font-size: 13px; font-weight: 500; line-height: 1.4;
-      margin-bottom: 3px; color: var(--fill-primary, #E7EEE9);
+      margin-bottom: 3px; color: var(--cg-text-primary);
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
     .cg-result-title a {
-      color: var(--fill-primary, #E7EEE9); text-decoration: none;
+      color: var(--cg-text-primary); text-decoration: none;
       transition: color 0.1s;
     }
-    .cg-result-title a:hover { color: #B6C9BD; text-decoration: underline; }
+    .cg-result-title a:hover { color: var(--cg-sage-accent-strong); text-decoration: underline; }
     .cg-result-title a:focus-visible {
-      outline: 2px solid #8FAD9F; outline-offset: 1px; border-radius: 2px;
+      outline: 2px solid var(--cg-sage-accent); outline-offset: 1px; border-radius: 2px;
     }
     .cg-result-title .cg-no-link {
-      color: var(--fill-secondary, #9CAAA3); cursor: default;
+      color: var(--cg-text-secondary); cursor: default;
     }
     .cg-result-meta {
-      font-size: 11px; color: var(--fill-secondary, #9CAAA3); line-height: 1.4;
+      font-size: 11px; color: var(--cg-text-secondary); line-height: 1.4;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
     .cg-result-meta-authors {
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .cg-result-meta-venue { color: var(--fill-tertiary, #788780); margin-top: 1px; }
-    .cg-result-year { color: var(--fill-secondary, #9CAAA3); font-weight: 500; }
+    .cg-result-meta-venue { color: var(--cg-text-tertiary); margin-top: 1px; }
+    .cg-result-year { color: var(--cg-text-secondary); font-weight: 500; }
     .cg-result-badges {
       display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap; align-items: center;
     }
@@ -154,10 +183,10 @@ export function getDialogCSS(): string {
       font-weight: 600; letter-spacing: 0.1px;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
-    .cg-badge-oa { background: rgba(143,173,159,0.12); color: #8FAD9F; }
-    .cg-badge-retracted { background: rgba(255,69,58,0.1); color: #ff453a; }
-    .cg-badge-in-library { background: rgba(143,173,159,0.12); color: #8FAD9F; }
-    .cg-badge-no-doi { background: rgba(56,104,87,0.06); color: var(--fill-tertiary, #788780); }
+    .cg-badge-oa { background: var(--cg-sage-accent-tint-12); color: var(--cg-sage-accent); }
+    .cg-badge-retracted { background: var(--cg-red-bg); color: var(--cg-red-fg); }
+    .cg-badge-in-library { background: var(--cg-sage-accent-tint-12); color: var(--cg-sage-accent); }
+    .cg-badge-no-doi { background: var(--cg-sage-tint-06); color: var(--cg-text-tertiary); }
 
     /* ── Right column: count + action ── */
     .cg-result-right {
@@ -170,15 +199,15 @@ export function getDialogCSS(): string {
       font-feature-settings: 'kern' 1, 'tnum' 1;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
-    .cg-count-high { color: #8FAD9F; font-weight: 800; }
-    .cg-count-medium { color: var(--fill-primary, #E7EEE9); }
-    .cg-count-low { color: var(--fill-secondary, #9CAAA3); }
+    .cg-count-high { color: var(--cg-sage-accent); font-weight: 800; }
+    .cg-count-medium { color: var(--cg-text-primary); }
+    .cg-count-low { color: var(--cg-text-secondary); }
 
     /* ── Split button ── */
     .cg-split-btn {
       display: inline-flex; align-items: stretch;
       border-radius: 7px;
-      border: 1px solid rgba(143,173,159,0.25);
+      border: 1px solid var(--cg-sage-accent-tint-25);
       font-size: 11px; font-weight: 500;
       transition: border-color 0.12s;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -187,23 +216,23 @@ export function getDialogCSS(): string {
     .cg-split-btn > .cg-split-arrow:last-of-type { border-radius: 0 6px 6px 0; }
     .cg-split-btn:hover { border-color: rgba(143,173,159,0.4); }
     .cg-split-main {
-      padding: 5px 11px; background: rgba(143,173,159,0.13); color: #8FAD9F;
+      padding: 5px 11px; background: rgba(143,173,159,0.13); color: var(--cg-sage-accent);
       border: none; cursor: pointer; min-height: 26px;
       white-space: nowrap; max-width: 180px;
       overflow: hidden; text-overflow: ellipsis;
       transition: background 0.12s;
     }
     .cg-split-main:hover { background: rgba(143,173,159,0.21); }
-    .cg-split-main:focus-visible { outline: 2px solid #8FAD9F; outline-offset: -2px; }
+    .cg-split-main:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: -2px; }
     .cg-split-arrow {
-      padding: 5px 7px; background: rgba(143,173,159,0.10); color: #8FAD9F;
+      padding: 5px 7px; background: rgba(143,173,159,0.10); color: var(--cg-sage-accent);
       border: none; border-left: 1px solid rgba(143,173,159,0.22);
       cursor: pointer; font-size: 9px; min-height: 26px;
       display: flex; align-items: center;
       transition: background 0.12s;
     }
     .cg-split-arrow:hover { background: rgba(143,173,159,0.21); }
-    .cg-split-arrow:focus-visible { outline: 2px solid #8FAD9F; outline-offset: -2px; }
+    .cg-split-arrow:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: -2px; }
 
     /* Added state */
     .cg-split-btn.cg-state-added { border-color: rgba(74,125,107,0.3); }
@@ -215,26 +244,26 @@ export function getDialogCSS(): string {
     }
 
     /* File state (in library) */
-    .cg-split-btn.cg-state-file { border-color: rgba(56,104,87,0.15); }
+    .cg-split-btn.cg-state-file { border-color: var(--cg-sage-tint-15); }
     .cg-split-btn.cg-state-file .cg-split-main {
-      background: rgba(56,104,87,0.06); color: var(--fill-secondary, #9CAAA3);
+      background: var(--cg-sage-tint-06); color: var(--cg-text-secondary);
     }
     .cg-split-btn.cg-state-file .cg-split-main:hover {
-      background: rgba(56,104,87,0.10); color: var(--fill-secondary, #BFCBC5);
+      background: var(--cg-sage-tint-10); color: var(--cg-text-hover);
     }
     .cg-split-btn.cg-state-file .cg-split-arrow {
-      background: rgba(56,104,87,0.04); color: var(--fill-tertiary, #788780);
-      border-left-color: rgba(56,104,87,0.10);
+      background: var(--cg-sage-tint-04); color: var(--cg-text-tertiary);
+      border-left-color: var(--cg-sage-tint-10);
     }
     .cg-split-btn.cg-state-file .cg-split-arrow:hover {
-      background: rgba(56,104,87,0.10); color: var(--fill-secondary, #9CAAA3);
+      background: var(--cg-sage-tint-10); color: var(--cg-text-secondary);
     }
 
     /* Adding spinner */
     .cg-spinner {
       display: inline-block; width: 12px; height: 12px;
       border: 2px solid rgba(143,173,159,0.2);
-      border-top-color: #8FAD9F; border-radius: 50%;
+      border-top-color: var(--cg-sage-accent); border-radius: 50%;
       animation: cg-spin 0.6s linear infinite;
       vertical-align: middle;
     }
@@ -243,7 +272,7 @@ export function getDialogCSS(): string {
     /* ── Expanded detail area ── */
     .cg-result-expanded {
       padding: 8px 14px 12px 14px;
-      border-bottom: 1px solid rgba(56,104,87,0.08);
+      border-bottom: 1px solid var(--cg-sage-tint-08);
       background: rgba(56,104,87,0.03);
       animation: cg-expand-in 0.15s ease-out;
     }
@@ -251,28 +280,28 @@ export function getDialogCSS(): string {
       from { opacity: 0; } to { opacity: 1; }
     }
     .cg-abstract-text {
-      font-size: 12px; line-height: 1.55; color: var(--fill-secondary, #9CAAA3);
+      font-size: 12px; line-height: 1.55; color: var(--cg-text-secondary);
       display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical;
       overflow: hidden;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
     .cg-abstract-loading {
-      font-size: 12px; color: var(--fill-tertiary, #788780); font-style: italic;
+      font-size: 12px; color: var(--cg-text-tertiary); font-style: italic;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
     .cg-abstract-none {
-      font-size: 12px; color: var(--fill-quaternary, #586860); font-style: italic;
+      font-size: 12px; color: var(--cg-text-quaternary); font-style: italic;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
 
     /* ── Expand affordance ── */
     .cg-expand-hint {
-      font-size: 10px; color: var(--fill-quaternary, #586860);
+      font-size: 10px; color: var(--cg-text-quaternary);
       margin-top: 4px; cursor: pointer;
       transition: color 0.12s;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
-    .cg-result-item:hover .cg-expand-hint { color: var(--fill-secondary, #9CAAA3); }
+    .cg-result-item:hover .cg-expand-hint { color: var(--cg-text-secondary); }
     .cg-expand-chevron {
       display: inline-block; transition: transform 0.15s ease;
       font-size: 9px; margin-right: 3px;
@@ -291,19 +320,44 @@ export function getDialogCSS(): string {
 
     /* ── Result item focus (keyboard nav) ── */
     .cg-result-item:focus-visible {
-      outline: 2px solid #8FAD9F; outline-offset: -2px;
+      outline: 2px solid var(--cg-sage-accent); outline-offset: -2px;
       background: rgba(143,173,159,0.06);
     }
     .cg-result-item:focus { outline: none; }
 
+    /* While a load is in flight, dim inactive tabs so the user can see
+       their click was ignored. Active tab stays full opacity so the user
+       knows where focus is. (F11) */
+    #citegeist-network-dialog.cg-is-loading .cg-tab:not(.active) {
+      opacity: 0.45;
+      cursor: progress;
+    }
+
+    /* Inline error banner shown under a row when Add fails (read-only
+       library, network drop, validation throw). Auto-dismisses in 5s. */
+    .cg-row-error {
+      margin-top: 6px; padding: 6px 10px; border-radius: 6px;
+      background: rgba(196, 64, 48, 0.10);
+      color: #C44030; font-size: 12px; line-height: 1.4;
+      border: 1px solid rgba(196, 64, 48, 0.30);
+      role: alert;
+    }
+    @media (prefers-color-scheme: dark) {
+      .cg-row-error {
+        background: rgba(220, 90, 70, 0.18);
+        color: #FFB8AC;
+        border-color: rgba(220, 90, 70, 0.40);
+      }
+    }
+
     /* ── Skeleton loading ── */
     .cg-skeleton-row {
       display: flex; align-items: flex-start; gap: 10px;
-      padding: 12px 14px; border-bottom: 1px solid rgba(56,104,87,0.08);
+      padding: 12px 14px; border-bottom: 1px solid var(--cg-sage-tint-08);
     }
     .cg-skeleton-bar {
       height: 12px; border-radius: 4px;
-      background: rgba(56,104,87,0.10);
+      background: var(--cg-sage-tint-10);
       animation: cg-pulse 1.5s ease-in-out infinite;
     }
     @keyframes cg-pulse {
@@ -338,14 +392,14 @@ export function getDialogCSS(): string {
     }
     .cg-picker-option {
       display: flex; align-items: center; gap: 8px;
-      padding: 6px 12px; font-size: 12px; color: var(--fill-secondary, #BFCBC5);
+      padding: 6px 12px; font-size: 12px; color: var(--cg-text-hover);
       cursor: pointer; border: none; background: transparent;
       width: 100%; text-align: left;
       transition: background 0.1s;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
-    .cg-picker-option:hover { background: rgba(56,104,87,0.08); }
-    .cg-picker-option:focus-visible { outline: 2px solid #8FAD9F; outline-offset: -2px; }
+    .cg-picker-option:hover { background: var(--cg-sage-tint-08); }
+    .cg-picker-option:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: -2px; }
     .cg-picker-option[hidden] { display: none; }
     .cg-picker-check {
       width: 14px; height: 14px; flex-shrink: 0;
@@ -354,12 +408,12 @@ export function getDialogCSS(): string {
       font-size: 10px; color: transparent;
     }
     .cg-picker-option.checked .cg-picker-check {
-      background: #8FAD9F; border-color: #8FAD9F; color: #1A241E;
+      background: var(--cg-sage-accent); border-color: var(--cg-sage-accent); color: #1A241E;
     }
     .cg-picker-chevron {
       width: 14px; height: 14px; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
-      font-size: 9px; color: var(--fill-tertiary, #788780);
+      font-size: 9px; color: var(--cg-text-tertiary);
       transition: transform 0.15s ease;
       cursor: pointer;
       margin-left: -4px;
@@ -369,58 +423,58 @@ export function getDialogCSS(): string {
       flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .cg-picker-separator {
-      height: 1px; background: rgba(56,104,87,0.10); margin: 4px 12px;
+      height: 1px; background: var(--cg-sage-tint-10); margin: 4px 12px;
     }
     .cg-picker-actions {
       display: flex; justify-content: flex-end; padding: 6px 12px;
-      border-top: 1px solid rgba(56,104,87,0.10);
+      border-top: 1px solid var(--cg-sage-tint-10);
       flex-shrink: 0;
       background: var(--material-background, #1A241E);
       border-radius: 0 0 10px 10px;
     }
     .cg-picker-done {
       padding: 5px 16px; border-radius: 6px; font-size: 11px; font-weight: 600;
-      background: #386857; color: #E7EEE9; border: none; cursor: pointer;
+      background: #2F6B5A; color: #FFFFFF; border: none; cursor: pointer;
       transition: background 0.12s;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
-    .cg-picker-done:hover { background: #2E4538; }
-    .cg-picker-done:focus-visible { outline: 2px solid #8FAD9F; outline-offset: 2px; }
+    .cg-picker-done:hover { background: #245546; }
+    .cg-picker-done:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 2px; }
 
     /* ── Footer ── */
     .cg-dialog-footer {
       display: flex; align-items: center; justify-content: space-between;
       padding: 10px 14px;
-      border-top: 1px solid rgba(56,104,87,0.12);
+      border-top: 1px solid var(--cg-sage-tint-12);
       flex-shrink: 0;
       background: rgba(56,104,87,0.03);
     }
     .cg-footer-info {
-      font-size: 11px; color: var(--fill-tertiary, #788780);
+      font-size: 11px; color: var(--cg-text-tertiary);
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
     .cg-footer-right {
       display: flex; align-items: center; gap: 8px;
     }
     .cg-footer-label {
-      font-size: 11px; color: var(--fill-tertiary, #788780);
+      font-size: 11px; color: var(--cg-text-tertiary);
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
     .cg-default-chip {
       display: inline-flex; align-items: center; gap: 5px;
       padding: 5px 10px; border-radius: 7px; font-size: 11px; font-weight: 500;
-      background: rgba(56,104,87,0.08); color: var(--fill-secondary, #BFCBC5);
-      border: 1px solid rgba(56,104,87,0.15);
+      background: var(--cg-sage-tint-08); color: var(--cg-text-hover);
+      border: 1px solid var(--cg-sage-tint-15);
       cursor: pointer; white-space: nowrap; max-width: 200px;
       transition: background 0.12s;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
-    .cg-default-chip:hover { background: rgba(56,104,87,0.12); }
-    .cg-default-chip:focus-visible { outline: 2px solid #8FAD9F; outline-offset: 1px; }
+    .cg-default-chip:hover { background: var(--cg-sage-tint-12); }
+    .cg-default-chip:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 1px; }
     .cg-default-chip-label {
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .cg-default-chip-extra { color: #8FAD9F; font-weight: 600; flex-shrink: 0; }
+    .cg-default-chip-extra { color: var(--cg-sage-accent); font-weight: 600; flex-shrink: 0; }
     .cg-default-dropdown {
       position: absolute; bottom: calc(100% + 6px); right: 0;
       width: 270px; max-height: 300px;
@@ -435,22 +489,44 @@ export function getDialogCSS(): string {
 
     /* ── States ── */
     .cg-loading-more {
-      text-align: center; padding: 20px; font-size: 12px; color: var(--fill-quaternary, #586860);
+      text-align: center; padding: 20px; font-size: 12px; color: var(--cg-text-quaternary);
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
     .cg-empty {
       text-align: center; padding: 48px 24px;
-      color: var(--fill-tertiary, #788780); font-size: 13px; line-height: 1.5;
+      color: var(--cg-text-tertiary); font-size: 13px; line-height: 1.5;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
     .cg-empty-title {
-      font-size: 14px; font-weight: 600; color: var(--fill-secondary, #9CAAA3); margin-bottom: 4px;
+      font-size: 14px; font-weight: 600; color: var(--cg-text-secondary); margin-bottom: 4px;
     }
     .cg-cap-notice {
       text-align: center; padding: 8px 14px; font-size: 11px;
-      color: var(--fill-quaternary, #586860); background: rgba(56,104,87,0.03);
-      border-top: 1px solid rgba(56,104,87,0.06);
+      color: var(--cg-text-quaternary); background: rgba(56,104,87,0.03);
+      border-top: 1px solid var(--cg-sage-tint-06);
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    /* Respect the user's OS-level Reduce Motion preference. Collapses
+       infinite spinners + entrance animations to near-zero. NOTE we
+       intentionally do NOT include .cg-undo-bar — its 8s linear
+       horizontal width shrink is the ONLY visual indicator of how much
+       time remains before the Undo affordance expires, and a smooth
+       horizontal-width transition is generally considered vestibular-
+       safe (no rotation, scaling, parallax, or perspective). Removing
+       it would leave reduced-motion users with no time cue, which
+       violates the same accessibility goal the override is supposed
+       to honor. (ADV-U4, Iter W refinement) */
+    @media (prefers-reduced-motion: reduce) {
+      .cg-spinner,
+      .cg-result-expanded,
+      .cg-skeleton-bar,
+      .cg-item-picker,
+      .cg-default-dropdown {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+      }
     }
   `;
 }

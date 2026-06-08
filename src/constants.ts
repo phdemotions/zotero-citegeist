@@ -49,6 +49,37 @@ export const MAX_ABSTRACT_POSITION = 10_000;
 /** Max reconstructed abstract length (characters). */
 export const MAX_ABSTRACT_LENGTH = 100_000;
 
+// ── SQLite cache + migration ──
+/** Library size threshold above which migration shows progress UI. */
+export const SHOW_PROGRESS_UI_THRESHOLD = 500;
+/** Update progress UI every N items during migration. */
+export const MIGRATION_PROGRESS_TICK = 50;
+/** Max item_keys per `DELETE … WHERE item_key IN (…)` chunk during orphan GC. */
+export const ORPHAN_GC_CHUNK_SIZE = 200;
+/** Max migration-backup JSON files to keep in the data dir. Older files removed. */
+export const MAX_BACKUP_FILES = 5;
+/** Minimum interval between orphan-GC sweeps at startup. */
+export const ORPHAN_GC_MIN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// ── Timeouts ──
+/** Per-item saveTx timeout during migration. A single locked item must
+ *  not stall the entire migration loop. */
+export const MIGRATION_ITEM_TIMEOUT_MS = 30_000;
+/** Max wait for pending writes to drain during cache shutdown. Beyond
+ *  this we abandon stragglers rather than block Zotero shutdown. */
+export const CLOSE_CACHE_DRAIN_TIMEOUT_MS = 5_000;
+
+// ── Preference keys ──
+// Centralized to prevent typos: a misspelled pref name silently fails
+// (Zotero.Prefs.get returns `undefined`) and corrupts state lookups.
+export const PREF_MIGRATION_COMPLETE = "extensions.zotero.citegeist.migrationV1Complete";
+export const PREF_LAST_BACKUP_PATH = "extensions.zotero.citegeist.lastBackupPath";
+export const PREF_LAST_ORPHAN_GC_AT = "extensions.zotero.citegeist.lastOrphanGcAt";
+export const PREF_CACHE_LIFETIME_DAYS = "extensions.zotero.citegeist.cacheLifetimeDays";
+export const PREF_AUTO_FETCH = "extensions.zotero.citegeist.autoFetch";
+export const PREF_MAILTO = "extensions.zotero.citegeist.mailto";
+export const PREF_NETWORK_PAGE_SIZE = "extensions.zotero.citegeist.networkPageSize";
+
 // ── Title-based metadata matching ──
 /** Score threshold for high-confidence title match (data shown with ~ prefix). */
 export const TITLE_MATCH_HIGH_THRESHOLD = 0.92;

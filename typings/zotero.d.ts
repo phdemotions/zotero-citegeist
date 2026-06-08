@@ -70,6 +70,10 @@ declare namespace _ZoteroTypes {
 
   interface ItemsView {
     refreshAndMaintainSelection(): Promise<void>;
+    /** Force a full table re-render — heavier than refreshAndMaintainSelection;
+     *  invalidates row caches and reruns column dataProviders. */
+    refresh?(): Promise<void>;
+    invalidate?(): void;
   }
 
   // Item pane section registration types
@@ -154,12 +158,38 @@ declare namespace _ZoteroTypes {
   }
 }
 
+declare namespace _ZoteroTypes {
+  /**
+   * Plugin-owned SQLite connection.
+   * Created via `new Zotero.DBConnection('<name>')`.
+   * Auto-creates `<profile>/<name>.sqlite` on first use.
+   *
+   * We deliberately expose only the surface Citegeist uses. Zotero's real
+   * `DBConnection` has more (transactions, table introspection); add them
+   * here when a caller actually needs them.
+   */
+  interface DBConnection {
+    queryAsync<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+    closeDatabase(permanent?: boolean): Promise<void>;
+  }
+
+  interface Library {
+    libraryID: number;
+    libraryType: string;
+    /** False for group libraries the user is a read-only member of. */
+    editable: boolean;
+  }
+}
+
 declare const Zotero: {
+  version: string;
   debug(msg: string, level?: number): void;
   log(msg: string): void;
   getActiveZoteroPane(): {
     getSelectedItems(asIDs?: boolean): _ZoteroTypes.Item[];
     getSelectedCollection(): _ZoteroTypes.Collection | null;
+    /** Returns the library ID of the currently selected library or collection. */
+    getSelectedLibraryID?(): number | undefined;
     itemsView?: _ZoteroTypes.ItemsView;
   };
   Item: new (itemType: string) => _ZoteroTypes.Item;
@@ -175,6 +205,21 @@ declare const Zotero: {
   };
   Libraries: {
     userLibraryID: number;
+    getAll(): _ZoteroTypes.Library[];
+  };
+  DBConnection: new (name: string) => _ZoteroTypes.DBConnection;
+  /** Path to the active Zotero data directory (where `zotero.sqlite` lives). */
+  DataDirectory: {
+    dir: string;
+  };
+  /** Filesystem helpers exposed by Zotero. */
+  File: {
+    putContentsAsync(path: string, contents: string): Promise<void>;
+  };
+  Sync: {
+    Runner: {
+      delaySync<T>(fn: () => Promise<T>): Promise<T>;
+    };
   };
   Collections: {
     getByLibrary(libraryID: number): _ZoteroTypes.Collection[];
@@ -208,6 +253,10 @@ declare const Zotero: {
       options: _ZoteroTypes.RegisterColumnOptions,
     ): Promise<string>;
     unregisterColumn(dataKey: string): Promise<void>;
+    /** Force a full column refresh — invalidates internal column caches
+     *  AND re-invokes every dataProvider. Use after external data
+     *  changes that don't propagate via Zotero's item notifier. */
+    refreshColumns(): void;
   };
   ItemPaneManager: {
     registerSection(options: _ZoteroTypes.RegisterSectionOptions): void;
@@ -234,6 +283,24 @@ declare const ZoteroPane: {
 
 declare const ChromeUtils: {
   importESModule(url: string): Record<string, unknown>;
+};
+
+/** XPCOM path utilities for cross-platform path joining. */
+declare const PathUtils: {
+  join(...parts: string[]): string;
+};
+
+/** Async filesystem helpers exposed by Mozilla's `IOUtils` (Firefox/Zotero 7+). */
+declare const IOUtils: {
+  getChildren(dir: string): Promise<string[]>;
+  remove(path: string): Promise<void>;
+  /** Atomic rename. Used to swap a `.tmp` write into its final filename. */
+  move(source: string, dest: string): Promise<void>;
+  exists(path: string): Promise<boolean>;
+  /** Create a directory if it doesn't exist. */
+  makeDirectory(path: string, options?: { permissions?: number; ignoreExisting?: boolean }): Promise<void>;
+  /** Optional on builds that don't expose the chmod helper. POSIX-only effect. */
+  setPermissions?(path: string, options: { unixMode?: number }): Promise<void>;
 };
 
 declare const Services: {

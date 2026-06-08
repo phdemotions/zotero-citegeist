@@ -30,6 +30,16 @@ import {
 } from "./collectionPicker";
 
 export let activeDialog: HTMLElement | null = null;
+/**
+ * Active dialog's state, tracked alongside `activeDialog` so a stacked
+ * open can run the FULL `closeDialog(state)` cleanup (undo timers, picker
+ * overlays, addedThisSession finalization) — not just remove the DOM
+ * node. Without this, dispatching the `citegeist:dialog-closed` event
+ * fired into a void: no listener cleared state, undo timers kept running
+ * against detached DOM, and items added with pending undo were
+ * silently committed. (ADV-U1)
+ */
+let activeState: NetworkState | null = null;
 
 // ────────────────────────────────────────────────────────
 // Entry point
@@ -52,10 +62,39 @@ export async function showCitationNetwork(
   }
 
   if (activeDialog) {
-    try {
-      activeDialog.remove();
-    } catch {
-      /* already gone */
+    // Run the FULL cleanup — undo timers, picker overlays, search debounce
+    // — same as the explicit Close button would trigger. Previously we
+    // dispatched a `citegeist:dialog-closed` event into the void, which
+    // only flipped `phase = "closed"` via the `markClosed` listener and
+    // left every other piece of state intact. The result: stacked-open
+    // would orphan undo timers firing against detached DOM, items added
+    // with pending undo were silently committed without the user ever
+    // seeing the Undo affordance again. (ADV-U1 / P2.1 real fix)
+    if (activeState) {
+      try {
+        closeDialog(activeState);
+      } catch {
+        // Defensive — closeDialog only does DOM remove + Map.clear + Set.clear.
+      }
+      activeState = null;
+    } else {
+      // No state yet (first dialog still in early-skeleton phase, lost
+      // the race). Mark the in-flight invocation as closed via the same
+      // event the `markClosed` listener watches for — without it, the
+      // first dialog's `Promise.all([getWorkByDOI, ...])` resume path
+      // would rely solely on the `activeDialog !== overlay` identity
+      // check (held today, latent footgun if a future refactor reads
+      // `phase` directly). Then drop the overlay. (Iter W note)
+      try {
+        activeDialog.dispatchEvent(new Event("citegeist:dialog-closed"));
+      } catch {
+        /* event dispatch can throw in rare XUL contexts */
+      }
+      try {
+        activeDialog.remove();
+      } catch {
+        /* already gone */
+      }
     }
     activeDialog = null;
   }
@@ -117,9 +156,15 @@ export async function showCitationNetwork(
     safeInnerHTML(body, skeleton);
   }
 
-  // Close on Escape/backdrop while loading
+  // Close on Escape/backdrop while loading. We flip `phase` to "closed"
+  // BEFORE the DOM removal so any awaiter that resumes between this handler
+  // and `closedBeforeReady` returning true sees a consistent state — without
+  // it, the post-await "happy path" (work fetched after early-close) would
+  // proceed to bind events on a detached overlay and fire network calls
+  // against an orphaned UI.
   const earlyClose = (e: Event) => {
     if ((e as KeyboardEvent).key === "Escape" || e.target === overlay) {
+      phase = "closed";
       try {
         overlay.remove();
       } catch {
@@ -190,6 +235,12 @@ export async function showCitationNetwork(
     return;
   }
 
+  // Second check: a user can close the dialog between the first guard and
+  // here (rare but possible — the safeInnerHTML write yields to the event
+  // loop). Without this, we'd bind the full event set and fire loadResults
+  // on a detached overlay.
+  if (closedBeforeReady()) return;
+
   // Remove early close handlers, bind full event set
   overlay.removeEventListener("keydown", earlyClose);
   overlay.removeEventListener("click", earlyClose);
@@ -222,7 +273,12 @@ export async function showCitationNetwork(
     itemCollections: new Map(),
     createdItemIds: new Map(),
     defaultPickerExpanded: new Set(),
+    pendingAdds: new Set(),
   };
+
+  // Publish so a subsequent stacked-open invocation can run the full
+  // closeDialog cleanup on this state instead of just removing the DOM.
+  activeState = state;
 
   bindDialogEvents(state);
   updateDefaultCollectionLabel(state);
@@ -248,10 +304,12 @@ export function buildDialogHTML(title: string): string {
     </div>
     <div class="cg-dialog-tabs" role="tablist" aria-label="Citation direction">
       <div class="cg-tabs-inner">
-        <button class="cg-tab" data-mode="citing" role="tab"
-                aria-selected="false" tabindex="0">Cited By</button>
-        <button class="cg-tab" data-mode="references" role="tab"
-                aria-selected="false" tabindex="0">References</button>
+        <button class="cg-tab" data-mode="citing" role="tab" id="cg-tab-citing"
+                aria-selected="false" aria-controls="cg-dialog-body"
+                tabindex="-1">Cited By</button>
+        <button class="cg-tab" data-mode="references" role="tab" id="cg-tab-references"
+                aria-selected="false" aria-controls="cg-dialog-body"
+                tabindex="-1">References</button>
       </div>
     </div>
     <div class="cg-dialog-toolbar">
@@ -269,7 +327,8 @@ export function buildDialogHTML(title: string): string {
         <option value="year-asc">Oldest</option>
       </select>
     </div>
-    <div class="cg-dialog-body">
+    <div class="cg-dialog-body" id="cg-dialog-body" role="tabpanel"
+         aria-labelledby="cg-tab-citing" aria-live="polite" aria-busy="true">
       <div class="cg-loading-more">Loading\u2026</div>
     </div>
     <div class="cg-dialog-footer">
@@ -314,6 +373,7 @@ export function closeDialog(state: NetworkState): void {
     /* already gone */
   }
   if (activeDialog === state.overlay) activeDialog = null;
+  if (activeState === state) activeState = null;
 }
 
 // ────────────────────────────────────────────────────────
@@ -348,17 +408,40 @@ export function bindDialogEvents(state: NetworkState): void {
     if (e.target === overlay) closeDialog(state);
   });
 
-  // Tabs
-  const tabs = dialog.querySelectorAll(".cg-tab");
-  tabs.forEach((tab) => {
-    const tabEl = tab as HTMLElement;
-    if (tabEl.dataset.mode === state.mode) {
+  // Tabs — roving-tabindex + arrow-key navigation per WAI-ARIA tabs pattern.
+  const tabs = Array.from(dialog.querySelectorAll(".cg-tab")) as HTMLElement[];
+  const tabPanel = dialog.querySelector("#cg-dialog-body");
+  tabs.forEach((tabEl) => {
+    const isActive = tabEl.dataset.mode === state.mode;
+    if (isActive) {
       tabEl.classList.add("active");
       tabEl.setAttribute("aria-selected", "true");
+      tabEl.setAttribute("tabindex", "0");
+      tabPanel?.setAttribute("aria-labelledby", tabEl.id);
     }
+    // Arrow-key navigation within the tablist. Skip when a load is in
+    // flight so focus + aria-selected + tabindex stay in sync (C2: the
+    // click handler short-circuits on `state.loading`, but focus had
+    // already moved, desyncing roving-tabindex from the active tab).
+    tabEl.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (state.loading) return;
+      e.preventDefault();
+      const idx = tabs.indexOf(tabEl);
+      const next = tabs[(idx + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+      next.focus();
+      (next as HTMLElement).click();
+    });
     tabEl.addEventListener("click", async () => {
       const newMode = tabEl.dataset.mode as NetworkMode;
       if (newMode === state.mode || state.loading) return;
+      // Cancel any pending debounced search — without this, a mid-typing
+      // tab switch would fire `renderResults` with stale filter against the
+      // brand-new tab's results once the debounce window elapsed (P2.5).
+      if (state.searchTimeout) {
+        clearTimeout(state.searchTimeout);
+        state.searchTimeout = null;
+      }
       state.generation++;
       state.mode = newMode;
       state.results = [];
@@ -366,11 +449,14 @@ export function bindDialogEvents(state: NetworkState): void {
       state.cursor = "*";
       state.hasMore = true;
       tabs.forEach((t) => {
-        (t as HTMLElement).classList.remove("active");
-        (t as HTMLElement).setAttribute("aria-selected", "false");
+        t.classList.remove("active");
+        t.setAttribute("aria-selected", "false");
+        t.setAttribute("tabindex", "-1");
       });
       tabEl.classList.add("active");
       tabEl.setAttribute("aria-selected", "true");
+      tabEl.setAttribute("tabindex", "0");
+      tabPanel?.setAttribute("aria-labelledby", tabEl.id);
       await loadResults(state);
     });
   });
@@ -426,9 +512,15 @@ export function bindDialogEvents(state: NetworkState): void {
     }
 
     // Split button main -> add / undo / file
-    const splitMain = target.closest(".cg-split-main") as HTMLElement | null;
+    const splitMain = target.closest(".cg-split-main") as HTMLButtonElement | null;
     if (splitMain) {
       e.stopPropagation();
+      // Disabled-state re-check at delegation boundary: clicks on the
+      // chrome around a disabled button (.cg-split-btn padding, focus
+      // ring) bubble here even though the inner <button> rejected them.
+      // Without this, a spam-click during the in-flight add could
+      // re-enter and create a duplicate item. (F2 belt-and-suspenders)
+      if (splitMain.disabled) return;
       const workId = splitMain.dataset.workId;
       const action = splitMain.dataset.action;
       if (!workId) return;
@@ -499,40 +591,77 @@ export function bindDialogEvents(state: NetworkState): void {
       }
     }
 
-    // Enter on row -> expand/collapse
-    if (ke.key === "Enter" && target.classList.contains("cg-result-item")) {
-      ke.preventDefault();
-      const workId = target.dataset.workId;
-      if (workId) toggleExpanded(state, workId);
+    // Enter/Escape on row → expand/collapse. Use closest() so the key
+    // fires from anywhere inside the row (title link, badge, or any
+    // focusable child) — not only when focus is on the row element
+    // itself. Without this, tabbing into a link inside the row made
+    // Enter lose its expand behaviour (a-n 1).
+    if (ke.key === "Enter") {
+      const row = target.closest(".cg-result-item") as HTMLElement | null;
+      if (row && !target.matches("button, a, input, select")) {
+        ke.preventDefault();
+        const workId = row.dataset.workId;
+        if (workId) toggleExpanded(state, workId);
+      }
+    }
+    if (ke.key === "Escape") {
+      const row = target.closest(".cg-result-item") as HTMLElement | null;
+      if (row && state.expandedIds.has(row.dataset.workId ?? "")) {
+        ke.preventDefault();
+        const workId = row.dataset.workId;
+        if (workId) toggleExpanded(state, workId);
+      }
     }
   });
 
-  // Infinite scroll
-  body?.addEventListener("scroll", async () => {
-    if (state.loading || !state.hasMore || state.phase === "closed") return;
-    const scrollBottom = body.scrollHeight - body.scrollTop - body.clientHeight;
-    if (scrollBottom < INFINITE_SCROLL_THRESHOLD_PX) await loadResults(state, true);
+  // Infinite scroll — throttled so a long results list doesn't force a
+  // layout read on every paint. Without this, fast scrolling on 1k+
+  // items measurably jankifies the dialog. (F12)
+  //
+  // Use `state.win.requestAnimationFrame` (NOT the bare global) — Zotero's
+  // XUL sandbox does not expose `requestAnimationFrame` as a global, so
+  // `requestAnimationFrame(...)` threw ReferenceError on every scroll
+  // event. Fall back to `setTimeout(fn, 16)` (~60Hz) on builds that
+  // don't expose the per-window rAF either.
+  const win = state.win as Window & {
+    requestAnimationFrame?: (cb: FrameRequestCallback) => number;
+  };
+  const schedule: (cb: FrameRequestCallback) => unknown =
+    typeof win.requestAnimationFrame === "function"
+      ? win.requestAnimationFrame.bind(win)
+      : (cb) => setTimeout(() => cb(0), 16);
+  let scrollScheduled = false;
+  body?.addEventListener("scroll", () => {
+    if (scrollScheduled) return;
+    scrollScheduled = true;
+    schedule(async () => {
+      scrollScheduled = false;
+      if (state.loading || !state.hasMore || state.phase === "closed") return;
+      const scrollBottom = body.scrollHeight - body.scrollTop - body.clientHeight;
+      if (scrollBottom < INFINITE_SCROLL_THRESHOLD_PX) await loadResults(state, true);
+    });
   });
 
-  // Focus trap -- keep Tab within dialog
+  // Focus trap — keep Tab within dialog. Re-queries focusables every
+  // keydown so additions/removals (search input show/hide, picker open)
+  // are picked up live. Filters out hidden elements explicitly so the
+  // trap doesn't park focus on `cg-picker-option[hidden]` nodes that
+  // surrounding CSS keeps reachable in the DOM. (P3.1)
   dialog.addEventListener("keydown", (e: Event) => {
     const ke = e as KeyboardEvent;
     if (ke.key !== "Tab") return;
-    const focusable = dialog.querySelectorAll(
-      'button:not([disabled]), [href], input, select, [tabindex]:not([tabindex="-1"])',
+    const all = dialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]):not([hidden]), [href]:not([hidden]), input:not([hidden]), select:not([hidden]), [tabindex]:not([tabindex="-1"]):not([hidden])',
     );
+    const focusable = Array.from(all).filter((el) => el.offsetParent !== null);
     if (focusable.length === 0) return;
-    const first = focusable[0] as HTMLElement;
-    const last = focusable[focusable.length - 1] as HTMLElement;
-    if (
-      ke.shiftKey &&
-      (dialog.ownerDocument.activeElement === first ||
-        (dialog.contains(dialog.ownerDocument.activeElement) &&
-          dialog.ownerDocument.activeElement === first))
-    ) {
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = dialog.ownerDocument.activeElement;
+    if (ke.shiftKey && active === first) {
       ke.preventDefault();
       last.focus();
-    } else if (!ke.shiftKey && dialog.ownerDocument.activeElement === last) {
+    } else if (!ke.shiftKey && active === last) {
       ke.preventDefault();
       first.focus();
     }

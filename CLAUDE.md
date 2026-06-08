@@ -33,7 +33,13 @@ src/
   hooks.ts                      # Zotero lifecycle hooks
   modules/
     openalex.ts                 # OpenAlex API client — fetch, parse, rate limit, retry
-    cache.ts                    # Read/write Citegeist fields in Zotero's Extra field
+    cache/                      # SQLite-backed cache (v2.0.0+)
+      db.ts                     # Connection, in-memory mirror, lifecycle (init/close)
+      read.ts                   # Sync read API (mirror only)
+      write.ts                  # Async write API (SQLite first, then mirror)
+      migration.ts              # One-shot Extra→SQLite migration + orphan GC
+      types.ts                  # Public types + internal row shape + column list
+      index.ts                  # Public surface (re-exports)
     citationService.ts          # Orchestration: fetch + cache + error handling
     citationColumn.ts           # Sortable item-tree columns
     citationPane.ts             # Item-detail sidebar pane
@@ -66,7 +72,7 @@ typings/                        # Zotero type declarations
 
 **Constants:** Every magic number lives in `src/constants.ts`. Do not hardcode timeouts, sizes, or thresholds inline.
 
-**Caching:** Data is stored in Zotero's `Extra` field under `Citegeist.*` namespaced keys. This syncs across devices via Zotero Sync automatically.
+**Caching (v2.0.0+):** Cached metrics live in a plugin-owned SQLite database at `<profile>/citegeist.sqlite`. Reads hit a synchronous in-memory mirror loaded at startup (Zotero's column `dataProvider` is sync). Writes go to SQLite first, then update the mirror. Only the user-curated `Citegeist match ID: W…` line is mirrored back to Zotero's `Extra` field for downgrade safety and cross-device sync. See `src/modules/cache/` and `docs/MIGRATION-v2.0.0.md`. The one-shot migration from v1.3.x Extra-namespaced fields is in `cache/migration.ts`.
 
 **Rate limiting:** All OpenAlex calls go through a single `rateLimitedFetch` (8 req/s, 125ms interval, exponential backoff on 429/5xx). Never call the API directly.
 
@@ -111,13 +117,13 @@ Locally, always verify with `rm -rf node_modules && npm install` before releasin
 
 ## Key Files
 
-| File              | Purpose                                                          |
-| ----------------- | ---------------------------------------------------------------- |
-| `docs/STATUS.md`       | Current project state, what was done last session, upcoming work |
-| `docs/ISSUES.md`       | Open bugs and feature requests with priorities                   |
-| `docs/BACKLOG.md`      | Curated longer-term enhancement ideas                            |
-| `CHANGELOG.md`         | Keep-a-Changelog format, one entry per release                   |
-| `docs/DESIGN.md`       | Architecture decisions and trade-offs                            |
-| `CONTRIBUTING.md`      | Dev setup, commands, PR guidelines                               |
-| `docs/paper/paper.md`  | JOSS paper (in progress)                                         |
-| `CITATION.cff`         | Machine-readable citation metadata                               |
+| File                  | Purpose                                                          |
+| --------------------- | ---------------------------------------------------------------- |
+| `docs/STATUS.md`      | Current project state, what was done last session, upcoming work |
+| `docs/ISSUES.md`      | Open bugs and feature requests with priorities                   |
+| `docs/BACKLOG.md`     | Curated longer-term enhancement ideas                            |
+| `CHANGELOG.md`        | Keep-a-Changelog format, one entry per release                   |
+| `docs/DESIGN.md`      | Architecture decisions and trade-offs                            |
+| `CONTRIBUTING.md`     | Dev setup, commands, PR guidelines                               |
+| `docs/paper/paper.md` | JOSS paper (in progress)                                         |
+| `CITATION.cff`        | Machine-readable citation metadata                               |

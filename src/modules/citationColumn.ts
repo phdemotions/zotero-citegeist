@@ -23,6 +23,7 @@ import {
   FETCH_QUEUE_DEBOUNCE_MS,
   MAX_ATTEMPTED_FETCH_CACHE,
   NO_MATCH_RETRY_DAYS,
+  PREF_AUTO_FETCH,
 } from "../constants";
 
 // Column data keys
@@ -49,14 +50,35 @@ const ALL_COLUMNS = [
 ];
 
 let registered = false;
+let registeredPluginID: string | null = null;
 let fetchTimer: ReturnType<typeof setTimeout> | null = null;
 let processingQueue = false;
 const fetchQueue = new Set<number>();
 const fetchAttempted = new Set<number>();
 
 /**
- * Per-item metrics cache to avoid re-parsing the Extra field N times
- * (once per column) during a single render cycle.
+ * Build the same namespaced key Zotero stores internally for a
+ * registered column: `CSS.escape(${pluginID}-${dataKey})`. Required
+ * for `unregisterColumn` to find the entry — the un-prefixed key
+ * silently fails. See pluginAPIBase._namespacedMainKey for the source
+ * of truth.
+ */
+function namespacedColumnKey(pluginID: string, dataKey: string): string {
+  const raw = `${pluginID}-${dataKey}`;
+  type CSSWithEscape = { escape: (s: string) => string };
+  const cssGlobal = (globalThis as unknown as { CSS?: CSSWithEscape }).CSS;
+  if (cssGlobal && typeof cssGlobal.escape === "function") {
+    return cssGlobal.escape(raw);
+  }
+  return raw.replace(/[@.]/g, "\\$&");
+}
+
+/**
+ * Per-render-tick memo so all 9 columns share one `queueFetch` decision and
+ * one `AllMetrics` object identity per item. The underlying `getCachedMetrics`
+ * is already O(1) against the in-memory mirror, but consolidating here
+ * ensures fetch queueing fires at most once per item per tick regardless of
+ * which column triggered the render.
  */
 const metricsCache = new Map<number, AllMetrics | null>();
 
@@ -72,7 +94,7 @@ let autoFetchCacheTime = 0;
 function getAutoFetch(): boolean {
   const now = Date.now();
   if (autoFetchCached === null || now - autoFetchCacheTime > AUTO_FETCH_PREF_TTL_MS) {
-    autoFetchCached = Zotero.Prefs.get("extensions.zotero.citegeist.autoFetch") as boolean;
+    autoFetchCached = Zotero.Prefs.get(PREF_AUTO_FETCH) as boolean;
     autoFetchCacheTime = now;
   }
   return autoFetchCached;
@@ -164,10 +186,67 @@ function getRanking(item: _ZoteroTypes.Item): JournalRanking | null {
 
 export async function registerCitationColumn(pluginID: string): Promise<void> {
   if (registered) return;
+  // Flip the flag BEFORE the first await so a parallel/re-entrant call
+  // (Zotero fires onStartup + onMainWindowLoad on the same launch and
+  // can race) doesn't try to register again mid-flight. Previous code
+  // set `registered = true` only at the END — every register call
+  // racing past the guard hit "dataKey must be unique" and silently
+  // never wired its dataProvider, leaving columns blank.
+  registered = true;
+
+  // FIRST PRINCIPLES: Zotero's pluginAPIBase stores registered keys
+  // as `CSS.escape(${pluginID}-${dataKey})` — see
+  // chrome/content/zotero/xpcom/pluginAPI/pluginAPIBase.mjs
+  // `_namespacedMainKey()`. Calling `unregisterColumn("citegeist-fwci")`
+  // looks up the un-prefixed key and silently fails (registry only
+  // knows the namespaced form). Stale columns from a prior plugin
+  // lifetime stay, and the next `registerColumn` throws
+  // "dataKey must be unique" on the namespaced form — exactly the
+  // error the user reported.
+  registeredPluginID = pluginID;
+  for (const key of ALL_COLUMNS) {
+    try {
+      await Zotero.ItemTreeManager.unregisterColumn(namespacedColumnKey(pluginID, key));
+    } catch {
+      // Expected when the column isn't already registered.
+    }
+  }
+
+  // Track the dataKeys registered this pass so a later failure can roll
+  // them back. Zotero stores columns under the namespaced key, so rollback
+  // (like the defensive unregister above) must use namespacedColumnKey —
+  // the bare key silently no-ops.
+  const registeredKeys: string[] = [];
+
+  // Fail closed on any registration error: roll back the columns we already
+  // wired (plus best-effort the one that just failed), reset state so a
+  // retry starts clean, and rethrow so the caller (hooks.onStartup) can tear
+  // down the cache and alert. The pre-registration unregister loop above
+  // already clears stale columns, so a genuine throw here means the item
+  // tree can't be wired correctly — better to surface it than to leave half
+  // the columns dead with no dataProvider.
+  const safeRegister = async (options: _ZoteroTypes.RegisterColumnOptions) => {
+    try {
+      await Zotero.ItemTreeManager.registerColumn(options);
+      registeredKeys.push(options.dataKey);
+    } catch (e) {
+      logError("registerColumn", e);
+      for (const key of [...registeredKeys, options.dataKey]) {
+        try {
+          await Zotero.ItemTreeManager.unregisterColumn(namespacedColumnKey(pluginID, key));
+        } catch {
+          // best-effort cleanup
+        }
+      }
+      registered = false;
+      registeredPluginID = null;
+      throw e;
+    }
+  };
 
   // ── Article-level columns ──
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_CITATIONS,
     label: "Citations",
     pluginID,
@@ -191,7 +270,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_FWCI,
     label: "FWCI",
     pluginID,
@@ -214,7 +293,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_PERCENTILE,
     label: "Percentile",
     pluginID,
@@ -234,7 +313,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
 
   // ── Journal-level columns (from OpenAlex source stats) ──
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_CITEDNESS,
     label: `Citedness`,
     pluginID,
@@ -249,7 +328,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_HINDEX,
     label: "J. H-Index",
     pluginID,
@@ -266,7 +345,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
 
   // ── Ranking columns (bundled lookup, no API calls) ──
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_UTD24,
     label: `UTD24`,
     pluginID,
@@ -278,7 +357,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_FT50,
     label: `FT50`,
     pluginID,
@@ -290,7 +369,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_ABDC,
     label: `ABDC '${RANKING_VERSIONS.abdc.slice(2)}`,
     pluginID,
@@ -302,7 +381,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  await Zotero.ItemTreeManager.registerColumn({
+  await safeRegister({
     dataKey: COL_AJG,
     label: `AJG '${RANKING_VERSIONS.ajg.slice(2)}`,
     pluginID,
@@ -314,28 +393,95 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     },
   });
 
-  registered = true;
   Zotero.debug("[Citegeist] All columns registered (9 total: article, journal, rankings)");
 }
 
 /**
- * Invalidate the per-item metrics cache so columns re-read the Extra field.
+ * Invalidate the per-item metrics cache so columns re-read the SQLite mirror,
+ * then force Zotero's item tree to repaint.
+ *
+ * Three layers of repaint signal because Zotero's column refresh
+ * behavior is inconsistent across views (Library vs. saved searches vs.
+ * collection):
+ *   1. `metricsCache.delete(...)` clears OUR local memo so the next
+ *      `dataProvider` invocation hits the fresh mirror.
+ *   2. `Zotero.Notifier.trigger("modify", "item", ids)` — canonical
+ *      "this item changed" event. ItemTreeManager listens and re-runs
+ *      column dataProviders on the affected rows. Required: without
+ *      it the menu-driven fetch path updated SQLite + mirror but the
+ *      visible columns stayed stale until the user sorted/scrolled
+ *      manually. (Reported during v2.0.0 testing.)
+ *   3. `refreshAndMaintainSelection()` — belt-and-suspenders for
+ *      builds where the Notifier path doesn't fully redraw.
+ *
+ * Pass `itemIds` (preferred) for targeted refresh of just the affected
+ * rows. Plain `itemId` keeps backward compatibility with existing
+ * callers; calling with no argument clears all caches but cannot
+ * target a Notifier event (no ids to notify about).
  */
-export function invalidateColumnCache(itemId?: number): void {
-  if (itemId !== undefined) {
-    metricsCache.delete(itemId);
-    rankingCache.delete(itemId);
-  } else {
+export async function invalidateColumnCache(itemId?: number | number[]): Promise<void> {
+  const ids = itemId === undefined ? null : Array.isArray(itemId) ? itemId : [itemId];
+  if (ids === null) {
     metricsCache.clear();
     rankingCache.clear();
+  } else {
+    for (const id of ids) {
+      metricsCache.delete(id);
+      rankingCache.delete(id);
+    }
   }
   try {
-    const zp = Zotero.getActiveZoteroPane();
-    if (zp?.itemsView?.refreshAndMaintainSelection) {
-      zp.itemsView.refreshAndMaintainSelection();
+    // **PRIMARY**: `Zotero.ItemTreeManager.refreshColumns()` is the
+    // public API specifically built for "external data changed,
+    // re-invoke every dataProvider on every visible row". Discovered
+    // by reading the Zotero source at
+    // chrome/content/zotero/xpcom/pluginAPI/itemTreeManager.js
+    // (`refreshColumns() { this._columnManager.refresh(); }`).
+    //
+    // Notifier.trigger alone is necessary but NOT sufficient —
+    // synthetic notifier events without an actual `item.dataModified`
+    // change don't always re-run custom column dataProviders.
+    const refreshFn = (Zotero.ItemTreeManager as unknown as { refreshColumns?: () => void })
+      .refreshColumns;
+    if (typeof refreshFn === "function") {
+      refreshFn.call(Zotero.ItemTreeManager);
     }
-  } catch {
-    // Non-critical
+
+    // **Belt-and-suspenders**: fire the canonical "redraw" Notifier
+    // event so item tree handles targeted per-row invalidation. The
+    // "redraw" action is documented in chrome/content/zotero/itemTree.jsx
+    // — it calls `tree.invalidateRow(row)` for the supplied ids
+    // (lighter than the full `refreshColumns` reset above, and
+    // targeted to only the affected rows). Earlier code used "modify"
+    // which is the EVENT FOR ITEM-CONTENT CHANGES, not "this row's
+    // cached data needs re-evaluation"; the latter is "redraw".
+    if (ids !== null && ids.length > 0) {
+      const notifier = (
+        Zotero as unknown as {
+          Notifier?: { trigger: (...args: unknown[]) => Promise<unknown> };
+        }
+      ).Notifier;
+      notifier?.trigger("redraw", "item", ids);
+    }
+
+    // **Fallback** for older builds without refreshColumns.
+    if (typeof refreshFn !== "function") {
+      const zp = Zotero.getActiveZoteroPane();
+      const view = zp?.itemsView;
+      if (view) {
+        if (typeof view.invalidate === "function") view.invalidate();
+        if (typeof view.refresh === "function") {
+          await view.refresh();
+        } else if (typeof view.refreshAndMaintainSelection === "function") {
+          await view.refreshAndMaintainSelection();
+        }
+      }
+    }
+    Zotero.debug(
+      `[Citegeist] invalidateColumnCache: cleared ${ids === null ? "all" : String(ids.length)} entries, refreshColumns=${typeof refreshFn === "function"}`,
+    );
+  } catch (e) {
+    logError("invalidateColumnCache refresh", e);
   }
 }
 
@@ -354,12 +500,15 @@ export function unregisterCitationColumn(): void {
   processingQueue = false;
   registered = false;
 
-  for (const key of ALL_COLUMNS) {
-    try {
-      Zotero.ItemTreeManager.unregisterColumn(key);
-    } catch {
-      // Column may already be removed
+  if (registeredPluginID) {
+    for (const key of ALL_COLUMNS) {
+      try {
+        Zotero.ItemTreeManager.unregisterColumn(namespacedColumnKey(registeredPluginID, key));
+      } catch {
+        // Column may already be removed
+      }
     }
+    registeredPluginID = null;
   }
 }
 
@@ -393,7 +542,12 @@ async function processFetchQueue(): Promise<void> {
           const item = Zotero.Items.get(id);
           if (item) {
             const result = await fetchAndCacheItem(item as _ZoteroTypes.Item);
-            if (result.status === "suggestion") {
+            // Invalidate per-id for both "ok" (real metrics) and "suggestion"
+            // (pending preview) so individual rows refresh as soon as their
+            // data lands, instead of waiting for the bulk metricsCache.clear()
+            // + refreshAndMaintainSelection() at the end of the batch. Makes
+            // partial-batch repaints crisper on large queues.
+            if (result.status === "ok" || result.status === "suggestion") {
               invalidateColumnCache(id);
             }
           }
