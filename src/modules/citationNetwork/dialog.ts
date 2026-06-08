@@ -17,7 +17,7 @@
 import { getWorkByDOI } from "../openalex";
 import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../utils";
 import { SEARCH_DEBOUNCE_MS, INFINITE_SCROLL_THRESHOLD_PX } from "../../constants";
-import type { NetworkMode, NetworkState } from "./types";
+import type { NetworkMode, NetworkSortKey, NetworkState } from "./types";
 import { getDialogCSS } from "./styles";
 import { loadResults, renderResults, toggleExpanded } from "./results";
 import { handleAdd, handleUndo, getExistingDOIs } from "./actions";
@@ -129,7 +129,7 @@ export async function showCitationNetwork(
   `;
 
   const title = item.getField("title");
-  safeInnerHTML(dialog, buildDialogHTML(title));
+  safeInnerHTML(dialog, buildDialogHTML(title, getItemSourceMetaLine(item)));
 
   const styleEl = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
   styleEl.textContent = getDialogCSS();
@@ -261,6 +261,7 @@ export async function showCitationNetwork(
     hasMore: true,
     loading: false,
     sortBy: "citations",
+    hideInLibrary: false,
     existingDOIs,
     generation: 0,
     searchTimeout: null,
@@ -282,6 +283,12 @@ export async function showCitationNetwork(
 
   bindDialogEvents(state);
   updateDefaultCollectionLabel(state);
+
+  // Fill the source paper's own cited-by count in the header now that the
+  // OpenAlex work is loaded.
+  const citedStat = dialog.querySelector("#cg-source-cited-count .cg-stat-value");
+  if (citedStat) citedStat.textContent = (work.cited_by_count ?? 0).toLocaleString();
+
   await loadResults(state);
 
   const searchInput = dialog.querySelector(".cg-search-input") as HTMLInputElement;
@@ -292,40 +299,108 @@ export async function showCitationNetwork(
 // Dialog HTML shell
 // ────────────────────────────────────────────────────────
 
-export function buildDialogHTML(title: string): string {
+/**
+ * One-line source metadata for the dialog header: `Surname, Surname & Surname \u00B7
+ * Venue \u00B7 Year`. Authors use last names only; more than three collapse to
+ * "Surname et al.". Any missing part is dropped; returns "" when nothing is
+ * available. Filters to authors when Zotero can resolve the creator type \u2014
+ * the network browser is DOI-gated, so editors essentially never appear here.
+ */
+export function getItemSourceMetaLine(item: _ZoteroTypes.Item): string {
+  const parts: string[] = [];
+
+  let authorTypeID: number | undefined;
+  try {
+    const creatorTypes = (Zotero as { CreatorTypes?: { getID?: (name: string) => number } })
+      .CreatorTypes;
+    authorTypeID = creatorTypes?.getID?.("author");
+  } catch {
+    authorTypeID = undefined;
+  }
+  const creators = (item.getCreators?.() ?? []) as Array<{
+    creatorTypeID?: number;
+    lastName?: string;
+    name?: string;
+  }>;
+  const surnames = creators
+    .filter(
+      (c) => authorTypeID == null || c.creatorTypeID == null || c.creatorTypeID === authorTypeID,
+    )
+    .map((c) => (c.lastName || c.name || "").trim())
+    .filter(Boolean);
+
+  if (surnames.length === 1) {
+    parts.push(surnames[0]);
+  } else if (surnames.length === 2) {
+    parts.push(`${surnames[0]} & ${surnames[1]}`);
+  } else if (surnames.length === 3) {
+    parts.push(`${surnames[0]}, ${surnames[1]} & ${surnames[2]}`);
+  } else if (surnames.length > 3) {
+    parts.push(`${surnames[0]} et al.`);
+  }
+
+  const venue = (item.getField?.("publicationTitle") || "").trim();
+  if (venue) parts.push(venue);
+
+  const yearMatch = (item.getField?.("date") || "").match(/\d{4}/);
+  if (yearMatch) parts.push(yearMatch[0]);
+
+  return parts.join(" \u00B7 ");
+}
+
+export function buildDialogHTML(title: string, sourceMetaLine: string): string {
+  const sourceMeta = sourceMetaLine
+    ? `<div class="cg-source-authors" id="cg-source-meta">${escapeHTML(sourceMetaLine)}</div>`
+    : "";
   return `
-    <div class="cg-dialog-header">
+    <div class="cg-dialog-chrome">
       <button class="cg-close-btn" id="cg-btn-close" title="Close"
               aria-label="Close citation network browser">\u00D7</button>
+    </div>
+    <div class="cg-dialog-top">
       <div class="cg-header-text">
-        <div class="cg-dialog-title">Citation Network</div>
-        <div class="cg-dialog-subtitle">${escapeHTML(title)}</div>
+        <div class="cg-dialog-eyebrow">Citation Network</div>
+        <div class="cg-dialog-title" title="${escapeHTML(title)}">${escapeHTML(title)}</div>
+        ${sourceMeta}
+      </div>
+      <div class="cg-count-stack">
+        <div class="cg-stat" id="cg-source-cited-count">
+          <strong class="cg-stat-value">\u2026</strong>
+          <span class="cg-stat-label">Cited by</span>
+        </div>
       </div>
     </div>
-    <div class="cg-dialog-tabs" role="tablist" aria-label="Citation direction">
-      <div class="cg-tabs-inner">
+    <div class="cg-command-bar">
+      <div class="cg-tabs-inner" role="tablist" aria-label="Citation direction">
         <button class="cg-tab" data-mode="citing" role="tab" id="cg-tab-citing"
-                aria-selected="false" aria-controls="cg-dialog-body"
-                tabindex="-1">Cited By</button>
+                aria-selected="false" aria-controls="cg-dialog-body" tabindex="-1">Cited By</button>
         <button class="cg-tab" data-mode="references" role="tab" id="cg-tab-references"
-                aria-selected="false" aria-controls="cg-dialog-body"
-                tabindex="-1">References</button>
+                aria-selected="false" aria-controls="cg-dialog-body" tabindex="-1">References</button>
       </div>
-    </div>
-    <div class="cg-dialog-toolbar">
       <div class="cg-search-wrap">
-        <span class="cg-search-icon">\uD83D\uDD0D</span>
+        <span class="cg-search-icon" aria-hidden="true">\uD83D\uDD0D</span>
         <input type="text" class="cg-search-input"
                placeholder="Search titles, authors\u2026"
                aria-label="Filter results by title or author" />
       </div>
-      <select class="cg-sort-select" aria-label="Sort results by">
-        <option value="citations">Most cited</option>
-        <option value="fwci-desc">Highest FWCI</option>
-        <option value="percentile-desc">Top percentile</option>
-        <option value="year-desc">Newest</option>
-        <option value="year-asc">Oldest</option>
-      </select>
+      <div class="cg-control-cluster">
+        <button type="button" class="cg-hide-in-library" id="cg-hide-in-library"
+                role="switch" aria-checked="false"
+                aria-label="Hide works already in your library">
+          <span class="cg-switch" aria-hidden="true"></span>Hide in library
+        </button>
+        <label class="cg-sort-label">Sort:
+          <select class="cg-sort-select" aria-label="Sort results by">
+            <option value="citations">Most cited</option>
+            <option value="fwci-desc">Highest FWCI</option>
+            <option value="percentile-desc">Top percentile</option>
+            <option value="year-desc">Newest</option>
+            <option value="year-asc">Oldest</option>
+            <option value="author-asc">First author</option>
+            <option value="not-in-library">Not in library first</option>
+          </select>
+        </label>
+      </div>
     </div>
     <div class="cg-dialog-body" id="cg-dialog-body" role="tabpanel"
          aria-labelledby="cg-tab-citing" aria-live="polite" aria-busy="true">
@@ -474,7 +549,16 @@ export function bindDialogEvents(state: NetworkState): void {
   // Sort
   const sortSelect = dialog.querySelector(".cg-sort-select") as HTMLSelectElement;
   sortSelect?.addEventListener("change", () => {
-    state.sortBy = sortSelect.value;
+    state.sortBy = sortSelect.value as NetworkSortKey;
+    renderResults(state, searchInput?.value || "");
+  });
+
+  // Hide-in-library filter toggle
+  const hideToggle = dialog.querySelector("#cg-hide-in-library") as HTMLButtonElement | null;
+  hideToggle?.addEventListener("click", () => {
+    state.hideInLibrary = !state.hideInLibrary;
+    hideToggle.setAttribute("aria-checked", state.hideInLibrary ? "true" : "false");
+    hideToggle.classList.toggle("cg-switch-on", state.hideInLibrary);
     renderResults(state, searchInput?.value || "");
   });
 

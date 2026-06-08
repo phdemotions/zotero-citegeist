@@ -49,42 +49,71 @@ export function getDialogCSS(): string {
     }
     #citegeist-network-dialog * { box-sizing: border-box; }
 
-    /* ── Header ── */
-    .cg-dialog-header {
-      display: flex; align-items: center; gap: 10px;
-      padding: 12px 14px;
-      border-bottom: 1px solid var(--cg-sage-tint-15);
+    /* ── Chrome (close bar) ── */
+    .cg-dialog-chrome {
+      display: flex; align-items: center;
+      padding: 5px 14px;
+      background: var(--cg-sage-tint-04);
+      border-bottom: 1px solid var(--cg-sage-tint-08);
       flex-shrink: 0;
     }
     .cg-close-btn {
-      width: 24px; height: 24px; border-radius: 6px;
+      width: 22px; height: 22px; border-radius: 6px;
       border: none; background: var(--cg-red-bg); color: var(--cg-red-fg);
-      font-size: 15px; line-height: 1; cursor: pointer;
+      font-size: 14px; line-height: 1; cursor: pointer;
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0; padding: 0;
       transition: background 0.12s, color 0.12s;
     }
     .cg-close-btn:hover { background: var(--cg-red-bg-hover); color: var(--cg-red-fg-hover); }
     .cg-close-btn:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 1px; }
-    .cg-header-text { flex: 1; min-width: 0; }
-    .cg-dialog-title {
-      font-size: 11px; font-weight: 500; color: var(--cg-text-secondary);
-      font-style: italic; letter-spacing: 0;
+
+    /* ── Top band: source title, metadata, cited-by stat ── */
+    .cg-dialog-top {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center; gap: 14px;
+      padding: 13px 14px 11px;
+      border-bottom: 1px solid var(--cg-sage-tint-12);
+      flex-shrink: 0;
+    }
+    .cg-header-text { min-width: 0; }
+    .cg-dialog-eyebrow {
+      font-size: 11px; font-weight: 600; color: var(--cg-text-tertiary);
+      text-transform: uppercase; letter-spacing: 0.06em;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
-    .cg-dialog-subtitle {
-      font-size: 13px; font-weight: 600; color: var(--cg-text-primary);
-      margin-top: 1px;
+    .cg-dialog-title {
+      font-size: 13px; font-weight: 650; color: var(--cg-text-primary);
+      margin-top: 2px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
+    .cg-source-authors {
+      font-size: 11px; color: var(--cg-text-tertiary); margin-top: 3px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    .cg-count-stack { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+    .cg-stat {
+      min-width: 72px; text-align: right;
+      border: 1px solid var(--cg-sage-tint-15);
+      border-radius: 7px; padding: 6px 9px;
+      background: var(--cg-sage-tint-06);
+    }
+    .cg-stat-value {
+      display: block; font-size: 14px; line-height: 1; color: var(--cg-text-primary);
+      font-variant-numeric: tabular-nums;
+    }
+    .cg-stat-label { font-size: 10px; color: var(--cg-text-tertiary); }
 
-    /* ── Tabs ── */
-    .cg-dialog-tabs {
-      display: flex; gap: 1px; padding: 8px 14px;
-      flex-shrink: 0;
+    /* ── Command bar: mode + search + filter + sort ── */
+    .cg-command-bar {
+      display: grid; grid-template-columns: auto minmax(160px, 1fr) auto;
+      align-items: center; gap: 8px;
+      padding: 9px 14px;
       background: var(--cg-sage-tint-04);
       border-bottom: 1px solid var(--cg-sage-tint-10);
+      flex-shrink: 0;
     }
     .cg-tabs-inner {
       display: flex; gap: 1px;
@@ -92,30 +121,22 @@ export function getDialogCSS(): string {
       border-radius: 7px; padding: 2px;
     }
     .cg-tab {
-      padding: 7px 16px; font-size: 11px; font-weight: 500; min-height: 24px;
+      padding: 7px 14px; font-size: 11px; font-weight: 600; min-height: 28px;
       cursor: pointer; border: none; background: transparent;
       color: var(--cg-text-secondary); border-radius: 5px;
       transition: background 0.15s, color 0.15s;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
-    .cg-tab.active { background: var(--cg-sage-tint-16); color: var(--cg-text-primary); font-weight: 600; }
+    .cg-tab.active { background: var(--cg-sage-tint-16); color: var(--cg-text-primary); }
     .cg-tab:hover:not(.active) { color: var(--cg-text-hover); }
     .cg-tab:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 1px; }
-
-    /* ── Toolbar ── */
-    .cg-dialog-toolbar {
-      display: flex; align-items: center; gap: 8px;
-      padding: 8px 14px;
-      border-bottom: 1px solid var(--cg-sage-tint-10);
-      flex-shrink: 0;
-    }
-    .cg-search-wrap { flex: 1; position: relative; }
+    .cg-search-wrap { position: relative; min-width: 0; }
     .cg-search-icon {
-      position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+      position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
       color: var(--cg-text-quaternary); font-size: 12px; pointer-events: none;
     }
     .cg-search-input {
-      width: 100%; padding: 6px 10px 6px 28px;
+      width: 100%; padding: 7px 10px 7px 30px;
       border: 1px solid var(--cg-sage-tint-15);
       border-radius: 7px; font-size: 12px;
       background: var(--cg-sage-tint-06); color: var(--cg-text-primary); outline: none;
@@ -128,6 +149,41 @@ export function getDialogCSS(): string {
       background: var(--cg-sage-tint-08);
     }
     .cg-search-input::placeholder { color: var(--cg-text-quaternary); }
+    .cg-control-cluster { display: flex; align-items: center; gap: 6px; }
+    .cg-hide-in-library {
+      display: inline-flex; align-items: center; gap: 7px;
+      min-height: 32px; padding: 7px 9px;
+      border: 1px solid var(--cg-sage-tint-15); border-radius: 7px;
+      background: var(--cg-sage-tint-06); color: var(--cg-text-secondary);
+      font-size: 11px; font-weight: 600; cursor: pointer; white-space: nowrap;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    .cg-hide-in-library:hover { color: var(--cg-text-hover); }
+    .cg-hide-in-library:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 1px; }
+    .cg-hide-in-library.cg-switch-on {
+      color: var(--cg-text-primary); border-color: rgba(143,173,159,0.4);
+      background: var(--cg-sage-tint-16);
+    }
+    .cg-switch {
+      position: relative; width: 25px; height: 14px; border-radius: 999px;
+      background: var(--cg-sage-tint-22); flex-shrink: 0;
+      transition: background 0.12s;
+    }
+    .cg-switch::after {
+      content: ""; position: absolute; top: 2px; left: 2px;
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--cg-text-quaternary); transition: transform 0.12s, background 0.12s;
+    }
+    .cg-hide-in-library.cg-switch-on .cg-switch { background: var(--cg-sage-accent-tint-25); }
+    .cg-hide-in-library.cg-switch-on .cg-switch::after {
+      transform: translateX(11px); background: var(--cg-sage-accent);
+    }
+    .cg-sort-label {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; color: var(--cg-text-tertiary); white-space: nowrap;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
     .cg-sort-select {
       padding: 6px 8px; border: 1px solid var(--cg-sage-tint-15);
       border-radius: 7px; font-size: 11px;
@@ -135,6 +191,10 @@ export function getDialogCSS(): string {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
     .cg-sort-select:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 1px; }
+    @media (max-width: 600px) {
+      .cg-dialog-top, .cg-command-bar { grid-template-columns: 1fr; }
+      .cg-count-stack, .cg-control-cluster, .cg-tabs-inner { width: 100%; }
+    }
 
     /* ── Results body ── */
     .cg-dialog-body { flex: 1; overflow-y: auto; padding: 0; min-height: 300px; }

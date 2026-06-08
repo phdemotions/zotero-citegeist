@@ -12,6 +12,21 @@ export { MAX_RENDERED_RESULTS, UNDO_TIMEOUT_MS } from "../../constants";
 /** Explicit lifecycle state so guards against closed-mid-load are obvious. */
 export type DialogPhase = "loading-skeleton" | "loading-data" | "ready" | "closed";
 
+/**
+ * Sort modes for the citation network results. `citations`, `fwci-desc`,
+ * `percentile-desc`, `year-desc`, and `year-asc` rank by a metric; `author-asc`
+ * orders by first-author surname; `not-in-library` floats works you haven't
+ * added yet to the top so new discoveries are easy to spot.
+ */
+export type NetworkSortKey =
+  | "citations"
+  | "fwci-desc"
+  | "percentile-desc"
+  | "year-desc"
+  | "year-asc"
+  | "author-asc"
+  | "not-in-library";
+
 /** Common surname prefixes that belong with the last name, not the first. */
 export const SURNAME_PREFIXES = new Set([
   "van",
@@ -55,7 +70,9 @@ export interface NetworkState {
   cursor: string;
   hasMore: boolean;
   loading: boolean;
-  sortBy: string;
+  sortBy: NetworkSortKey;
+  /** When true, results already in the user's library are hidden. */
+  hideInLibrary: boolean;
   existingDOIs: Set<string>;
   /** Incremented on tab switch to invalidate in-flight requests */
   generation: number;
