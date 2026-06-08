@@ -212,15 +212,35 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     }
   }
 
-  // Wrap each register in try/catch so a single duplicate doesn't
-  // poison the rest of the sequence — without this, the first column
-  // collision aborted the whole `await` chain and the 8 remaining
-  // columns silently never registered.
+  // Track the dataKeys registered this pass so a later failure can roll
+  // them back. Zotero stores columns under the namespaced key, so rollback
+  // (like the defensive unregister above) must use namespacedColumnKey —
+  // the bare key silently no-ops.
+  const registeredKeys: string[] = [];
+
+  // Fail closed on any registration error: roll back the columns we already
+  // wired (plus best-effort the one that just failed), reset state so a
+  // retry starts clean, and rethrow so the caller (hooks.onStartup) can tear
+  // down the cache and alert. The pre-registration unregister loop above
+  // already clears stale columns, so a genuine throw here means the item
+  // tree can't be wired correctly — better to surface it than to leave half
+  // the columns dead with no dataProvider.
   const safeRegister = async (options: _ZoteroTypes.RegisterColumnOptions) => {
     try {
       await Zotero.ItemTreeManager.registerColumn(options);
+      registeredKeys.push(options.dataKey);
     } catch (e) {
       logError("registerColumn", e);
+      for (const key of [...registeredKeys, options.dataKey]) {
+        try {
+          await Zotero.ItemTreeManager.unregisterColumn(namespacedColumnKey(pluginID, key));
+        } catch {
+          // best-effort cleanup
+        }
+      }
+      registered = false;
+      registeredPluginID = null;
+      throw e;
     }
   };
 

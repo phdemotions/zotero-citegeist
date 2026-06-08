@@ -9,7 +9,7 @@ import { registerMenus, unregisterMenus } from "./modules/menu";
 import { clearSourceStatsCache } from "./modules/openalex";
 import { initCache, closeCache, migrateFromExtraV1, garbageCollectOrphans } from "./modules/cache";
 import { logError } from "./modules/utils";
-import { PREF_LAST_BACKUP_PATH, PREF_MIGRATION_COMPLETE } from "./constants";
+import { PREF_LAST_BACKUP_PATH } from "./constants";
 
 const FTL_LINK_ID = "citegeist-ftl-link";
 
@@ -22,26 +22,28 @@ interface PluginData {
 
 let pluginID: string;
 let rootURI: string;
+// True only after the cache initialized AND all cache-dependent UI registered
+// successfully. Gates onMainWindowLoad so menus never wire up against a dead
+// cache (and a minimal/late window can't crash startup).
+let cacheReady = false;
 
 export async function onStartup(data: PluginData): Promise<void> {
   pluginID = data.id;
   rootURI = data.rootURI;
+  cacheReady = false;
   Zotero.debug(`[Citegeist] Starting v${data.version}`);
 
   // Initialize the plugin-owned SQLite cache and warm the in-memory mirror
   // BEFORE any reader (pane, column) registers. Column dataProvider is
   // synchronous and assumes the mirror is populated.
   let cacheInitFailed = false;
-  // Runtime-guard the cast: prefs.js can be corrupted with mismatched types
-  // (e.g. a string `"true"` if a prior plugin version wrote it wrong) and
-  // truthy-checking a string `"false"` would silently suppress the first-run
-  // migration alert.
-  const wasMigratedBeforeRaw = Zotero.Prefs.get(PREF_MIGRATION_COMPLETE);
-  const wasMigratedBefore =
-    typeof wasMigratedBeforeRaw === "boolean" ? wasMigratedBeforeRaw : undefined;
+  // Whether this launch actually migrated v1.x data out of Extra. Drives the
+  // one-time migration alert below — read from the return value rather than
+  // re-reading the completion pref, which can be stale or wrong-typed.
+  let didMigrate = false;
   try {
     await initCache();
-    await migrateFromExtraV1();
+    didMigrate = await migrateFromExtraV1();
     // Best-effort GC of orphan rows from prior installs / library snapshots.
     // Failure here must not block startup.
     await garbageCollectOrphans().catch((e) => logError("orphan GC", e));
@@ -60,7 +62,7 @@ export async function onStartup(data: PluginData): Promise<void> {
         "If the problem persists, check that <profile>/citegeist.sqlite is " +
         "not locked or quarantined by antivirus.",
     );
-  } else if (!wasMigratedBefore && Zotero.Prefs.get(PREF_MIGRATION_COMPLETE)) {
+  } else if (didMigrate) {
     // First successful migration of this profile. Surface a one-time
     // alert pointing to the safety-net backup file so users know exactly
     // where to find a verbatim copy of every pre-migration Extra field
@@ -86,7 +88,8 @@ export async function onStartup(data: PluginData): Promise<void> {
     );
   }
 
-  // Register preference pane so users can access settings
+  // Register preference pane so users can access settings. This is the only
+  // cache-independent UI, so it registers even when the cache failed.
   Zotero.PreferencePanes.register({
     pluginID,
     src: rootURI + "content/preferences.xhtml",
@@ -94,20 +97,52 @@ export async function onStartup(data: PluginData): Promise<void> {
     image: "chrome://citegeist/content/icons/icon-16.svg",
   });
 
-  // Register the citation count column (global, not per-window)
-  await registerCitationColumn(pluginID);
-
-  // Register the item pane section
-  registerCitationPane(pluginID);
-
-  // If the main window is already open, register menus now.
-  // onMainWindowLoad may not fire for windows that were open before startup.
-  const mainWin = Zotero.getMainWindow();
-  if (mainWin) {
-    Zotero.debug("[Citegeist] Main window already open at startup — registering menus");
-    registerMenus(mainWin);
+  // Fail closed: with no cache, the synchronous column dataProvider and the
+  // pane would surface broken/empty data. Register nothing cache-dependent —
+  // the user already saw the "cache unavailable" alert above.
+  if (cacheInitFailed) {
+    Zotero.debug("[Citegeist] Cache init failed — skipping cache-dependent UI registration");
+    return;
   }
 
+  // Register the cache-dependent runtime UI. If Zotero rejects any of these
+  // registrations, fail closed: tear down what we opened (columns + cache) so
+  // we don't leave half-wired UI against a live cache, and tell the user.
+  // registerCitationColumn rolls back its own partial columns and rethrows.
+  try {
+    // Register the citation count column (global, not per-window)
+    await registerCitationColumn(pluginID);
+
+    // Register the item pane section
+    registerCitationPane(pluginID);
+
+    // If the main window is already open, register menus now.
+    // onMainWindowLoad may not fire for windows that were open before startup.
+    const mainWin = Zotero.getMainWindow();
+    if (mainWin) {
+      Zotero.debug("[Citegeist] Main window already open at startup — registering menus");
+      registerMenus(mainWin);
+    }
+  } catch (e) {
+    logError("UI registration", e);
+    try {
+      unregisterCitationColumn();
+    } catch (cleanupErr) {
+      logError("UI registration cleanup (column)", cleanupErr);
+    }
+    await closeCache().catch((closeErr) => logError("UI registration cleanup (cache)", closeErr));
+    showStartupAlert(
+      "Citegeist: UI unavailable",
+      "Zotero rejected one of the UI registrations Citegeist needs (the citation " +
+        "columns or the item pane). Citegeist has shut its cache to avoid leaving " +
+        "things half-configured. Please restart Zotero; if this keeps happening, " +
+        "report it on the Citegeist GitHub repo.",
+    );
+    return;
+  }
+
+  // Everything wired: the in-memory mirror is live and the UI is registered.
+  cacheReady = true;
   Zotero.debug("[Citegeist] Startup complete");
 }
 
@@ -129,12 +164,31 @@ function showStartupAlert(title: string, body: string): void {
 
 export async function onShutdown(_data: PluginData): Promise<void> {
   Zotero.debug("[Citegeist] Shutting down");
+  cacheReady = false;
 
   const win = Zotero.getMainWindow() as Window | null;
-  if (win) unregisterMenus(win);
-  unregisterCitationColumn();
-  unregisterCitationPane();
-  clearSourceStatsCache();
+  // Each UI-teardown step is best-effort: a throw in any one of them must not
+  // strand the open SQLite handle. closeCache() runs unconditionally last.
+  try {
+    if (win) unregisterMenus(win);
+  } catch (e) {
+    logError("shutdown unregisterMenus", e);
+  }
+  try {
+    unregisterCitationColumn();
+  } catch (e) {
+    logError("shutdown unregisterCitationColumn", e);
+  }
+  try {
+    unregisterCitationPane();
+  } catch (e) {
+    logError("shutdown unregisterCitationPane", e);
+  }
+  try {
+    clearSourceStatsCache();
+  } catch (e) {
+    logError("shutdown clearSourceStatsCache", e);
+  }
   await closeCache().catch((e) => logError("cache close", e));
 
   Zotero.debug("[Citegeist] Shutdown complete");
@@ -142,6 +196,14 @@ export async function onShutdown(_data: PluginData): Promise<void> {
 
 export function onMainWindowLoad(win: Window): void {
   Zotero.debug("[Citegeist] Main window loaded");
+
+  // Don't wire menus (or touch the window) until the cache is ready. Avoids
+  // registering cache-dependent UI against a dead cache, and avoids crashing
+  // on a minimal/early window object before startup finished.
+  if (!cacheReady) {
+    Zotero.debug("[Citegeist] Cache not ready — skipping menu registration on window load");
+    return;
+  }
 
   // Register FTL locale file with the document's Fluent system
   // so l10nIDs (pane header, sidenav, etc.) resolve properly

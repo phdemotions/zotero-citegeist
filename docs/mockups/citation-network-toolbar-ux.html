@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Citegeist Citation Network Toolbar UX Mockup</title>
+    <style>
+      :root {
+        --bg: #eef3ef;
+        --paper: #fbfdfb;
+        --ink: #17201b;
+        --muted: #66746d;
+        --line: #d7e1db;
+        --slate: #141d18;
+        --slate-2: #1b2922;
+        --slate-3: #24362d;
+        --text: #e7eee9;
+        --text-2: #bfcbc5;
+        --text-3: #819089;
+        --sage: #8fad9f;
+        --sage-2: #b6c9bd;
+        --amber: #d8ad67;
+        --red: #ff6961;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+
+      .page {
+        width: min(1240px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0 44px;
+      }
+
+      .brief {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+        gap: 24px;
+        align-items: end;
+        margin-bottom: 22px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: clamp(26px, 4vw, 44px);
+        line-height: 1;
+        letter-spacing: 0;
+      }
+
+      .lead {
+        margin: 0;
+        max-width: 760px;
+        color: var(--muted);
+        font-size: 15px;
+        line-height: 1.55;
+      }
+
+      .decision {
+        border-left: 3px solid var(--sage);
+        padding: 10px 0 10px 14px;
+        color: #314139;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+        align-items: start;
+      }
+
+      .mockup-label {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        margin: 0 0 8px;
+        gap: 12px;
+      }
+
+      .mockup-label h2 {
+        margin: 0;
+        font-size: 15px;
+        letter-spacing: 0;
+      }
+
+      .mockup-label span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .dialog {
+        overflow: hidden;
+        min-height: 620px;
+        border: 1px solid rgba(20, 29, 24, 0.18);
+        border-radius: 8px;
+        background: var(--slate);
+        color: var(--text);
+        box-shadow: 0 18px 36px rgba(20, 29, 24, 0.18);
+      }
+
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(143, 173, 159, 0.15);
+      }
+
+      .close {
+        width: 24px;
+        height: 24px;
+        border: 0;
+        border-radius: 6px;
+        background: rgba(255, 105, 97, 0.13);
+        color: var(--red);
+        font-size: 15px;
+      }
+
+      .title-stack {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .eyebrow {
+        color: var(--text-3);
+        font-size: 11px;
+        font-style: italic;
+      }
+
+      .title {
+        margin-top: 1px;
+        overflow: hidden;
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .source-authors {
+        margin-top: 3px;
+        overflow: hidden;
+        color: var(--text-3);
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .current-tabs {
+        display: flex;
+        padding: 8px 14px;
+        border-bottom: 1px solid rgba(143, 173, 159, 0.1);
+        background: rgba(56, 104, 87, 0.04);
+      }
+
+      .seg {
+        display: inline-flex;
+        gap: 1px;
+        padding: 2px;
+        border-radius: 7px;
+        background: rgba(56, 104, 87, 0.08);
+      }
+
+      .seg button {
+        min-height: 28px;
+        border: 0;
+        border-radius: 5px;
+        padding: 7px 14px;
+        background: transparent;
+        color: var(--text-3);
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .seg button.active {
+        background: rgba(56, 104, 87, 0.18);
+        color: var(--text);
+      }
+
+      .current-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        border-bottom: 1px solid rgba(143, 173, 159, 0.1);
+      }
+
+      .search,
+      .select,
+      .ghost-input {
+        min-height: 31px;
+        border: 1px solid rgba(143, 173, 159, 0.15);
+        border-radius: 7px;
+        background: rgba(56, 104, 87, 0.07);
+        color: var(--text-2);
+        font-size: 12px;
+      }
+
+      .search {
+        flex: 1 1 220px;
+        padding: 7px 10px;
+      }
+
+      .select {
+        padding: 6px 8px;
+      }
+
+      .check {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--text-2);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      .proposed-chrome {
+        display: flex;
+        align-items: center;
+        padding: 5px 14px;
+        border-bottom: 1px solid rgba(143, 173, 159, 0.08);
+        background: rgba(10, 18, 14, 0.08);
+      }
+
+      .proposed-chrome .close {
+        width: 22px;
+        height: 22px;
+        background: rgba(255, 105, 97, 0.1);
+        font-size: 14px;
+      }
+
+      .proposed-top {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 14px;
+        padding: 13px 14px 11px;
+        border-bottom: 1px solid rgba(143, 173, 159, 0.12);
+      }
+
+      .proposed-title {
+        min-width: 0;
+      }
+
+      .proposed-title .eyebrow {
+        font-style: normal;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .count-stack {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
+      }
+
+      .stat {
+        min-width: 72px;
+        border: 1px solid rgba(143, 173, 159, 0.14);
+        border-radius: 7px;
+        padding: 6px 9px;
+        background: rgba(143, 173, 159, 0.06);
+        text-align: right;
+      }
+
+      .stat strong {
+        display: block;
+        font-size: 14px;
+        line-height: 1;
+      }
+
+      .stat span {
+        color: var(--text-3);
+        font-size: 10px;
+      }
+
+      .command {
+        display: grid;
+        grid-template-columns: auto minmax(180px, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        padding: 9px 14px;
+        border-bottom: 1px solid rgba(143, 173, 159, 0.1);
+        background: rgba(56, 104, 87, 0.04);
+      }
+
+      .mode-pill {
+        display: inline-flex;
+        gap: 1px;
+        padding: 2px;
+        border: 1px solid rgba(143, 173, 159, 0.12);
+        border-radius: 8px;
+        background: rgba(10, 18, 14, 0.18);
+      }
+
+      .mode-pill button {
+        min-height: 30px;
+        border: 0;
+        border-radius: 6px;
+        padding: 7px 11px;
+        background: transparent;
+        color: var(--text-3);
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .mode-pill button.active {
+        background: rgba(143, 173, 159, 0.16);
+        color: var(--text);
+      }
+
+      .search-field {
+        position: relative;
+      }
+
+      .search-field input {
+        width: 100%;
+        min-height: 32px;
+        border: 1px solid rgba(143, 173, 159, 0.16);
+        border-radius: 7px;
+        background: rgba(10, 18, 14, 0.2);
+        color: var(--text);
+        padding: 7px 10px 7px 30px;
+        font-size: 12px;
+      }
+
+      .search-field span {
+        position: absolute;
+        left: 10px;
+        top: 50%;
+        color: var(--text-3);
+        font-size: 12px;
+        transform: translateY(-50%);
+      }
+
+      .control-cluster {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .control {
+        min-height: 32px;
+        border: 1px solid rgba(143, 173, 159, 0.16);
+        border-radius: 7px;
+        background: rgba(10, 18, 14, 0.2);
+        color: var(--text-2);
+        padding: 7px 9px;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      .toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 32px;
+        border: 1px solid rgba(143, 173, 159, 0.2);
+        border-radius: 7px;
+        background: rgba(143, 173, 159, 0.08);
+        color: var(--sage-2);
+        padding: 7px 9px;
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .switch {
+        position: relative;
+        width: 25px;
+        height: 14px;
+        border-radius: 999px;
+        background: rgba(143, 173, 159, 0.32);
+      }
+
+      .switch::after {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--sage);
+        content: "";
+      }
+
+      .results {
+        padding: 0;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 112px;
+        gap: 10px;
+        padding: 13px 14px;
+        border-bottom: 1px solid rgba(143, 173, 159, 0.1);
+      }
+
+      .row h3 {
+        margin: 0 0 4px;
+        color: var(--text);
+        font-size: 13px;
+        line-height: 1.35;
+      }
+
+      .meta {
+        color: var(--text-3);
+        font-size: 11px;
+      }
+
+      .badges {
+        display: flex;
+        gap: 5px;
+        margin-top: 6px;
+      }
+
+      .badge {
+        border-radius: 4px;
+        background: rgba(143, 173, 159, 0.12);
+        color: var(--sage);
+        padding: 2px 6px;
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      .badge.muted {
+        background: rgba(56, 104, 87, 0.08);
+        color: var(--text-3);
+      }
+
+      .right {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 7px;
+      }
+
+      .count {
+        color: var(--sage);
+        font-size: 16px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .add {
+        border: 1px solid rgba(143, 173, 159, 0.25);
+        border-radius: 7px;
+        background: rgba(143, 173, 159, 0.13);
+        color: var(--sage);
+        padding: 6px 10px;
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .split-add {
+        display: inline-flex;
+      }
+
+      .split-add .add {
+        border-radius: 7px 0 0 7px;
+      }
+
+      .add-caret {
+        min-width: 28px;
+        border: 1px solid rgba(143, 173, 159, 0.25);
+        border-left: 0;
+        border-radius: 0 7px 7px 0;
+        background: rgba(143, 173, 159, 0.1);
+        color: var(--sage);
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      .notes {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        margin-top: 16px;
+      }
+
+      .note {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper);
+        padding: 14px;
+      }
+
+      .note h3 {
+        margin: 0 0 6px;
+        font-size: 13px;
+      }
+
+      .note p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      @media (max-width: 980px) {
+        .brief,
+        .grid,
+        .notes {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .page {
+          width: min(100vw - 18px, 1240px);
+          padding-top: 14px;
+        }
+
+        .dialog {
+          min-height: auto;
+        }
+
+        .proposed-top,
+        .command {
+          grid-template-columns: 1fr;
+        }
+
+        .count-stack,
+        .control-cluster,
+        .mode-pill {
+          width: 100%;
+        }
+
+        .control,
+        .toggle,
+        .mode-pill button {
+          flex: 1;
+          justify-content: center;
+          text-align: center;
+        }
+
+        .row {
+          grid-template-columns: 1fr;
+        }
+
+        .right {
+          align-items: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="brief">
+        <div>
+          <h1>Citation Network toolbar refinement</h1>
+          <p class="lead">
+            The goal is a calmer discovery command bar: mode, search, sort, and filters should feel
+            like one research workflow rather than separate controls stacked at the top of the
+            dialog.
+          </p>
+        </div>
+        <div class="decision">
+          Recommended direction: make search the primary action, combine result mode and counts into
+          the command surface, and promote "Hide in library" to a proper filter control.
+        </div>
+      </section>
+
+      <section class="grid" aria-label="Toolbar mockups">
+        <div>
+          <div class="mockup-label">
+            <h2>Current direction</h2>
+            <span>Functional, but crowded</span>
+          </div>
+          <div class="dialog">
+            <div class="header">
+              <button class="close" aria-label="Close">×</button>
+              <div class="title-stack">
+                <div class="eyebrow">Citation Network</div>
+                <div class="title">Consumer responses to brand love and relational signals</div>
+              </div>
+            </div>
+            <div class="current-tabs">
+              <div class="seg">
+                <button class="active">Cited By</button>
+                <button>References</button>
+              </div>
+            </div>
+            <div class="current-toolbar">
+              <input class="search" value="" placeholder="Search titles, authors..." />
+              <select class="select" aria-label="Sort results">
+                <option>Most cited</option>
+              </select>
+              <label class="check"><input type="checkbox" /> Hide in library</label>
+            </div>
+            <div class="results">
+              <article class="row">
+                <div>
+                  <h3>Brand attachment and consumer relationships in digital markets</h3>
+                  <div class="meta">Thomson, Kapoor & Lee · Journal of Marketing · 2024</div>
+                  <div class="badges">
+                    <span class="badge">Open Access</span>
+                  </div>
+                </div>
+                <div class="right">
+                  <div class="count">428</div>
+                  <button class="add">+ Add</button>
+                </div>
+              </article>
+              <article class="row">
+                <div>
+                  <h3>Customer devotion, symbolic brands, and loyalty outcomes</h3>
+                  <div class="meta">Alvarez & Singh · Psychology & Marketing · 2022</div>
+                  <div class="badges">
+                    <span class="badge muted">In Library</span>
+                  </div>
+                </div>
+                <div class="right">
+                  <div class="count">193</div>
+                  <button class="add">File</button>
+                </div>
+              </article>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="mockup-label">
+            <h2>Proposed top UX</h2>
+            <span>One command surface</span>
+          </div>
+          <div class="dialog">
+            <div class="proposed-chrome">
+              <button class="close" aria-label="Close">×</button>
+            </div>
+            <div class="proposed-top">
+              <div class="proposed-title">
+                <div class="eyebrow">Citation Network</div>
+                <div class="title">Consumer responses to brand love and relational signals</div>
+                <div class="source-authors">
+                  Batra, Ahuvia &amp; Bagozzi · Journal of Marketing · 2012
+                </div>
+              </div>
+              <div class="count-stack">
+                <div class="stat"><strong>1,284</strong><span>Cited by</span></div>
+                <div class="stat"><strong>62</strong><span>References</span></div>
+              </div>
+            </div>
+            <div class="command">
+              <div class="mode-pill">
+                <button class="active">Cited by</button>
+                <button>References</button>
+              </div>
+              <label class="search-field">
+                <span>⌕</span>
+                <input value="" placeholder="Search titles or authors" />
+              </label>
+              <div class="control-cluster">
+                <button class="toggle"><span class="switch"></span> Hide in library</button>
+                <button class="control">Sort: Most cited</button>
+              </div>
+            </div>
+            <div class="results">
+              <article class="row">
+                <div>
+                  <h3>Brand attachment and consumer relationships in digital markets</h3>
+                  <div class="meta">Thomson, Kapoor & Lee · Journal of Marketing · 2024</div>
+                  <div class="badges">
+                    <span class="badge">Open Access</span>
+                  </div>
+                </div>
+                <div class="right">
+                  <div class="count">428</div>
+                  <div class="split-add">
+                    <button class="add">+ Add</button>
+                    <button class="add-caret" aria-label="Choose folder">▾</button>
+                  </div>
+                </div>
+              </article>
+              <article class="row">
+                <div>
+                  <h3>Customer devotion, symbolic brands, and loyalty outcomes</h3>
+                  <div class="meta">Alvarez & Singh · Psychology & Marketing · 2022</div>
+                </div>
+                <div class="right">
+                  <div class="count">193</div>
+                  <div class="split-add">
+                    <button class="add">+ Add</button>
+                    <button class="add-caret" aria-label="Choose folder">▾</button>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="notes" aria-label="Design decisions">
+        <article class="note">
+          <h3>What is happening now</h3>
+          <p>
+            The top area has three separate bands. Each new control adds visual weight, so the
+            toolbar becomes harder to scan as discovery filters grow.
+          </p>
+        </article>
+        <article class="note">
+          <h3>What should change</h3>
+          <p>
+            Treat the top as a command bar: mode first, search second, sort/filter third, with only
+            the controls needed for the current workflow.
+          </p>
+        </article>
+        <article class="note">
+          <h3>What to defer</h3>
+          <p>
+            Additional discovery filters need their own design pass; they should not be squeezed
+            into this top bar.
+          </p>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

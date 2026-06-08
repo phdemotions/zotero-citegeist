@@ -7,7 +7,7 @@ import globals from "globals";
 export default [
   // Global ignores
   {
-    ignores: ["build/**", "node_modules/**", "scripts/**", "addon/**"],
+    ignores: ["build/**", "node_modules/**", "scripts/**", "addon/**", ".claude/**"],
   },
 
   // Base JS recommendations (non-TS files only)

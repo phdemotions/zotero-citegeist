@@ -20,9 +20,8 @@ const mocks = vi.hoisted(() => ({
       errors: 0,
     }),
   ),
-  extractIdentifier: vi.fn(
-    (item: { hasIdentifier?: boolean }) =>
-      item.hasIdentifier !== false ? { type: "doi", value: "10.1/test" } : null,
+  extractIdentifier: vi.fn((item: { hasIdentifier?: boolean }) =>
+    item.hasIdentifier !== false ? { type: "doi", value: "10.1/test" } : null,
   ),
   invalidateColumnCache: vi.fn(),
 }));
@@ -110,13 +109,13 @@ describe("library root (getSelectedCollection returns null)", () => {
   it("calls Items.getAll with the libraryID from getSelectedLibraryID", async () => {
     getSelectedLibraryID.mockReturnValue(42);
     await triggerFetchAll();
-    expect((Zotero.Items.getAll as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(42, false);
+    expect(Zotero.Items.getAll as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(42, false);
   });
 
   it("falls back to Libraries.userLibraryID when getSelectedLibraryID returns 0", async () => {
     getSelectedLibraryID.mockReturnValue(0);
     await triggerFetchAll();
-    expect((Zotero.Items.getAll as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+    expect(Zotero.Items.getAll as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       USER_LIBRARY_ID,
       false,
     );
@@ -129,7 +128,7 @@ describe("library root (getSelectedCollection returns null)", () => {
       // no getSelectedLibraryID
     });
     await triggerFetchAll();
-    expect((Zotero.Items.getAll as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+    expect(Zotero.Items.getAll as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       USER_LIBRARY_ID,
       false,
     );
@@ -195,7 +194,7 @@ describe("collection selected (getSelectedCollection returns a collection)", () 
     const item = makeItem(5);
     selectedCollection = makeCollection([item]);
     await triggerFetchAll();
-    expect((Zotero.Items.getAll as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    expect(Zotero.Items.getAll as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
     expect(mocks.fetchAndCacheItems).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ id: 5 })]),
       expect.any(Function),

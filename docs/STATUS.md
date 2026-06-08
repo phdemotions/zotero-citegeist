@@ -1,7 +1,7 @@
 # Citegeist — Status
 
-> **Last Updated:** 2026-06-02
-> **Phase:** v2.0.0 release candidate — Iters G–Z applied across cache + UX layers, awaiting 24h personal Zotero test on `feat/sqlite-cache-migration`
+> **Last Updated:** 2026-06-07
+> **Phase:** v2.0.0 — WIP test suite resolved (294 tests green, lint clean); shipping
 > **Build:** Clean
 
 ---
@@ -10,8 +10,8 @@
 
 | Attribute        | Value                                                                          |
 | ---------------- | ------------------------------------------------------------------------------ |
-| **Version**      | 2.0.0 (unreleased — PR #30)                                                    |
-| **Build Status** | Clean (234 tests passing, typecheck clean, XPI 79.0 KB)                        |
+| **Version**      | 2.0.0 (shipping — PR #30)                                                      |
+| **Build Status** | Clean (294 tests passing, typecheck clean, lint clean, XPI 87.6 KB)           |
 | **Open Issues**  | P0: 0, P1: 0, P2: 0, P3: 0, P4: 0 (Iter Z reviewer declared P4-clean)         |
 | **Stack**        | TypeScript, esbuild, vitest 4.1, Zotero 7.0.10+ bootstrap API, SQLite, Node 22 |
 | **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                          |
@@ -25,7 +25,8 @@
 - **Iters G–Z applied** (~16 review iterations, ~80 findings across correctness, security, performance, maintainability, data integrity, frontend races, TS hygiene, reliability, simplicity, adversarial, patterns, project standards, julik races, agent-native, scope guardian, code simplicity).
 - **UX layer hardened to Apple Design Award bar:** per-item refresh guards, double-click disable, atomic dismiss, generation tokens against UI/data races, inline error banners, roving tabindex, focus trap rewrite, `aria-live`/`aria-busy`/`aria-controls` on tabs + suggestion, `prefers-reduced-motion` honored (undo-bar intentionally exempt as essential cue), menu accesskeys audited against Zotero native menus.
 - **Dep hygiene:** Node 22 pinned (`.nvmrc` + `engines.node`), CI matrix narrowed, Renovate config added.
-- Branch pushed; PR #30 open. Awaiting 24h personal Zotero test before tagging v2.0.0.
+- **WIP test suite finished before release:** wired the orphan `build-metadata.mjs` into the build (update.json now carries `strict_max_version`), gave `migrateFromExtraV1` a `boolean` return + tightened candidate detection so free-form `Citegeist.` notes no longer trigger a spurious backup, made the cache lifecycle fail-closed (cache-init failure and UI-registration failure both skip/tear down cache-dependent UI and alert; shutdown always closes the cache), and added column-registration rollback. Removed three aspirational test files targeting unbuilt features (citation-network redesign + a defunct MenuManager API) — tracked in BACKLOG. Full suite 294 green, lint clean, format clean, build clean.
+- Tagging v2.0.0.
 
 ---
 

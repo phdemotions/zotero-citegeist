@@ -131,10 +131,38 @@ If you'd like to help translate Citegeist into your language, please comment wit
 
 ---
 
-## Sort citation network results by FWCI
+## Citation network browser redesign — toolbar, sorting, and in-library filtering
 
-**Labels:** `enhancement`
+**Labels:** `enhancement`, `design`
 
-The citation network browser currently lets you sort results by citation count, year, and title. Adding FWCI as a sort option would let researchers find the most field-relevant citing works, not just the most cited ones.
+A planned redesign of the citation network browser's header and result controls. A UX mockup exists at [`mockups/citation-network-toolbar-ux.html`](mockups/citation-network-toolbar-ux.html) — open it in a browser to see the intended layout.
 
-This aligns with Citegeist's core value proposition: field-normalized metrics are more meaningful than raw counts. The FWCI data is already available in the OpenAlex response for each work — it just needs to be wired into the sort controls.
+**Scope:**
+
+- **Redesigned dialog header** — a compact command bar showing the source paper's own metadata (authors · venue · year) and citation count alongside the title, instead of just the title.
+- **Richer sorting** — beyond the current citation-count / year / title options, add:
+  - FWCI (field-normalized impact) — the data is already in each work's OpenAlex response; field-normalized metrics are more meaningful than raw counts, so this aligns with Citegeist's core value
+  - Percentile
+  - First-author surname (with multi-word surname-prefix handling: "de la Cruz", "van der Berg")
+  - "Not in my library first" — surface works you haven't added yet
+  - Server-side sorting via OpenAlex `sort=` params where supported, local sorting otherwise
+- **Hide-in-library filter** — optionally drop works already in your library (by DOI or added-this-session ID) so the list shows only new discoveries.
+- Unknown publication dates sort last regardless of direction.
+
+**Note for implementers:** a previous session drafted vitest specs for the pure pieces of this (a sort comparator, an OpenAlex-sort mapping, an in-library visibility filter, and a `getItemSourceMetaLine` header formatter). They were removed from the 2.0 release to keep scope tight, but the contracts are a good starting point — extract the sort/filter logic currently inline in `src/modules/citationNetwork/results.ts` into pure, testable functions, add a `getItemSourceMetaLine(item)` helper in `dialog.ts`, and preserve every selector `bindDialogEvents` depends on when reworking the header.
+
+---
+
+## Migrate context menus to Zotero's MenuManager API
+
+**Labels:** `enhancement`, `tech-debt`
+
+Citegeist wires its right-click menu items via direct DOM manipulation (`createXULElement` + `addEventListener` on `zotero-itemmenu` / `zotero-collectionmenu`), with a per-window register/unregister lifecycle. Zotero 7 added a higher-level `Zotero.MenuManager` API for registering menus declaratively (targets, l10n IDs, `onShowing` / `onCommand` callbacks) with automatic lifecycle handling.
+
+**Scope:**
+
+- Register item and collection menus through `Zotero.MenuManager` where available, with the current DOM approach as a fallback for builds that lack it.
+- Roll back a partial registration cleanly if one target fails.
+- Add the `MenuManager` / `RegisterMenuOptions` / `MenuContext` type declarations to `typings/zotero.d.ts` (absent today).
+
+**Note for implementers:** a previous session drafted vitest specs for this against a `registerMenus(pluginID, win)` signature and a MenuManager stub; they were removed from the 2.0 release. The current DOM-based menu behavior remains covered by `test/collection-menu.test.ts`.

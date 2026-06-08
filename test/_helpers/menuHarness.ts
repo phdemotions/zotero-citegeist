@@ -41,9 +41,9 @@ export class FakeElement {
 
   /** Trigger an event listener and return the Promise it produces (if async). */
   dispatch(type: string): Promise<void> | void {
-    return (this.listeners.get(type) as ((e: Event) => void | Promise<void>) | undefined)?.(
-      { type } as Event,
-    );
+    return (this.listeners.get(type) as ((e: Event) => void | Promise<void>) | undefined)?.({
+      type,
+    } as Event);
   }
 }
 

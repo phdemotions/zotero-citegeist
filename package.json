@@ -12,6 +12,7 @@
     "release": "bumpp --commit 'release: v%s' --tag 'v%s' --push",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
@@ -23,7 +24,9 @@
     "addonID": "citegeist@opusvita.org",
     "addonRef": "citegeist",
     "addonInstance": "Citegeist",
-    "prefsPrefix": "extensions.zotero.citegeist"
+    "prefsPrefix": "extensions.zotero.citegeist",
+    "zoteroMinVersion": "7.0.10",
+    "zoteroMaxVersion": "9.*"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.0.0",

@@ -16,6 +16,7 @@ import { join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { createHash } from "crypto";
 import { execSync } from "child_process";
+import { readBuildMetadata, placeholdersFor, updateManifestFor } from "./build-metadata.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -24,8 +25,8 @@ const ADDON_DIR = join(BUILD_DIR, "addon");
 const isDev = process.argv.includes("--dev");
 
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8"));
-const { addonName, addonID, addonRef, addonInstance, prefsPrefix } = pkg.config;
-const version = pkg.version;
+const meta = readBuildMetadata(pkg);
+const { addonID, version } = meta;
 
 console.log(`\n  Citegeist build — v${version} (${isDev ? "dev" : "production"})\n`);
 
@@ -37,14 +38,7 @@ mkdirSync(ADDON_DIR, { recursive: true });
 cpSync(join(ROOT, "addon"), ADDON_DIR, { recursive: true });
 
 // Step 2: Replace placeholders
-const placeholders = {
-  __addonName__: addonName,
-  __addonID__: addonID,
-  __addonRef__: addonRef,
-  __addonInstance__: addonInstance,
-  __buildVersion__: version,
-  __prefsPrefix__: prefsPrefix,
-};
+const placeholders = placeholdersFor(meta);
 
 function replacePlaceholders(dir) {
   for (const entry of readdirSync(dir)) {
@@ -94,22 +88,7 @@ if (!isDev) {
   const xpiBuffer = readFileSync(xpiPath);
   const hash = createHash("sha256").update(xpiBuffer).digest("hex");
 
-  const updateJson = {
-    addons: {
-      [addonID]: {
-        updates: [
-          {
-            version,
-            update_link: `https://github.com/phdemotions/zotero-citegeist/releases/download/v${version}/${xpiName}`,
-            update_hash: `sha256:${hash}`,
-            applications: {
-              zotero: { strict_min_version: "6.999" },
-            },
-          },
-        ],
-      },
-    },
-  };
+  const updateJson = updateManifestFor(meta, xpiName, hash);
 
   writeFileSync(join(BUILD_DIR, "update.json"), JSON.stringify(updateJson, null, 2));
 

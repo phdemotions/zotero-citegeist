@@ -261,6 +261,20 @@ function recoverConfirmedMatchOnly(
   return row;
 }
 
+/**
+ * Decide whether an item's Extra actually holds data worth migrating.
+ * A bare `Citegeist.` / `Citegeist match ID` substring isn't enough — a
+ * user's own notes (`Citegeist.note: …`, `Citegeist match ID: see footnote 3`)
+ * carry the prefix but nothing to migrate. Counting them as candidates would
+ * trigger a spurious pre-migration backup and inflate the progress total.
+ * Mirrors the per-item loop's own parse so the filter and the loop agree.
+ */
+function hasMigratableData(rawExtra: string): boolean {
+  const extra = normalizeExtraForParse(rawExtra);
+  if (parseExtraLegacy(extra).citegeistFields.size > 0) return true;
+  return recoverConfirmedMatchOnly(0, "", extra) !== null;
+}
+
 function buildRowFromLegacy(
   libraryID: number,
   itemKey: string,
@@ -413,7 +427,7 @@ const MIN_ZOTERO_VERSION_FOR_MIGRATION = "7.0.10";
  * older builds — the user keeps their existing Extra data and an upgrade
  * prompt appears.
  */
-export async function migrateFromExtraV1(): Promise<void> {
+export async function migrateFromExtraV1(): Promise<boolean> {
   // REL-002 silent-data-loss guard: the pref says "we already migrated", but
   // if SQLite is empty AND any library still contains legacy Citegeist data
   // in Extra, something went wrong (manual SQLite deletion, antivirus
@@ -426,7 +440,7 @@ export async function migrateFromExtraV1(): Promise<void> {
       );
       trySetPref(PREF_MIGRATION_COMPLETE, false);
     } else {
-      return;
+      return false;
     }
   }
 
@@ -442,7 +456,7 @@ export async function migrateFromExtraV1(): Promise<void> {
         `saveTx({skipDateModifiedUpdate}) is not honored on this build; running migration would ` +
         `trigger a full library re-sync. Update Zotero to enable migration.`,
     );
-    return;
+    return false;
   }
 
   // Hoisted so the pref-completion decision below can see it. Migration
@@ -450,6 +464,7 @@ export async function migrateFromExtraV1(): Promise<void> {
   // left unresolved (parse skip, salvage-only, per-item error) defers
   // completion until the next launch retries.
   let unresolvedSkips = 0;
+  let touchedAnything = false;
 
   setMigrationInProgress(true);
   try {
@@ -488,13 +503,20 @@ export async function migrateFromExtraV1(): Promise<void> {
           if (!item.isRegularItem()) continue;
           const extra = item.getField("extra");
           if (!extra) continue;
-          if (extra.includes(LEGACY_PREFIX) || extra.includes(CONFIRMED_MATCH_EXTRA_PREFIX)) {
+          // A prefix substring isn't enough: a user maintaining free-form
+          // notes (`Citegeist.note: …`, `Citegeist match ID: see footnote 3`)
+          // carries the prefix but no migratable data. Only collect items
+          // that hold a known legacy field OR a confirmed-match line with a
+          // valid W-id, so a stray note can't trigger a backup write or
+          // inflate the progress total.
+          if (hasMigratableData(extra)) {
             candidates.push(item);
           }
         }
       }
 
       const total = candidates.length;
+      if (total > 0) touchedAnything = true;
 
       // SAFETY NET: before touching a single Extra field, write a JSON
       // snapshot of every candidate's pre-migration Extra to the data dir.
@@ -700,6 +722,8 @@ export async function migrateFromExtraV1(): Promise<void> {
       logError("migration_progress cleanup (non-fatal)", e);
     }
   }
+
+  return touchedAnything;
 }
 
 /**
@@ -722,7 +746,11 @@ async function shouldForceRerun(): Promise<boolean> {
       for (const item of items) {
         if (item.deleted || !item.isRegularItem()) continue;
         const extra = item.getField("extra");
-        if (extra && (extra.includes(LEGACY_PREFIX) || extra.includes(CONFIRMED_MATCH_EXTRA_PREFIX))) return true;
+        if (
+          extra &&
+          (extra.includes(LEGACY_PREFIX) || extra.includes(CONFIRMED_MATCH_EXTRA_PREFIX))
+        )
+          return true;
       }
     }
     return false;

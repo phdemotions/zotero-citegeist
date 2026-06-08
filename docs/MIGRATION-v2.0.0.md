@@ -2,6 +2,25 @@
 
 > v2.0.0 moves cached citation data out of Zotero item `Extra` fields into a plugin-owned SQLite database. Storage format changed; UI and feature set didn't.
 
+## If you're upgrading from 1.x — the short version
+
+Citegeist 1.x wrote everything it cached about a paper — citation count, FWCI, percentile, journal metrics, and any title match you confirmed — into that item's **Extra** field, tagged with `Citegeist.` prefixes. 2.0 stops doing that. All of it now lives in a separate database file Citegeist owns (`citegeist.sqlite`, in your Zotero profile folder), and the `Citegeist.` lines are cleaned out of your items. Same columns, same pane, same features — only the storage underneath changed.
+
+**What you need to do**
+
+1. Update Zotero to **7.0.10 or newer** if you haven't. 2.0 won't load on older builds — the migration relies on a metadata flag they quietly ignore, and running without it would mark your whole library as modified and trigger a full re-sync.
+2. **Back up your Zotero data directory** before you update — see [Before upgrading](#before-upgrading). Citegeist writes its own safety-net snapshot first, but a full backup is the right habit for a storage change.
+3. Install 2.0 and start Zotero. The migration runs once, on its own — instant for most libraries, a short progress window for large ones (500+ Citegeist items).
+
+**What carries forward, and what doesn't**
+
+| What you had in 1.x | What happens in 2.0 |
+| --- | --- |
+| **Title matches you confirmed by hand** | Kept. The OpenAlex ID is preserved and also written back to Extra as a single `Citegeist match ID: W…` line, so it survives a downgrade and syncs to your other devices. You won't have to re-confirm anything. |
+| **Citation counts, FWCI, percentile, journal metrics** | Re-fetched automatically from OpenAlex the first time you view each item, on each device. Expect a brief "loading" beat on first scroll — nothing is lost, every value is re-derivable. |
+| **The `Citegeist.` lines in your items' Extra** | Removed. This is the point of the release: your bibliographic records stop carrying Citegeist's bookkeeping. |
+| **Everything else in your library** | Untouched. Citegeist never writes anything else to your items, and uninstalling now leaves your library exactly as it was. |
+
 ## Why this change
 
 v1.3.x stored cached metrics in each item's `Extra` field as namespaced lines:
