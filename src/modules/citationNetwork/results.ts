@@ -12,7 +12,12 @@ import {
   type OpenAlexWork,
 } from "../openalex";
 import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../utils";
-import { MAX_RENDERED_RESULTS, type NetworkState } from "./types";
+import {
+  MAX_RENDERED_RESULTS,
+  SURNAME_PREFIXES,
+  type NetworkSortKey,
+  type NetworkState,
+} from "./types";
 import { getDefaultCollectionName } from "./actions";
 import { DEFAULT_NETWORK_PAGE_SIZE, PREF_NETWORK_PAGE_SIZE } from "../../constants";
 
@@ -92,44 +97,159 @@ export async function loadResults(state: NetworkState, append = false): Promise<
   state.dialog.classList.remove("cg-is-loading");
 }
 
+// ────────────────────────────────────────────────────────
+// Sorting & filtering (pure — unit-tested)
+// ────────────────────────────────────────────────────────
+
+/** Short OpenAlex work id, e.g. `W123`, stripped of the URL prefix. */
+function shortWorkId(work: OpenAlexWork): string {
+  return work.id.replace("https://openalex.org/", "");
+}
+
+/** Clean, lowercased DOI (no `https://doi.org/` prefix), or null. */
+function cleanDoi(work: OpenAlexWork): string | null {
+  return work.doi ? work.doi.replace("https://doi.org/", "").toLowerCase() : null;
+}
+
+/**
+ * Is this work already in the user's library? True when its DOI is in
+ * `existingDOIs` OR it was added during this session. Mirrors the per-row
+ * "In Library" badge logic in {@link renderResults}.
+ */
+export function isWorkInLibrary(
+  work: OpenAlexWork,
+  existingDOIs: Set<string>,
+  addedThisSession: Set<string>,
+): boolean {
+  const doi = cleanDoi(work);
+  if (doi && existingDOIs.has(doi)) return true;
+  return addedThisSession.has(shortWorkId(work));
+}
+
+/**
+ * First-author surname sort key. Uses the last name token, but folds known
+ * surname prefixes ("de la Cruz", "van der Berg") into the key so they sort by
+ * the prefix, not the given name. Works with no authors sort last.
+ */
+function firstAuthorSortKey(work: OpenAlexWork): string {
+  const name = work.authorships?.[0]?.author?.display_name?.trim();
+  if (!name) return "￿"; // no authors → sort last
+  const tokens = name.split(/\s+/);
+  if (tokens.length <= 1) return tokens[0].toLowerCase();
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (SURNAME_PREFIXES.has(tokens[i].toLowerCase())) {
+      return tokens.slice(i).join(" ").toLowerCase();
+    }
+  }
+  return tokens[tokens.length - 1].toLowerCase();
+}
+
+export interface NetworkSortContext {
+  sortBy: NetworkSortKey;
+  existingDOIs: Set<string>;
+  addedThisSession: Set<string>;
+}
+
+/**
+ * Comparator for two network works under the active sort mode. Pure: depends
+ * only on the works + context. Unknown publication years always sort last for
+ * both year directions; `not-in-library` floats not-yet-added works first.
+ */
+export function compareNetworkWorks(
+  a: OpenAlexWork,
+  b: OpenAlexWork,
+  ctx: NetworkSortContext,
+): number {
+  switch (ctx.sortBy) {
+    case "fwci-desc":
+      return (b.fwci ?? -1) - (a.fwci ?? -1);
+    case "percentile-desc":
+      return (
+        (b.citation_normalized_percentile?.value ?? -1) -
+        (a.citation_normalized_percentile?.value ?? -1)
+      );
+    case "year-desc":
+    case "year-asc": {
+      const ya = a.publication_year || 0;
+      const yb = b.publication_year || 0;
+      if (!ya && !yb) return 0;
+      if (!ya) return 1; // unknown date → last, regardless of direction
+      if (!yb) return -1;
+      return ctx.sortBy === "year-asc" ? ya - yb : yb - ya;
+    }
+    case "author-asc": {
+      const ka = firstAuthorSortKey(a);
+      const kb = firstAuthorSortKey(b);
+      if (ka !== kb) return ka < kb ? -1 : 1;
+      const ya = a.publication_year || 0;
+      const yb = b.publication_year || 0;
+      if (ya !== yb) return ya - yb;
+      return (a.display_name || a.title || "").localeCompare(b.display_name || b.title || "");
+    }
+    case "not-in-library": {
+      const ia = isWorkInLibrary(a, ctx.existingDOIs, ctx.addedThisSession);
+      const ib = isWorkInLibrary(b, ctx.existingDOIs, ctx.addedThisSession);
+      if (ia !== ib) return ia ? 1 : -1; // not-in-library first
+      return (b.cited_by_count || 0) - (a.cited_by_count || 0);
+    }
+    default:
+      return (b.cited_by_count || 0) - (a.cited_by_count || 0);
+  }
+}
+
+/** Does a work match the free-text filter (title or any author name)? */
+function matchesFilter(work: OpenAlexWork, lowerFilter: string): boolean {
+  return (
+    work.display_name?.toLowerCase().includes(lowerFilter) ||
+    work.title?.toLowerCase().includes(lowerFilter) ||
+    (work.authorships?.some((a) => a.author.display_name.toLowerCase().includes(lowerFilter)) ??
+      false)
+  );
+}
+
+export interface NetworkVisibilityOptions extends NetworkSortContext {
+  hideInLibrary: boolean;
+}
+
+/**
+ * Apply the free-text filter + optional hide-in-library filter, then sort.
+ * Returns a new array; never mutates the input. Single source of truth for
+ * which works the results list shows and in what order.
+ */
+export function getVisibleNetworkWorks(
+  works: OpenAlexWork[],
+  filter: string,
+  opts: NetworkVisibilityOptions,
+): OpenAlexWork[] {
+  let result = works;
+  const trimmed = filter.trim().toLowerCase();
+  if (trimmed) result = result.filter((w) => matchesFilter(w, trimmed));
+  if (opts.hideInLibrary) {
+    result = result.filter((w) => !isWorkInLibrary(w, opts.existingDOIs, opts.addedThisSession));
+  }
+  return [...result].sort((a, b) => compareNetworkWorks(a, b, opts));
+}
+
 export function renderResults(state: NetworkState, filter = ""): void {
   const body = state.dialog.querySelector(".cg-dialog-body") as HTMLElement;
   if (!body) return;
 
-  let results = state.results;
-
-  if (filter) {
-    const lower = filter.toLowerCase();
-    results = results.filter(
-      (w) =>
-        w.display_name?.toLowerCase().includes(lower) ||
-        w.title?.toLowerCase().includes(lower) ||
-        w.authorships?.some((a) => a.author.display_name.toLowerCase().includes(lower)),
-    );
-  }
-
-  results = [...results].sort((a, b) => {
-    switch (state.sortBy) {
-      case "fwci-desc":
-        return (b.fwci ?? -1) - (a.fwci ?? -1);
-      case "percentile-desc":
-        return (
-          (b.citation_normalized_percentile?.value ?? -1) -
-          (a.citation_normalized_percentile?.value ?? -1)
-        );
-      case "year-desc":
-        return (b.publication_year || 0) - (a.publication_year || 0);
-      case "year-asc":
-        return (a.publication_year || 0) - (b.publication_year || 0);
-      default:
-        return (b.cited_by_count || 0) - (a.cited_by_count || 0);
-    }
+  let results = getVisibleNetworkWorks(state.results, filter, {
+    sortBy: state.sortBy,
+    hideInLibrary: state.hideInLibrary,
+    existingDOIs: state.existingDOIs,
+    addedThisSession: state.addedThisSession,
   });
 
   if (results.length === 0 && !state.loading) {
-    const msg = filter
-      ? `<div class="cg-empty"><div class="cg-empty-title">No matches</div>Try a different search term</div>`
-      : `<div class="cg-empty"><div class="cg-empty-title">No results</div>This work has no ${state.mode === "citing" ? "citing works" : "references"} in OpenAlex</div>`;
+    let msg: string;
+    if (filter) {
+      msg = `<div class="cg-empty"><div class="cg-empty-title">No matches</div>Try a different search term</div>`;
+    } else if (state.hideInLibrary && state.results.length > 0) {
+      msg = `<div class="cg-empty"><div class="cg-empty-title">Nothing new here</div>Every ${state.mode === "citing" ? "citing work" : "reference"} is already in your library. Turn off “Hide in library” to see them.</div>`;
+    } else {
+      msg = `<div class="cg-empty"><div class="cg-empty-title">No results</div>This work has no ${state.mode === "citing" ? "citing works" : "references"} in OpenAlex</div>`;
+    }
     safeInnerHTML(body, msg);
     return;
   }
