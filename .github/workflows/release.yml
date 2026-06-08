@@ -39,7 +39,21 @@ jobs:
             build/update.json
           generate_release_notes: true
 
-      - name: Update release tag for auto-updates
+      - name: Refresh the auto-update channel
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # Move the floating `release` tag to this commit.
           git tag -f release
           git push -f origin release
+          # Zotero auto-update reads the manifest's update_url, which points at
+          # releases/download/release/update.json. That path only resolves if a
+          # GitHub Release named `release` exists with update.json attached —
+          # moving the tag alone is NOT enough. Ensure the release exists, then
+          # overwrite its update.json so the updater always sees the latest XPI.
+          gh release view release >/dev/null 2>&1 || \
+            gh release create release \
+              --title "Auto-update channel" \
+              --latest=false \
+              --notes "Serves update.json for Zotero's built-in auto-updater. Do not download from here manually — install Citegeist from the latest versioned release."
+          gh release upload release build/update.json --clobber
