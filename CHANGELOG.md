@@ -7,14 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] — 2026-06-08
+
+### Fixed
+
+- **Citation columns now refresh after a batch fetch.** Selecting several items
+  and running "Fetch Citation Counts", or "Fetch All Citation Counts" on a
+  collection or the whole library, fetched and cached the data but didn't repaint
+  the columns until you next sorted or scrolled. Rows now fill in as each item's
+  data lands.
+
 ### Changed
 
-- Right-click menus now register through Zotero 8+'s official `Zotero.MenuManager`
-  API when it's available (Zotero 8 and 9), falling back to the existing direct
-  DOM injection on Zotero 7.0.x. Same menu items and behavior on every supported
-  version; on Zotero 8+ the modern API brings declarative registration and
-  automatic cleanup on shutdown. Menu labels on the MenuManager path come from
-  the bundled FTL (`citegeist-menu-*`).
+- **The "possible match" card is redesigned.** When an item has no DOI, PMID,
+  arXiv ID, or ISBN and Citegeist matches it by title, the confirmation card now
+  shows the candidate's title, year, and estimated metrics together with a
+  confidence label ("Strong" / "Possible") and a "View on OpenAlex" link — so you
+  can see what you're confirming before you commit. (The high-confidence case
+  previously showed metrics with no title at all.) Confirming now reads as a
+  success even if the metrics take a moment to load, and it offers to add the
+  matched DOI either way.
+- **Citation network browser.** New ways to sort the citing/cited works — by
+  first author, and "not in my library first" to surface works you haven't added
+  yet — plus a "hide works already in my library" filter, and a header that shows
+  the source paper's authors, venue, year, and citation count.
+- Right-click menus register through Zotero 8+'s official MenuManager API where
+  available (Zotero 8 and 9), with the existing direct-DOM approach as the
+  fallback on Zotero 7.0.x. Same menus on every supported version.
+
+### Internal
+
+- Citegeist is archived on Zenodo with a citable DOI (concept DOI
+  `10.5281/zenodo.19433716`); added the badge and CITATION.cff metadata.
+- Toolchain moved to TypeScript 6 and ESLint 10; the release workflow now
+  self-maintains the auto-update channel and uses action-gh-release v3.
 
 ## [2.0.0] — 2026-06-07
 
@@ -344,6 +370,7 @@ network browser got a thorough pass alongside it:
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[2.0.1]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.3.0...v2.0.0
 [1.3.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/phdemotions/zotero-citegeist/compare/v1.2.0...v1.2.1
