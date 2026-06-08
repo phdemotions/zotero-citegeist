@@ -139,3 +139,15 @@ The citation network browser now sorts the **loaded page** of results client-sid
 
 This is a refinement of the now-shipped redesign (header with source metadata + cited-by stat, new sort modes, hide-in-library filter — see the [toolbar mockup](mockups/citation-network-toolbar-ux.html)). It mainly matters for source papers with hundreds of citing works, where the most-cited result may sit beyond the first loaded page.
 
+---
+
+## Show the candidate's authors in the title-match card
+
+**Labels:** `enhancement`, `design`
+
+The redesigned title-match confirm/discard card (shipped v2.0.1) shows the candidate's title, year, and estimated metrics, but **not its authors** — two papers with the same title/year are still hard to tell apart. The author data is available from `searchByMetadata`'s `candidate.authorships`, but surfacing it needs a new `pending_authors` column in the cache.
+
+**Why deferred:** the cache schema is created with plain `CREATE TABLE IF NOT EXISTS` (`src/modules/cache/db.ts`) — there's no column-add migration path, so adding `pending_authors` requires a schema migration (`ALTER TABLE ADD COLUMN`) for existing v2.x users. Everything else in the card needed no schema change, so it shipped without authors.
+
+**Scope:** add `pending_authors TEXT` + a one-shot `ALTER TABLE` migration; thread a formatted author string through `writePendingSuggestion` → `getPendingSuggestion` → `renderSuggestion` (from `match.work.authorships`).
+

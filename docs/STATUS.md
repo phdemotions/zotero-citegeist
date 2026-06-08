@@ -1,7 +1,7 @@
 # Citegeist — Status
 
-> **Last Updated:** 2026-06-07
-> **Phase:** v2.0.0 — WIP test suite resolved (294 tests green, lint clean); shipping
+> **Last Updated:** 2026-06-08
+> **Phase:** v2.0.1 released — shipped to GitHub + Zenodo; auto-update channel self-maintaining
 > **Build:** Clean
 
 ---
@@ -10,23 +10,22 @@
 
 | Attribute        | Value                                                                          |
 | ---------------- | ------------------------------------------------------------------------------ |
-| **Version**      | 2.0.0 (shipping — PR #30)                                                      |
-| **Build Status** | Clean (294 tests passing, typecheck clean, lint clean, XPI 87.6 KB)           |
-| **Open Issues**  | P0: 0, P1: 0, P2: 0, P3: 0, P4: 0 (Iter Z reviewer declared P4-clean)         |
-| **Stack**        | TypeScript, esbuild, vitest 4.1, Zotero 7.0.10+ bootstrap API, SQLite, Node 22 |
+| **Version**      | 2.0.1 (released 2026-06-08 — Zenodo DOI 10.5281/zenodo.20596016)               |
+| **Build Status** | Clean (326 tests passing, typecheck clean, lint clean, XPI 90.4 KB)           |
+| **Open Issues**  | P0: 0, P1: 0, P2: 3, P3: 2 (see ISSUES.md)                                     |
+| **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, Zotero 7.0.10–9, SQLite, Node 22 |
 | **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                          |
-| **Distribution** | GitHub Releases → auto-update via `release` floating tag                       |
+| **Distribution** | GitHub Releases → auto-update via `release` Release (self-maintaining); Zenodo-archived |
 
 ---
 
 ## In Progress
 
-- **v2.0.0 — SQLite cache + UX hardening epic.** Storage moved from per-item `Extra` field to plugin-owned `<profile>/citegeist.sqlite`. Crash-safe three-step migration, pre-migration JSON backup safety net, REL-002 force-rerun guard, confirmed-match recovery from downgrade-mirror lines, orphan GC user-curated-state protection, per-item saveTx timeout, bounded close-cache drain.
-- **Iters G–Z applied** (~16 review iterations, ~80 findings across correctness, security, performance, maintainability, data integrity, frontend races, TS hygiene, reliability, simplicity, adversarial, patterns, project standards, julik races, agent-native, scope guardian, code simplicity).
-- **UX layer hardened to Apple Design Award bar:** per-item refresh guards, double-click disable, atomic dismiss, generation tokens against UI/data races, inline error banners, roving tabindex, focus trap rewrite, `aria-live`/`aria-busy`/`aria-controls` on tabs + suggestion, `prefers-reduced-motion` honored (undo-bar intentionally exempt as essential cue), menu accesskeys audited against Zotero native menus.
-- **Dep hygiene:** Node 22 pinned (`.nvmrc` + `engines.node`), CI matrix narrowed, Renovate config added.
-- **WIP test suite finished before release:** wired the orphan `build-metadata.mjs` into the build (update.json now carries `strict_max_version`), gave `migrateFromExtraV1` a `boolean` return + tightened candidate detection so free-form `Citegeist.` notes no longer trigger a spurious backup, made the cache lifecycle fail-closed (cache-init failure and UI-registration failure both skip/tear down cache-dependent UI and alert; shutdown always closes the cache), and added column-registration rollback. Removed three aspirational test files targeting unbuilt features (citation-network redesign + a defunct MenuManager API) — tracked in BACKLOG. Full suite 294 green, lint clean, format clean, build clean.
-- Tagging v2.0.0.
+_None — v2.0.1 is released and clean (326 tests, lint clean, build clean)._
+
+**Shipped 2026-06-08 (v2.0.1):** batch/collection/library column repaint fix (#35), redesigned title-match confirm/discard card (#36), citation network browser improvements — new sort modes (first author, not-in-library) + hide-in-library filter + source-metadata header (#32), Zotero 8+ MenuManager with DOM fallback (#33), Zenodo DOI surfacing (#34), TS6/ESLint10/action-gh-release-v3 deps (#37). v2.0.0 (SQLite cache migration) shipped 2026-06-08 (#30).
+
+**Possible next:** show the candidate's *authors* in the title-match card — deferred because it needs a new `pending_authors` cache column + a schema migration (the cache uses plain `CREATE TABLE IF NOT EXISTS`, no column-add path). See BACKLOG.
 
 ---
 
