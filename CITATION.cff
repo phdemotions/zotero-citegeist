@@ -7,6 +7,14 @@ date-released: "2026-06-07"
 license: GPL-3.0-or-later
 url: "https://github.com/phdemotions/zotero-citegeist"
 repository-code: "https://github.com/phdemotions/zotero-citegeist"
+doi: 10.5281/zenodo.20586895
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.19433716
+    description: "Concept DOI — always resolves to the latest archived version"
+  - type: doi
+    value: 10.5281/zenodo.20586895
+    description: "Version DOI for v2.0.0"
 abstract: >-
   Citegeist is a Zotero 7+ plugin (compatible with Zotero 8) that embeds citation intelligence
   directly into the reference manager. It displays citation counts,
