@@ -20,6 +20,7 @@ const paneMocks = vi.hoisted(() => ({
 const menuMocks = vi.hoisted(() => ({
   registerMenus: vi.fn(),
   unregisterMenus: vi.fn(),
+  setMenuPluginID: vi.fn(),
 }));
 
 const openAlexMocks = vi.hoisted(() => ({

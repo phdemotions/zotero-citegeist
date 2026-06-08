@@ -151,18 +151,3 @@ A planned redesign of the citation network browser's header and result controls.
 
 **Note for implementers:** a previous session drafted vitest specs for the pure pieces of this (a sort comparator, an OpenAlex-sort mapping, an in-library visibility filter, and a `getItemSourceMetaLine` header formatter). They were removed from the 2.0 release to keep scope tight, but the contracts are a good starting point — extract the sort/filter logic currently inline in `src/modules/citationNetwork/results.ts` into pure, testable functions, add a `getItemSourceMetaLine(item)` helper in `dialog.ts`, and preserve every selector `bindDialogEvents` depends on when reworking the header.
 
----
-
-## Migrate context menus to Zotero's MenuManager API
-
-**Labels:** `enhancement`, `tech-debt`
-
-Citegeist wires its right-click menu items via direct DOM manipulation (`createXULElement` + `addEventListener` on `zotero-itemmenu` / `zotero-collectionmenu`), with a per-window register/unregister lifecycle. Zotero 7 added a higher-level `Zotero.MenuManager` API for registering menus declaratively (targets, l10n IDs, `onShowing` / `onCommand` callbacks) with automatic lifecycle handling.
-
-**Scope:**
-
-- Register item and collection menus through `Zotero.MenuManager` where available, with the current DOM approach as a fallback for builds that lack it.
-- Roll back a partial registration cleanly if one target fails.
-- Add the `MenuManager` / `RegisterMenuOptions` / `MenuContext` type declarations to `typings/zotero.d.ts` (absent today).
-
-**Note for implementers:** a previous session drafted vitest specs for this against a `registerMenus(pluginID, win)` signature and a MenuManager stub; they were removed from the 2.0 release. The current DOM-based menu behavior remains covered by `test/collection-menu.test.ts`.
