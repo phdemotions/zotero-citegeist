@@ -7,44 +7,43 @@
  *   Sage ramp — primary accent (#8FAD9F on dark, #2F6B5A on light, replaces blue throughout)
  *   Amber     — evidence weight only (not used in this dialog)
  * Typography: Inter for UI labels; system serif fallback for editorial elements.
+ *
+ * Design tokens come from the canonical layer in `src/modules/ui/tokens.ts`
+ * (mirrors `docs/design-system/citegeist-primitives.html`). This file emits
+ * those tokens scoped to the dialog, then keeps a thin compat-alias block so
+ * the existing component CSS (which references the dialog's legacy token names)
+ * needs no churn.
  */
+
+import { cgDesignTokens } from "../ui/tokens";
 
 export function getDialogCSS(): string {
   return `
+    ${cgDesignTokens("#citegeist-network-dialog")}
+
     /* ── Dialog root: Slate palette — green-undertoned ── */
-    /* Tokens use light-dark() so the dialog adapts to Zotero's theme.
-       Light mode = warm off-white sage tint; dark mode = original slate.
-       Firefox 128+ honors light-dark(); Zotero 9 ships on Firefox 128+. */
+    /* Legacy dialog token names mapped onto the canonical layer. Quaternary
+       text + hover text are dialog-only extra ramp steps, kept local. The
+       sage-tint scale, accent, red/danger, focus ring, and base surfaces all
+       now resolve from cgDesignTokens() above — which also fixes the prior
+       dark-mode bug where every --cg-sage-tint-* dark arm was a self-reference
+       (invalid at computed value time → tints silently went transparent). */
     #citegeist-network-dialog {
-      --cg-bg-primary: light-dark(#F8FAF9, #141D18);
-      --cg-bg-secondary: light-dark(#EFF3F1, #1A2520);
-      --cg-bg-elevated: light-dark(#FFFFFF, #1E2A24);
-      --cg-text-primary: light-dark(#1A2820, #E7EEE9);
-      --cg-text-secondary: light-dark(#46554C, #9CAAA3);
-      --cg-text-tertiary: light-dark(#6B7A72, #788780);
+      --cg-bg-primary: var(--cg-surface);
+      --cg-bg-secondary: var(--cg-surface-sunken);
+      --cg-bg-elevated: var(--cg-surface-elevated);
       --cg-text-quaternary: light-dark(#8A998F, #586860);
       --cg-text-hover: light-dark(#28362E, #BFCBC5);
-      --cg-sage-accent: light-dark(#2F6B5A, #8FAD9F);
-      --cg-sage-accent-strong: light-dark(#214A3F, #B6C9BD);
-      --cg-sage-tint-04: light-dark(rgba(60,110,95,0.04), var(--cg-sage-tint-04));
-      --cg-sage-tint-06: light-dark(rgba(60,110,95,0.06), var(--cg-sage-tint-06));
-      --cg-sage-tint-08: light-dark(rgba(60,110,95,0.08), var(--cg-sage-tint-08));
-      --cg-sage-tint-10: light-dark(rgba(60,110,95,0.10), var(--cg-sage-tint-10));
-      --cg-sage-tint-12: light-dark(rgba(60,110,95,0.12), var(--cg-sage-tint-12));
-      --cg-sage-tint-15: light-dark(rgba(60,110,95,0.15), var(--cg-sage-tint-15));
-      --cg-sage-tint-16: light-dark(rgba(60,110,95,0.16), var(--cg-sage-tint-16));
-      --cg-sage-tint-22: light-dark(rgba(60,110,95,0.22), rgba(56,104,87,0.22));
-      --cg-sage-accent-tint-12: light-dark(rgba(47,107,90,0.12), var(--cg-sage-accent-tint-12));
-      --cg-sage-accent-tint-25: light-dark(rgba(47,107,90,0.25), var(--cg-sage-accent-tint-25));
-      --cg-focus-ring: light-dark(#2F6B5A, #8FAD9F);
-      --cg-red-fg: light-dark(#C44030, #FF453A);
-      --cg-red-fg-hover: light-dark(#A43020, #FF6961);
-      --cg-red-bg: light-dark(rgba(196,64,48,0.10), rgba(255,69,58,0.12));
-      --cg-red-bg-hover: light-dark(rgba(196,64,48,0.18), rgba(255,69,58,0.22));
+      --cg-sage-accent-tint-12: var(--cg-sage-tint-12);
+      --cg-sage-accent-tint-25: var(--cg-sage-tint-25);
+      --cg-red-fg: var(--cg-danger);
+      --cg-red-fg-hover: var(--cg-danger-strong);
+      --cg-red-bg: var(--cg-danger-tint);
+      --cg-red-bg-hover: var(--cg-danger-tint-strong);
 
       background-color: var(--cg-bg-primary);
       color: var(--cg-text-primary);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
       font-feature-settings: 'kern' 1, 'liga' 1;
     }
     #citegeist-network-dialog * { box-sizing: border-box; }

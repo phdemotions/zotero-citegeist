@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Citegeist Design Primitives</title>
+    <style>
+      /* ============================================================
+         CITEGEIST DESIGN PRIMITIVES — canonical token + component layer
+         ------------------------------------------------------------
+         One source of truth for both Citegeist surfaces:
+           • the embedded item pane  (#citegeist-pane-root)   — inherits Zotero theme
+           • the modal network dialog (#citegeist-network-dialog) — owns a slate surface
+         Aligned to Apple HIG metrics (SF type ramp, 4pt spacing, 6/8px control
+         radii, iOS state transitions) and Zotero standards (theme-driven where
+         embedded, light-dark() with hardcoded fallbacks, WCAG AA, reduce-motion).
+
+         This gallery is the design reference; src/modules/ui/tokens.ts mirrors
+         the :root block + .cg-* primitives verbatim for the plugin.
+         ============================================================ */
+
+      /* Predictable box model everywhere (prevents width:100% + padding overflow,
+         e.g. the search field bleeding under the toggle in the command bar). */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      :root {
+        /* ── Spacing (4pt rhythm, HIG) ── */
+        --cg-space-1: 4px;
+        --cg-space-2: 8px;
+        --cg-space-3: 12px;
+        --cg-space-4: 16px;
+        --cg-space-5: 20px;
+        --cg-space-6: 24px;
+
+        /* ── Radius (HIG control = 6, card = 8, pill) ── */
+        --cg-radius-sm: 4px;
+        --cg-radius-md: 6px;
+        --cg-radius-lg: 8px;
+        --cg-radius-xl: 12px;
+        --cg-radius-pill: 999px;
+
+        /* ── Type ramp (SF / HIG sizes; tabular for metrics) ── */
+        --cg-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
+          "Segoe UI", sans-serif;
+        --cg-size-caption2: 10px;
+        --cg-size-caption: 11px;
+        --cg-size-footnote: 12px;
+        --cg-size-subhead: 13px;
+        --cg-size-body: 14px;
+        --cg-size-title3: 18px;
+        --cg-size-stat: 22px;
+        --cg-size-display: 28px;
+        --cg-weight-regular: 400;
+        --cg-weight-medium: 510;
+        --cg-weight-semibold: 590;
+        --cg-weight-bold: 680;
+        --cg-track-tight: -0.01em;
+        --cg-track-caps: 0.06em;
+
+        /* ── Elevation (modal only; embedded stays flat) ── */
+        --cg-shadow-modal: 0 16px 40px rgba(20, 29, 24, 0.28),
+          0 0 1px rgba(20, 29, 24, 0.2);
+
+        /* Lift for a raised pill (segmented selection). Scheme-agnostic on
+           purpose: light-dark() is NOT valid inside box-shadow, so this uses one
+           neutral value — a soft dark drop (depth on light, invisible on dark)
+           plus a faint top highlight (edge on dark, invisible on light). The
+           elevated background carries the rest of the contrast on dark. */
+        --cg-lift: 0 1px 2px rgba(15, 28, 22, 0.16),
+          inset 0 0.5px 0 rgba(255, 255, 255, 0.07);
+
+        /* ── Motion (HIG standard ease; instant focus) ── */
+        --cg-ease: cubic-bezier(0.32, 0.72, 0, 1);
+        --cg-dur-fast: 120ms;
+        --cg-dur: 200ms;
+        --cg-press: 0.97;
+
+        /* ── Accent: sage (one accent; amber = evidence weight only) ── */
+        --cg-sage-accent: light-dark(#2f6b5a, #8fad9f);
+        --cg-sage-accent-strong: light-dark(#214a3f, #b6c9bd);
+        /* Foreground for filled-accent surfaces: white on the dark-green light
+           accent, dark slate on the pale dark-mode accent (WCAG AA both ways). */
+        --cg-on-accent: light-dark(#ffffff, #11201a);
+        --cg-sage-tint-06: light-dark(rgba(47, 107, 90, 0.06), rgba(143, 173, 159, 0.08));
+        --cg-sage-tint-12: light-dark(rgba(47, 107, 90, 0.12), rgba(143, 173, 159, 0.14));
+        --cg-sage-tint-20: light-dark(rgba(47, 107, 90, 0.2), rgba(143, 173, 159, 0.22));
+        --cg-amber: light-dark(#8b5a1a, #d4a84b);
+        --cg-amber-strong: light-dark(#6f4715, #e0b458);
+        --cg-amber-tint: light-dark(rgba(168, 101, 26, 0.1), rgba(180, 130, 40, 0.15));
+        --cg-danger: light-dark(#c44030, #ff453a);
+        --cg-danger-tint: light-dark(rgba(196, 64, 48, 0.1), rgba(255, 69, 58, 0.12));
+
+        /* ── Focus ring (instant, never animated) ── */
+        --cg-focus: 0 0 0 2px light-dark(#fbfdfb, #141d18),
+          0 0 0 4px var(--cg-sage-accent);
+      }
+
+      /* ── Surface contexts ──────────────────────────────────────
+         EMBEDDED: text/surface come from Zotero's theme vars
+         (--fill-*, --color-background). The gallery simulates them. */
+      .cx-embedded {
+        --cg-text-primary: light-dark(#1a2820, #e7eee9);
+        --cg-text-secondary: light-dark(#46554c, #9caaa3);
+        --cg-text-tertiary: light-dark(#63726a, #8a9a92);
+        --cg-surface: light-dark(#f8faf9, #1b2520);
+        --cg-surface-elevated: light-dark(#ffffff, #222e28);
+        --cg-hairline: light-dark(rgba(20, 40, 32, 0.1), rgba(231, 238, 233, 0.12));
+      }
+      /* MODAL: owns the slate palette regardless of host theme. */
+      .cx-modal {
+        --cg-text-primary: light-dark(#1a2820, #e7eee9);
+        --cg-text-secondary: light-dark(#46554c, #9caaa3);
+        --cg-text-tertiary: light-dark(#63726a, #8a9a92);
+        --cg-surface: light-dark(#f8faf9, #141d18);
+        --cg-surface-elevated: light-dark(#ffffff, #1e2a24);
+        --cg-hairline: light-dark(rgba(60, 110, 95, 0.12), rgba(143, 173, 159, 0.12));
+      }
+
+      /* ============================================================
+         COMPONENT PRIMITIVES (.cg-*)
+         ============================================================ */
+
+      .cg {
+        font-family: var(--cg-font);
+        font-feature-settings: "kern" 1, "liga" 1;
+        color: var(--cg-text-primary);
+        font-size: var(--cg-size-footnote);
+        line-height: 1.45;
+      }
+
+      /* Buttons — HIG filled / tinted / plain. Min 28px hit target. */
+      .cg-btn {
+        font-family: inherit;
+        font-size: var(--cg-size-subhead);
+        font-weight: var(--cg-weight-semibold);
+        min-height: 28px;
+        padding: 6px 14px;
+        border-radius: var(--cg-radius-md);
+        border: 1px solid transparent;
+        cursor: pointer;
+        transition: background var(--cg-dur-fast) var(--cg-ease),
+          transform var(--cg-dur-fast) var(--cg-ease), color var(--cg-dur-fast) var(--cg-ease);
+      }
+      .cg-btn:active { transform: scale(var(--cg-press)); }
+      /* Inline leading icon inside a button — monochrome, inherits text color
+         (no emoji; keeps the single-accent, HIG-restrained look). */
+      .cg-btn--icon { display: inline-flex; align-items: center; gap: 5px; }
+      .cg-btn--icon svg { width: 12px; height: 12px; flex-shrink: 0; }
+      .cg-btn:focus-visible { outline: none; box-shadow: var(--cg-focus); }
+      /* Documentation-only: render the keyboard focus ring statically so the
+         gallery can SHOW it (real focus uses :focus-visible above). */
+      .cg-btn.is-focus { outline: none; box-shadow: var(--cg-focus); }
+      .cg-search__input.is-focus {
+        border-color: var(--cg-sage-accent);
+        box-shadow: 0 0 0 3px var(--cg-sage-tint-12);
+      }
+      .cg-btn--filled { background: var(--cg-sage-accent); color: var(--cg-on-accent); }
+      .cg-btn--filled:hover { background: var(--cg-sage-accent-strong); }
+      .cg-btn--tinted { background: var(--cg-sage-tint-12); color: var(--cg-sage-accent); }
+      .cg-btn--tinted:hover { background: var(--cg-sage-tint-20); }
+      .cg-btn--plain {
+        background: transparent;
+        color: var(--cg-text-secondary);
+        border-color: var(--cg-hairline);
+      }
+      .cg-btn--plain:hover { color: var(--cg-text-primary); background: var(--cg-sage-tint-06); }
+      .cg-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+
+      /* Chip / badge — pill, caps caption */
+      .cg-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: var(--cg-size-caption);
+        font-weight: var(--cg-weight-bold);
+        letter-spacing: var(--cg-track-caps);
+        text-transform: uppercase;
+        padding: 2px 8px;
+        border-radius: var(--cg-radius-pill);
+        background: var(--cg-sage-tint-12);
+        color: var(--cg-sage-accent);
+      }
+      .cg-chip--amber { background: var(--cg-amber-tint); color: var(--cg-amber-strong); }
+      .cg-chip--quiet { background: var(--cg-sage-tint-12); color: var(--cg-text-secondary); }
+
+      /* Stat tile — equal-weight metric grid */
+      .cg-stat-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: var(--cg-space-2);
+      }
+      .cg-stat {
+        border: 1px solid var(--cg-hairline);
+        border-radius: var(--cg-radius-lg);
+        background: var(--cg-surface-elevated);
+        padding: 10px;
+      }
+      .cg-stat__value {
+        font-size: var(--cg-size-stat);
+        font-weight: var(--cg-weight-bold);
+        letter-spacing: var(--cg-track-tight);
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+        color: var(--cg-text-primary);
+      }
+      .cg-stat__label {
+        margin-top: 3px;
+        font-size: var(--cg-size-caption2);
+        font-weight: var(--cg-weight-semibold);
+        letter-spacing: var(--cg-track-caps);
+        text-transform: uppercase;
+        color: var(--cg-text-tertiary);
+      }
+
+      /* Card — only when it IS the interaction */
+      .cg-card {
+        border: 1px solid var(--cg-hairline);
+        border-radius: var(--cg-radius-lg);
+        background: var(--cg-surface-elevated);
+        padding: var(--cg-space-3);
+      }
+
+      /* List row — result item */
+      .cg-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: var(--cg-space-3);
+        align-items: start;
+        padding: 11px var(--cg-space-3);
+        border-bottom: 1px solid var(--cg-hairline);
+      }
+      .cg-row__title {
+        font-size: var(--cg-size-subhead);
+        font-weight: var(--cg-weight-semibold);
+        color: var(--cg-text-primary);
+        line-height: 1.35;
+      }
+      .cg-row__meta { margin-top: 3px; font-size: var(--cg-size-caption); color: var(--cg-text-tertiary); }
+      .cg-row__count {
+        font-size: var(--cg-size-title3);
+        font-weight: var(--cg-weight-bold);
+        font-variant-numeric: tabular-nums;
+        color: var(--cg-sage-accent);
+        text-align: right;
+      }
+
+      /* Toggle — iOS switch */
+      .cg-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: var(--cg-size-caption);
+        font-weight: var(--cg-weight-semibold);
+        color: var(--cg-text-secondary);
+        cursor: pointer;
+        border: 0;
+        background: none;
+      }
+      .cg-switch {
+        position: relative;
+        width: 28px;
+        height: 16px;
+        border-radius: var(--cg-radius-pill);
+        background: var(--cg-sage-tint-20);
+        transition: background var(--cg-dur-fast) var(--cg-ease);
+        flex-shrink: 0;
+      }
+      .cg-switch::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: light-dark(#fff, #cdd8d2);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+        transition: transform var(--cg-dur-fast) var(--cg-ease), background var(--cg-dur-fast) var(--cg-ease);
+      }
+      .cg-toggle[aria-checked="true"] { color: var(--cg-text-primary); }
+      .cg-toggle[aria-checked="true"] .cg-switch { background: var(--cg-sage-accent); }
+      .cg-toggle[aria-checked="true"] .cg-switch::after { transform: translateX(12px); background: #fff; }
+
+      /* Segmented control — HIG */
+      .cg-seg {
+        display: inline-flex;
+        gap: 1px;
+        padding: 2px;
+        border-radius: var(--cg-radius-md);
+        background: var(--cg-sage-tint-06);
+      }
+      .cg-seg__item {
+        font-family: inherit;
+        font-size: var(--cg-size-caption);
+        font-weight: var(--cg-weight-semibold);
+        min-height: 24px;
+        padding: 5px 12px;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--cg-text-secondary);
+        cursor: pointer;
+        transition: background var(--cg-dur-fast) var(--cg-ease), color var(--cg-dur-fast) var(--cg-ease);
+      }
+      .cg-seg__item[aria-selected="true"] {
+        background: var(--cg-surface-elevated);
+        color: var(--cg-text-primary);
+        box-shadow: var(--cg-lift);
+      }
+
+      /* Search field */
+      .cg-search { position: relative; }
+      .cg-search__icon {
+        position: absolute;
+        left: 9px;
+        top: 50%;
+        transform: translateY(-50%);
+        display: inline-flex;
+        color: var(--cg-text-tertiary);
+        pointer-events: none;
+      }
+      .cg-search__icon svg {
+        width: 13px;
+        height: 13px;
+        display: block;
+      }
+      .cg-search__input {
+        width: 100%;
+        min-height: 30px;
+        padding: 6px 10px 6px 28px;
+        font-family: inherit;
+        font-size: var(--cg-size-footnote);
+        color: var(--cg-text-primary);
+        background: var(--cg-sage-tint-06);
+        border: 1px solid var(--cg-hairline);
+        border-radius: var(--cg-radius-md);
+        outline: none;
+        transition: border-color var(--cg-dur-fast) var(--cg-ease), box-shadow var(--cg-dur-fast) var(--cg-ease);
+      }
+      .cg-search__input:focus {
+        border-color: var(--cg-sage-accent);
+        box-shadow: 0 0 0 3px var(--cg-sage-tint-12);
+      }
+
+      /* Banner — informational (sage) / evidence (amber) */
+      .cg-banner {
+        border-radius: var(--cg-radius-md);
+        padding: 8px 10px;
+        font-size: var(--cg-size-caption);
+        line-height: 1.45;
+        background: var(--cg-sage-tint-06);
+        color: var(--cg-text-secondary);
+        border: 1px solid var(--cg-hairline);
+      }
+      .cg-banner--amber { background: var(--cg-amber-tint); color: var(--cg-amber-strong); border-color: transparent; }
+      .cg-banner strong { display: block; color: var(--cg-text-primary); font-weight: var(--cg-weight-semibold); margin-bottom: 2px; }
+
+      /* Skeleton */
+      .cg-skel {
+        height: 11px;
+        border-radius: var(--cg-radius-sm);
+        background: linear-gradient(90deg, var(--cg-sage-tint-06), var(--cg-sage-tint-12), var(--cg-sage-tint-06));
+        background-size: 200% 100%;
+        animation: cg-shimmer 1.4s ease-in-out infinite;
+      }
+      @keyframes cg-shimmer { to { background-position: -200% 0; } }
+
+      @media (prefers-reduced-motion: reduce) {
+        .cg-btn, .cg-switch, .cg-switch::after, .cg-seg__item, .cg-search__input { transition: none !important; }
+        .cg-skel { animation: none; }
+        .cg-btn:active { transform: none; }
+      }
+
+      /* ============================================================
+         GALLERY CHROME (not part of the primitive system)
+         ============================================================ */
+      body { margin: 0; background: #e9eeeb; font-family: var(--cg-font); color: #17201b; }
+      .page { max-width: 1180px; margin: 0 auto; padding: 32px 24px 64px; }
+      h1 { font-size: 30px; font-weight: 680; letter-spacing: -0.02em; margin: 0 0 4px; }
+      .sub { color: #5c6b63; font-size: 14px; margin: 0 0 28px; max-width: 720px; line-height: 1.5; }
+      h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: #6a7a71; margin: 36px 0 12px; }
+      .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .panel { border-radius: 14px; padding: 18px; border: 1px solid rgba(20, 29, 24, 0.1); }
+      .panel--light { color-scheme: light; background: #f3f6f4; }
+      .panel--dark { color-scheme: dark; background: #141d18; }
+      .panel__tag { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.5; margin-bottom: 14px; }
+      .panel--dark .panel__tag { color: #9caaa3; }
+      .stack { display: flex; flex-direction: column; gap: 12px; }
+      .inline { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+      .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+      .sw { border-radius: 8px; padding: 10px; height: 56px; display: flex; align-items: flex-end; font-size: 10px; font-weight: 600; border: 1px solid rgba(0,0,0,0.06); }
+      .ramp > div { display: flex; align-items: baseline; gap: 12px; padding: 4px 0; }
+      .ramp .lbl { width: 90px; font-size: 11px; color: #8a988f; font-variant-numeric: tabular-nums; }
+      .scale { display: flex; align-items: flex-end; gap: 8px; }
+      .scale .bar { background: #2f6b5a; border-radius: 3px; width: 22px; }
+      .scale .bar span { display: block; text-align: center; font-size: 10px; color: #8a988f; margin-top: 4px; }
+      /* device frames */
+      .frames { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
+      .frame { border-radius: 12px; overflow: hidden; box-shadow: 0 10px 30px rgba(20,29,24,0.18); border: 1px solid rgba(20,29,24,0.12); }
+      .frame--pane { color-scheme: dark; background: #1b2520; padding: 12px; }
+      .frame--dialog { color-scheme: dark; background: #141d18; }
+      .dlg-chrome { padding: 7px 14px; background: rgba(60,110,95,0.05); display: flex; }
+      .dlg-close { width: 22px; height: 22px; border-radius: 6px; border: 0; background: rgba(255,69,58,0.12); color: #ff453a; font-size: 14px; cursor: pointer; }
+      .dlg-top { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; padding: 13px 14px 11px; border-bottom: 1px solid rgba(143,173,159,0.12); }
+      .dlg-cmd { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; padding: 9px 14px; border-bottom: 1px solid rgba(143,173,159,0.1); background: rgba(60,110,95,0.04); }
+      .eyebrow { font-size: 11px; font-weight: 590; text-transform: uppercase; letter-spacing: 0.06em; }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <h1>Citegeist Design Primitives</h1>
+      <p class="sub">
+        One token + component layer for both surfaces — the embedded item pane (inherits Zotero's
+        theme) and the modal network dialog (owns a slate surface). Apple-HIG metrics, sage-on-slate
+        identity, theme-adaptive via <code>light-dark()</code>, WCAG AA, reduce-motion safe. Each block
+        is shown in light and dark.
+      </p>
+
+      <h2>Color roles</h2>
+      <div class="pair">
+        <div class="panel panel--light cg cx-embedded">
+          <div class="panel__tag">Light</div>
+          <div class="swatches">
+            <div class="sw" style="background: var(--cg-surface); color: var(--cg-text-primary)">Surface</div>
+            <div class="sw" style="background: var(--cg-surface-elevated); color: var(--cg-text-primary)">Elevated</div>
+            <div class="sw" style="background: var(--cg-sage-accent); color: var(--cg-on-accent)">Sage accent</div>
+            <div class="sw" style="background: var(--cg-sage-accent-strong); color: var(--cg-on-accent)">Sage strong</div>
+            <div class="sw" style="background: var(--cg-sage-tint-12); color: var(--cg-sage-accent)">Sage tint</div>
+            <div class="sw" style="background: var(--cg-amber-tint); color: var(--cg-amber-strong)">Amber (evidence)</div>
+            <div class="sw" style="background: var(--cg-danger-tint); color: var(--cg-danger)">Danger</div>
+          </div>
+        </div>
+        <div class="panel panel--dark cg cx-embedded">
+          <div class="panel__tag">Dark</div>
+          <div class="swatches">
+            <div class="sw" style="background: var(--cg-surface); color: var(--cg-text-primary)">Surface</div>
+            <div class="sw" style="background: var(--cg-surface-elevated); color: var(--cg-text-primary)">Elevated</div>
+            <div class="sw" style="background: var(--cg-sage-accent); color: var(--cg-on-accent)">Sage accent</div>
+            <div class="sw" style="background: var(--cg-sage-accent-strong); color: var(--cg-on-accent)">Sage strong</div>
+            <div class="sw" style="background: var(--cg-sage-tint-12); color: var(--cg-sage-accent)">Sage tint</div>
+            <div class="sw" style="background: var(--cg-amber-tint); color: var(--cg-amber-strong)">Amber (evidence)</div>
+            <div class="sw" style="background: var(--cg-danger-tint); color: var(--cg-danger)">Danger</div>
+          </div>
+        </div>
+      </div>
+
+      <h2>Spacing (4pt) · Radius · Type ramp</h2>
+      <div class="pair">
+        <div class="panel panel--light">
+          <div class="panel__tag">Scale</div>
+          <div class="scale" style="margin-bottom:18px">
+            <div><div class="bar" style="height:4px"></div><span>4</span></div>
+            <div><div class="bar" style="height:8px"></div><span>8</span></div>
+            <div><div class="bar" style="height:12px"></div><span>12</span></div>
+            <div><div class="bar" style="height:16px"></div><span>16</span></div>
+            <div><div class="bar" style="height:20px"></div><span>20</span></div>
+            <div><div class="bar" style="height:24px"></div><span>24</span></div>
+          </div>
+          <div class="inline">
+            <div style="width:48px;height:48px;background:#2f6b5a;border-radius:4px"></div>
+            <div style="width:48px;height:48px;background:#2f6b5a;border-radius:6px"></div>
+            <div style="width:48px;height:48px;background:#2f6b5a;border-radius:8px"></div>
+            <div style="width:48px;height:48px;background:#2f6b5a;border-radius:12px"></div>
+            <div style="width:48px;height:48px;background:#2f6b5a;border-radius:999px"></div>
+          </div>
+        </div>
+        <div class="panel panel--light cg cx-embedded ramp">
+          <div class="panel__tag">Type</div>
+          <div><span class="lbl">Display 28</span><span style="font-size:28px;font-weight:680;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">1,284</span></div>
+          <div><span class="lbl">Stat 22</span><span style="font-size:22px;font-weight:680;font-variant-numeric:tabular-nums">2.31</span></div>
+          <div><span class="lbl">Title 18</span><span style="font-size:18px;font-weight:680">Citing works</span></div>
+          <div><span class="lbl">Body 14</span><span style="font-size:14px">Field-weighted impact</span></div>
+          <div><span class="lbl">Subhead 13</span><span style="font-size:13px;font-weight:590">Confirm match</span></div>
+          <div><span class="lbl">Footnote 12</span><span style="font-size:12px">Journal of Marketing · 2024</span></div>
+          <div><span class="lbl">Caption 11</span><span style="font-size:11px;color:#63726a">85th percentile</span></div>
+          <div><span class="lbl">Caps 10</span><span style="font-size:10px;font-weight:590;letter-spacing:0.06em;text-transform:uppercase;color:#63726a">Cited by</span></div>
+        </div>
+      </div>
+
+      <h2>Controls — buttons · chips · toggle · segmented · search</h2>
+      <div class="pair">
+        <!-- repeated for light + dark -->
+        <div class="panel panel--light cg cx-embedded">
+          <div class="panel__tag">Light</div>
+          <div class="stack">
+            <div class="inline">
+              <button class="cg-btn cg-btn--filled">Confirm match</button>
+              <button class="cg-btn cg-btn--tinted">Fetch</button>
+              <button class="cg-btn cg-btn--plain">Not this paper</button>
+              <button class="cg-btn cg-btn--filled" disabled>Disabled</button>
+            </div>
+            <div class="inline">
+              <span class="cg-chip">Top 10%</span>
+              <span class="cg-chip cg-chip--amber">Top 1%</span>
+              <span class="cg-chip cg-chip--quiet">In library</span>
+              <span class="cg-chip">Strong · 94%</span>
+            </div>
+            <div class="inline">
+              <button class="cg-toggle" aria-checked="false"><span class="cg-switch"></span> Hide in library</button>
+              <button class="cg-toggle" aria-checked="true"><span class="cg-switch"></span> Hide in library</button>
+            </div>
+            <div class="inline">
+              <div class="cg-seg">
+                <button class="cg-seg__item" aria-selected="true">Cited by</button>
+                <button class="cg-seg__item" aria-selected="false">References</button>
+              </div>
+            </div>
+            <div class="cg-search" style="max-width:280px">
+              <span class="cg-search__icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.6"/><path d="M10.5 10.5 L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+              <input class="cg-search__input" placeholder="Search titles or authors" />
+            </div>
+          </div>
+        </div>
+        <div class="panel panel--dark cg cx-embedded">
+          <div class="panel__tag">Dark</div>
+          <div class="stack">
+            <div class="inline">
+              <button class="cg-btn cg-btn--filled">Confirm match</button>
+              <button class="cg-btn cg-btn--tinted">Fetch</button>
+              <button class="cg-btn cg-btn--plain">Not this paper</button>
+              <button class="cg-btn cg-btn--filled" disabled>Disabled</button>
+            </div>
+            <div class="inline">
+              <span class="cg-chip">Top 10%</span>
+              <span class="cg-chip cg-chip--amber">Top 1%</span>
+              <span class="cg-chip cg-chip--quiet">In library</span>
+              <span class="cg-chip">Strong · 94%</span>
+            </div>
+            <div class="inline">
+              <button class="cg-toggle" aria-checked="false"><span class="cg-switch"></span> Hide in library</button>
+              <button class="cg-toggle" aria-checked="true"><span class="cg-switch"></span> Hide in library</button>
+            </div>
+            <div class="inline">
+              <div class="cg-seg">
+                <button class="cg-seg__item" aria-selected="true">Cited by</button>
+                <button class="cg-seg__item" aria-selected="false">References</button>
+              </div>
+            </div>
+            <div class="cg-search" style="max-width:280px">
+              <span class="cg-search__icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.6"/><path d="M10.5 10.5 L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+              <input class="cg-search__input" placeholder="Search titles or authors" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h2>Composed — the item pane (embedded) &amp; the network dialog (modal)</h2>
+      <div class="frames">
+        <!-- Embedded pane -->
+        <div class="frame frame--pane cg cx-embedded" style="--cg-surface-elevated:#222e28">
+          <div class="eyebrow" style="color:#8a9a92">Citation Intelligence</div>
+          <div class="cg-stat-grid" style="margin:10px 0 12px">
+            <div class="cg-stat"><div class="cg-stat__value">1,284</div><div class="cg-stat__label">Citations</div></div>
+            <div class="cg-stat"><div class="cg-stat__value">2.31</div><div class="cg-stat__label">FWCI</div></div>
+            <div class="cg-stat"><div class="cg-stat__value">92<span style="font-size:12px">nd</span></div><div class="cg-stat__label">Pctile</div></div>
+          </div>
+          <div class="inline" style="margin-bottom:12px">
+            <span class="cg-chip cg-chip--amber">Top 1%</span>
+          </div>
+          <div class="inline">
+            <button class="cg-btn cg-btn--tinted" style="flex:1">View citing</button>
+            <button class="cg-btn cg-btn--plain" style="flex:1">References</button>
+          </div>
+          <div class="cg-card" style="margin-top:12px">
+            <div class="inline" style="justify-content:space-between;margin-bottom:6px">
+              <span class="eyebrow" style="color:#8a9a92">Possible match</span>
+              <span class="cg-chip">Strong · 94%</span>
+            </div>
+            <div style="font-size:11px;color:#9caaa3;margin-bottom:8px;line-height:1.45">No exact identifier — matched by title. Is this the right paper?</div>
+            <div class="cg-row__title">Brand love and relational signals</div>
+            <div class="cg-row__meta">Batra, Ahuvia &amp; Bagozzi · 2012 · ~1,284 citations</div>
+            <div class="inline" style="margin-top:10px">
+              <button class="cg-btn cg-btn--filled" style="flex:1">Confirm match</button>
+              <button class="cg-btn cg-btn--plain" style="flex:1">Not this paper</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Network dialog -->
+        <div class="frame frame--dialog cg cx-modal">
+          <div class="dlg-chrome"><button class="dlg-close">×</button></div>
+          <div class="dlg-top">
+            <div style="min-width:0">
+              <div class="eyebrow" style="color:#8a9a92">Citation Network</div>
+              <div style="font-size:13px;font-weight:650;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Consumer responses to brand love</div>
+              <div style="font-size:11px;color:#8a9a92;margin-top:3px">Batra, Ahuvia &amp; Bagozzi · Journal of Marketing · 2012</div>
+            </div>
+            <div class="cg-stat" style="min-width:74px;text-align:right;padding:6px 9px">
+              <div class="cg-stat__value" style="font-size:14px">1,284</div>
+              <div class="cg-stat__label">Cited by</div>
+            </div>
+          </div>
+          <div class="dlg-cmd">
+            <div class="cg-seg">
+              <button class="cg-seg__item" aria-selected="true">Cited by</button>
+              <button class="cg-seg__item" aria-selected="false">References</button>
+            </div>
+            <div class="cg-search">
+              <span class="cg-search__icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.6"/><path d="M10.5 10.5 L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+              <input class="cg-search__input" placeholder="Search titles or authors" />
+            </div>
+            <button class="cg-toggle" aria-checked="true"><span class="cg-switch"></span> Hide in library</button>
+          </div>
+          <div>
+            <div class="cg-row">
+              <div>
+                <div class="cg-row__title">Brand attachment and consumer relationships in digital markets</div>
+                <div class="cg-row__meta">Thomson, Kapoor &amp; Lee · Journal of Marketing · 2024</div>
+                <div class="inline" style="margin-top:6px"><span class="cg-chip cg-chip--quiet">Open Access</span></div>
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:flex-end;gap:7px">
+                <div class="cg-row__count">428</div>
+                <button class="cg-btn cg-btn--tinted" style="padding:5px 10px;font-size:11px">+ Add</button>
+              </div>
+            </div>
+            <div class="cg-row">
+              <div>
+                <div class="cg-row__title">Customer devotion, symbolic brands, and loyalty outcomes</div>
+                <div class="cg-row__meta">Alvarez &amp; Singh · Psychology &amp; Marketing · 2022</div>
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:flex-end;gap:7px">
+                <div class="cg-row__count">193</div>
+                <button class="cg-btn cg-btn--plain cg-btn--icon" style="padding:5px 10px;font-size:11px"><svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2 4.5C2 3.67 2.67 3 3.5 3H6l1.4 1.4H12.5C13.33 4.4 14 5.07 14 5.9V11.5C14 12.33 13.33 13 12.5 13H3.5C2.67 13 2 12.33 2 11.5V4.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>File</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h2>States — banner · skeleton · focus</h2>
+      <div class="pair">
+        <div class="panel panel--light cg cx-embedded">
+          <div class="panel__tag">Light</div>
+          <div class="stack">
+            <div class="cg-banner"><strong>One-time migration complete</strong>Your cached data moved into Citegeist's own database.</div>
+            <div class="cg-banner cg-banner--amber"><strong>Matched by title</strong>Confirm this is the right paper before relying on the metrics.</div>
+            <div class="stack" style="gap:6px"><div class="cg-skel" style="width:70%"></div><div class="cg-skel" style="width:45%"></div><div class="cg-skel" style="width:55%"></div></div>
+            <div class="eyebrow" style="color: var(--cg-text-tertiary); margin-top: 2px">Keyboard focus</div>
+            <div class="inline" style="row-gap: 14px">
+              <button class="cg-btn cg-btn--filled is-focus">Confirm match</button>
+              <div class="cg-search is-focus-demo" style="flex: 1; min-width: 180px">
+                <span class="cg-search__icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.6"/><path d="M10.5 10.5 L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+                <input class="cg-search__input is-focus" placeholder="Search titles or authors" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel panel--dark cg cx-embedded">
+          <div class="panel__tag">Dark</div>
+          <div class="stack">
+            <div class="cg-banner"><strong>One-time migration complete</strong>Your cached data moved into Citegeist's own database.</div>
+            <div class="cg-banner cg-banner--amber"><strong>Matched by title</strong>Confirm this is the right paper before relying on the metrics.</div>
+            <div class="stack" style="gap:6px"><div class="cg-skel" style="width:70%"></div><div class="cg-skel" style="width:45%"></div><div class="cg-skel" style="width:55%"></div></div>
+            <div class="eyebrow" style="color: var(--cg-text-tertiary); margin-top: 2px">Keyboard focus</div>
+            <div class="inline" style="row-gap: 14px">
+              <button class="cg-btn cg-btn--filled is-focus">Confirm match</button>
+              <div class="cg-search is-focus-demo" style="flex: 1; min-width: 180px">
+                <span class="cg-search__icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.6"/><path d="M10.5 10.5 L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+                <input class="cg-search__input is-focus" placeholder="Search titles or authors" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
