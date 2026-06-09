@@ -1,6 +1,6 @@
 # Citegeist — Open Issues
 
-> **Last Updated:** 2026-06-08 (v2.0.1 released; counts unchanged)
+> **Last Updated:** 2026-06-08 (v2.0.2 released; DEBT-004 closed — `isBookType` already deduped into `utils.ts`)
 
 ---
 
@@ -28,12 +28,6 @@ _None currently._
 ---
 
 ## P2 — Medium Priority
-
-### DEBT-004: `isBookType` duplicated in `citationColumn.ts` and `citationPane.ts`
-
-**Impact:** When book item types expand (bookChapter, encyclopediaArticle), whoever updates one file will miss the other and the suppression logic silently drifts.
-**Fix:** Extract to `src/modules/utils.ts` as `export function isBookType(item: _ZoteroTypes.Item): boolean`. Both modules already import from utils.
-**Found:** Session audit 2026-04-09 (/wiring 🟠)
 
 ### DEBT-005: `FetchResult` is not a proper discriminated union
 
@@ -88,3 +82,4 @@ _None currently._
 | DEBT-001  | Pane "no identifier" message missing ISBN                                       | Copy updated; `cg-no-doi` → `cg-no-identifier`                                                                         | 2026-04-09 |
 | DEBT-002  | `menu.ts` right-click guards check DOI only                                     | Both guards replaced with `extractIdentifier(item) !== null`                                                           | 2026-04-09 |
 | DEBT-003  | `bumpp` v9.x carries high-severity CVEs in `tar`                                | Upgraded to bumpp@10.4.1 + esbuild@0.28.0                                                                              | 2026-04-09 |
+| DEBT-004  | `isBookType` duplicated in two modules                                          | Extracted to `utils.ts`; `citationColumn.ts` + `citationPane.ts` both import it (confirmed deduped 2026-06-08)         | 2026-06-08 |
