@@ -29,6 +29,7 @@ import { normalizeDOI } from "./openalex";
 import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork } from "./citationNetwork";
 import { escapeHTML, logError, isBookType, toOrdinal } from "./utils";
+import { cgDesignTokens } from "./ui/tokens";
 
 /**
  * Per-item refresh in-flight set. Keyed by Zotero item ID so a refresh
@@ -174,39 +175,36 @@ export function registerCitationPane(pluginID: string): void {
       bodyXHTML: `
       <div id="citegeist-pane-root" xmlns="http://www.w3.org/1999/xhtml">
         <style>
+          ${cgDesignTokens("#citegeist-pane-root", { embedded: true })}
           /*
-           * Design tokens. All pane text colors flow from Zotero's CSS
-           * variables so dark/light theme switching works automatically.
-           * Accent colors define both light + dark values via the
-           * light-dark() CSS function (Firefox 128+, Zotero 9 ships on
-           * Firefox 128+); the function gracefully degrades to the first
-           * argument on older builds.
-           *
-           * Contrast targets: WCAG AA -- 4.5:1 for body text, 3:1 for
-           * large text (18px+ regular / 14px+ bold).
+           * Pane-local layer. Design tokens come from the canonical module
+           * (src/modules/ui/tokens.ts, which mirrors
+           * docs/design-system/citegeist-primitives.html). Embedded text colors
+           * flow from Zotero's --fill-* vars so dark/light theme switching is
+           * automatic. Below: thin compat aliases mapping the pane's legacy
+           * token names onto the canonical layer, plus the pane-local
+           * filled-button tokens.
            */
           #citegeist-pane-root {
-            /* Primary + secondary text — inherit Zotero theme */
-            --cg-text-primary: var(--fill-primary);
-            --cg-text-secondary: var(--fill-secondary);
-            /* Sage / green family — used for badges, links, secondary buttons */
-            --cg-sage-fg: light-dark(#2F6B5A, #8FAD9F);
-            --cg-sage-bg: light-dark(rgba(60, 110, 95, 0.08), rgba(143, 173, 159, 0.10));
-            --cg-sage-border: light-dark(rgba(60, 110, 95, 0.35), rgba(143, 173, 159, 0.35));
-            /* Primary action button — dark green works against both themes */
+            /* Sage family → canonical (badges, links, secondary buttons) */
+            --cg-sage-fg: var(--cg-sage-accent);
+            --cg-sage-bg: var(--cg-sage-tint-08);
+            --cg-sage-border: var(--cg-sage-tint-35);
+            /* Filled primary button: deliberately dark green in BOTH themes
+               (white text), distinct from the theme-adaptive sage accent so it
+               never resolves to pale-sage-on-white in dark. Pane-local. */
             --cg-primary-bg: #2F6B5A;
             --cg-primary-bg-hover: #245546;
             --cg-primary-fg: #ffffff;
-            /* Top-1% percentile + suggestion banner accent (warm amber) */
-            --cg-amber-fg: light-dark(#8B5A1A, #D4A84B);
-            --cg-amber-fg-strong: light-dark(#6F4715, #E0B458);
-            --cg-amber-bg: light-dark(rgba(168, 101, 26, 0.10), rgba(180, 130, 40, 0.15));
-            --cg-amber-border: light-dark(rgba(168, 101, 26, 0.30), rgba(180, 130, 40, 0.35));
+            /* Amber (evidence weight) → canonical; --cg-amber-border is canonical */
+            --cg-amber-fg: var(--cg-amber);
+            --cg-amber-fg-strong: var(--cg-amber-strong);
+            --cg-amber-bg: var(--cg-amber-tint);
 
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-family: var(--cg-font);
             font-feature-settings: 'kern' 1, 'liga' 1;
-            padding: 8px 12px 10px;
-            font-size: 12px;
+            padding: var(--cg-space-2) var(--cg-space-3) 10px;
+            font-size: var(--cg-size-footnote);
             line-height: 1.5;
             color: var(--cg-text-primary);
           }
