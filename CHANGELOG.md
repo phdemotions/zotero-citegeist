@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dark-mode tints in the citation network browser now render.** The dialog's
+  sage tint scale (used for panel backgrounds, hover states, borders, tab fills,
+  and badges) had a self-referential definition in its dark-theme branch, which
+  CSS treats as invalid — so those tints silently fell back to transparent.
+  They're defined correctly now, restoring the intended structure and depth in
+  dark mode.
+
+### Internal
+
+- Design tokens (spacing, radii, type scale, motion, the sage/amber/danger
+  color ramps) are consolidated into a single canonical module,
+  `src/modules/ui/tokens.ts`, that both the item pane and the network dialog
+  consume. Previously each surface defined its own near-duplicate set under
+  different names. Values mirror the design reference at
+  `docs/design-system/citegeist-primitives.html`. No visual change to the item
+  pane; the dialog change is the dark-mode tint fix above.
+
 ## [2.0.1] — 2026-06-08
 
 ### Fixed
