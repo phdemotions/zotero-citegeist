@@ -11,8 +11,8 @@
 | Attribute        | Value                                                                                   |
 | ---------------- | --------------------------------------------------------------------------------------- |
 | **Version**      | 2.0.2 (released 2026-06-08 — Zenodo concept DOI 10.5281/zenodo.19433716)                |
-| **Build Status** | Clean (351 tests passing, typecheck clean, lint clean, XPI ~92 KB)                      |
-| **Open Issues**  | P0: 0, P1: 0, P2: 2, P3: 2 (see ISSUES.md)                                              |
+| **Build Status** | Clean (354 tests passing, typecheck clean, lint clean, XPI ~92 KB)                      |
+| **Open Issues**  | P0: 0, P1: 0, P2: 1, P3: 2 (see ISSUES.md)                                              |
 | **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, Zotero 7.0.10–9, SQLite, Node 22          |
 | **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                                   |
 | **Distribution** | GitHub Releases → auto-update via `release` Release (self-maintaining); Zenodo-archived |
@@ -23,7 +23,11 @@
 
 _None — working tree clean on `main`; PR #50 merged. The next tagged release will publish the [Unreleased] CHANGELOG entry to users._
 
-**Merged to `main` 2026-06-10 (in [Unreleased], not yet tagged):** the citation-network browser now opens for **any** resolved identifier — DOI → PMID → arXiv → ISBN → confirmed title match — not just DOI, so "View Citing Works"/"View References" no longer dead-end on a "requires a DOI" alert (#50). The browser always queried OpenAlex by work id, so the DOI gate was an unnecessary limitation (an old audit's "genuinely needs a DOI" assumption was wrong). Resolution centralized in `canResolveWork`/`resolveWorkForItem`/`fetchWorkByIdentifier`; menu gating unified on `canResolveWork`. Hardened across four `ce-review` passes (correctness · adversarial · maintainability/perf/standards · security/api-contract) — zero P0–P2; added book-aware empty-state copy, menu/`getRow` hot-path perf, item-scoped resolve-error logging. Earlier the same session: static license badge + full README claim audit (#49 — fixed the stale device-sync FAQ, default-collection picker location, migration-backup path/retention). **Follow-up opened:** DEBT-007 — work-id-keyed dedup/filing — carved out to its own PR to keep #50 single-concern.
+**Merged to `main` 2026-06-10 (in [Unreleased], not yet tagged):** the citation-network browser now opens for **any** resolved identifier — DOI → PMID → arXiv → ISBN → confirmed title match — not just DOI, so "View Citing Works"/"View References" no longer dead-end on a "requires a DOI" alert (#50). The browser always queried OpenAlex by work id, so the DOI gate was an unnecessary limitation (an old audit's "genuinely needs a DOI" assumption was wrong). Resolution centralized in `canResolveWork`/`resolveWorkForItem`/`fetchWorkByIdentifier`; menu gating unified on `canResolveWork`. Hardened across four `ce-review` passes (correctness · adversarial · maintainability/perf/standards · security/api-contract) — zero P0–P2; added book-aware empty-state copy, menu/`getRow` hot-path perf, item-scoped resolve-error logging. Earlier the same session: static license badge + full README claim audit (#49 — fixed the stale device-sync FAQ, default-collection picker location, migration-backup path/retention).
+
+**Merged to `main` 2026-06-10 (DEBT-007, follow-up to #50):** keyed citation-network library-membership and collection filing on the OpenAlex work id instead of DOI (#52). Fixes two pre-existing bugs for DOI-less works (books, preprints): a prior-session library item no longer renders as "+ Add" → silent duplicate, and the "File" button no longer no-ops. New `getAllCachedOpenAlexIds()` + `existingWorkIds` for dedup; `resolveLibraryItem()` (createdItemIds → cached-work-id reverse lookup → DOI search) for filing.
+
+Also this session: closed issues moved to a machine-readable archive `docs/archive/issues-closed.jsonl` (#51).
 
 **Shipped 2026-06-08 (v2.0.2):** dark-mode citation-network tint fix — the dialog's sage-tint scale had a self-referential dark-theme arm (`light-dark(…, var(--cg-sage-tint-NN))`), invalid at computed-value time, so every dark-mode tint collapsed to transparent; now defined correctly. Design tokens (spacing, radii, type, motion, color ramps) consolidated into a canonical module `src/modules/ui/tokens.ts` that both the item pane and the network dialog consume; `docs/design-system/citegeist-primitives.html` added as the design reference (#45). Pane visually unchanged.
 
