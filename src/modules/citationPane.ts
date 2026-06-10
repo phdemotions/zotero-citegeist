@@ -415,7 +415,7 @@ export function registerCitationPane(pluginID: string): void {
             display: inline-block;
             margin-top: 8px;
             font-size: 11px;
-            color: var(--cg-sage-fg, #8FAD9F);
+            color: var(--cg-sage-accent);
             text-decoration: none;
           }
           #citegeist-pane-root .cg-match-verify:hover {

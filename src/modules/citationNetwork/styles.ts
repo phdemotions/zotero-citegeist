@@ -452,7 +452,7 @@ export function getDialogCSS(): string {
       font-size: 10px; color: transparent;
     }
     .cg-picker-option.checked .cg-picker-check {
-      background: var(--cg-sage-accent); border-color: var(--cg-sage-accent); color: #1A241E;
+      background: var(--cg-sage-accent); border-color: var(--cg-sage-accent); color: var(--cg-on-accent);
     }
     .cg-picker-chevron {
       width: 14px; height: 14px; flex-shrink: 0;
