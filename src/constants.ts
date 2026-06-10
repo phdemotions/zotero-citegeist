@@ -94,6 +94,13 @@ export const PREF_AUTO_FETCH = "extensions.zotero.citegeist.autoFetch";
 export const PREF_MAILTO = "extensions.zotero.citegeist.mailto";
 export const PREF_NETWORK_PAGE_SIZE = "extensions.zotero.citegeist.networkPageSize";
 
+/**
+ * Settings pane id — registered via `Zotero.PreferencePanes.register` and
+ * opened from the item pane's settings button via
+ * `Zotero.Utilities.Internal.openPreferences`.
+ */
+export const SETTINGS_PANE_ID = "citegeist-prefpane";
+
 // ── Title-based metadata matching ──
 /** Score threshold for high-confidence title match (data shown with ~ prefix). */
 export const TITLE_MATCH_HIGH_THRESHOLD = 0.92;

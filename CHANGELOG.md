@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A settings shortcut (gear) in the Citation Intelligence pane header** opens
+  Zotero → Settings → Citegeist directly — where the OpenAlex email and cache
+  settings live. Zotero hosts plugin settings in its Settings dialog, not the
+  Add-ons window, so this makes them easier to find.
+
 ### Changed
 
 - **The citation network browser now opens for any item Citegeist can identify,

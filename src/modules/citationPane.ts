@@ -30,6 +30,26 @@ import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork } from "./citationNetwork";
 import { escapeHTML, logError, isBookType, toOrdinal } from "./utils";
 import { cgDesignTokens } from "./ui/tokens";
+import { SETTINGS_PANE_ID } from "../constants";
+
+/**
+ * Open Zotero's Settings dialog directly to the Citegeist pane. Zotero hosts
+ * plugin preferences in the Settings dialog (not the Add-ons window), so this
+ * gives the item pane a one-click shortcut to where the email/cache settings
+ * actually live. `Zotero.Utilities.Internal.openPreferences` isn't in the
+ * typings, hence the cast.
+ */
+function openCitegeistSettings(): void {
+  try {
+    (
+      Zotero as unknown as {
+        Utilities: { Internal: { openPreferences(paneID: string): void } };
+      }
+    ).Utilities.Internal.openPreferences(SETTINGS_PANE_ID);
+  } catch (e) {
+    logError("openCitegeistSettings", e);
+  }
+}
 
 /**
  * Per-item refresh in-flight set. Keyed by Zotero item ID so a refresh
@@ -703,6 +723,12 @@ export function registerCitationPane(pluginID: string): void {
               refreshing.delete(item.id);
             }
           },
+        },
+        {
+          type: "citegeist-settings",
+          icon: "chrome://zotero/skin/16/universal/options.svg",
+          l10nID: "citegeist-pane-settings",
+          onClick: () => openCitegeistSettings(),
         },
       ],
     });
