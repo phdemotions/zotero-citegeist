@@ -15,11 +15,40 @@ import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../ut
 import {
   MAX_RENDERED_RESULTS,
   SURNAME_PREFIXES,
+  type NetworkMode,
   type NetworkSortKey,
   type NetworkState,
 } from "./types";
 import { getDefaultCollectionName } from "./actions";
 import { DEFAULT_NETWORK_PAGE_SIZE, PREF_NETWORK_PAGE_SIZE } from "../../constants";
+
+/**
+ * Inner HTML for the results empty-state. Pure (no DOM/state) so each branch —
+ * including the book-references special case — is unit-testable.
+ */
+export function emptyStateHTML(opts: {
+  mode: NetworkMode;
+  hasFilter: boolean;
+  hideInLibraryWithResults: boolean;
+  sourceWorkType?: string | null;
+}): string {
+  if (opts.hasFilter) {
+    return `<div class="cg-empty"><div class="cg-empty-title">No matches</div>Try a different search term</div>`;
+  }
+  if (opts.hideInLibraryWithResults) {
+    return `<div class="cg-empty"><div class="cg-empty-title">Nothing new here</div>Every ${opts.mode === "citing" ? "citing work" : "reference"} is already in your library. Turn off “Hide in library” to see them.</div>`;
+  }
+  if (
+    opts.mode === "references" &&
+    ["book", "book-chapter", "monograph"].includes(opts.sourceWorkType ?? "")
+  ) {
+    // OpenAlex rarely has a machine-readable reference list for books, so an
+    // empty list means "not indexed", not "this book cites nothing". Say so
+    // plainly rather than implying the book has no references.
+    return `<div class="cg-empty"><div class="cg-empty-title">No references found</div>OpenAlex doesn't index a reference list for most books, so none can be shown here.</div>`;
+  }
+  return `<div class="cg-empty"><div class="cg-empty-title">No results</div>This work has no ${opts.mode === "citing" ? "citing works" : "references"} in OpenAlex</div>`;
+}
 
 // ────────────────────────────────────────────────────────
 // Loading & rendering
@@ -242,15 +271,15 @@ export function renderResults(state: NetworkState, filter = ""): void {
   });
 
   if (results.length === 0 && !state.loading) {
-    let msg: string;
-    if (filter) {
-      msg = `<div class="cg-empty"><div class="cg-empty-title">No matches</div>Try a different search term</div>`;
-    } else if (state.hideInLibrary && state.results.length > 0) {
-      msg = `<div class="cg-empty"><div class="cg-empty-title">Nothing new here</div>Every ${state.mode === "citing" ? "citing work" : "reference"} is already in your library. Turn off “Hide in library” to see them.</div>`;
-    } else {
-      msg = `<div class="cg-empty"><div class="cg-empty-title">No results</div>This work has no ${state.mode === "citing" ? "citing works" : "references"} in OpenAlex</div>`;
-    }
-    safeInnerHTML(body, msg);
+    safeInnerHTML(
+      body,
+      emptyStateHTML({
+        mode: state.mode,
+        hasFilter: !!filter,
+        hideInLibraryWithResults: state.hideInLibrary && state.results.length > 0,
+        sourceWorkType: state.work.type,
+      }),
+    );
     return;
   }
 

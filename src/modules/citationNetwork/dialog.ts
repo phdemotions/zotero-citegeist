@@ -202,7 +202,7 @@ export async function showCitationNetwork(
     [work, existingDOIs] = await Promise.all([resolveWorkForItem(item), getExistingDOIs()]);
   } catch (e) {
     if (closedBeforeReady()) return;
-    logError("showCitationNetwork load", e);
+    logError(`showCitationNetwork load (item ${item.id}, ${mode})`, e);
     if (body) {
       const msg =
         e instanceof OpenAlexNetworkError
