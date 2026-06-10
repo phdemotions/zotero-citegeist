@@ -202,6 +202,7 @@ declare const Zotero: {
       libraryID: number,
       onlyTopLevel?: boolean,
     ): Promise<_ZoteroTypes.Item[]>;
+    getIDFromLibraryAndKey(libraryID: number, key: string): number | false;
   };
   Libraries: {
     userLibraryID: number;

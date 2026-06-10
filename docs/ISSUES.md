@@ -1,6 +1,6 @@
 # Citegeist — Open Issues
 
-> **Last Updated:** 2026-06-10 (any-identifier citation-network browser shipped #50; DEBT-006 dialog-gate closed; reconciled stale issues DEBT-005 + FEAT-TITLE as already-done; opened DEBT-007 for the carved-out work-id-keying follow-up; closed issues archived to `docs/archive/issues-closed.jsonl`)
+> **Last Updated:** 2026-06-10 (any-identifier citation-network browser shipped #50; DEBT-006 + DEBT-007 closed — work-id-keyed dedup/filing implemented; reconciled stale DEBT-005 + FEAT-TITLE; closed issues archived to `docs/archive/issues-closed.jsonl`)
 
 ---
 
@@ -10,7 +10,7 @@
 | ------------ | ---- |
 | P0 (Blocker) | 0    |
 | P1 (High)    | 0    |
-| P2 (Medium)  | 2    |
+| P2 (Medium)  | 1    |
 | P3 (Low)     | 2    |
 
 ---
@@ -28,12 +28,6 @@ _None currently._
 ---
 
 ## P2 — Medium Priority
-
-### DEBT-007: Citation-network membership + collection filing keyed on DOI, not work id
-
-**Impact:** The network browser detects "already in library" and files results into collections by DOI. For DOI-less works (common in ISBN-resolved book networks and preprints) a prior-session library item renders as "+ Add" — clicking it creates a silent duplicate — and the "File" button on a DOI-less just-added item silently no-ops. Pre-existing; widened by the any-identifier browser (#50) now letting books reach the dialog.
-**Fix:** Re-key membership/dedup on the OpenAlex work id (new `getAllCachedOpenAlexIds()` cache helper + `existingWorkIds` in `NetworkState`); locate items for filing via `state.createdItemIds`/work id rather than a DOI search. Design tradeoff: a cache-sourced work-id set can carry a rare orphan false-positive (strictly less bad than today's silent duplicate, and self-heals on GC).
-**Found:** ce-review adversarial pass 2026-06-10 — carved out of PR #50 to keep that PR single-concern. Spawned as a follow-up task.
 
 ### JOSS-001: Paper submission not yet filed
 

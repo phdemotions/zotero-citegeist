@@ -30,6 +30,8 @@ export { closeCache, initCache } from "./db";
 
 // ── Read ──
 export {
+  findCachedItemKeyByOpenAlexId,
+  getAllCachedOpenAlexIds,
   getCachedCitationCount,
   getCachedCountAndStaleness,
   getCachedData,

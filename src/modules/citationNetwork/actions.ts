@@ -63,10 +63,10 @@ export async function addItemToLibrary(
     invalidateColumnCache(item.id);
 
     const doi = work.doi?.replace("https://doi.org/", "")?.toLowerCase();
-    if (doi) {
-      state.existingDOIs.add(doi);
-      state.itemCollections.set(doi, new Set(collectionIds));
-    }
+    if (doi) state.existingDOIs.add(doi);
+    // Key collection tracking by work id (always present), not DOI — so a
+    // DOI-less item can still be filed after it's added.
+    state.itemCollections.set(workId, new Set(collectionIds));
 
     state.createdItemIds.set(workId, item.id);
 
@@ -172,10 +172,8 @@ export async function handleUndo(state: NetworkState, workId: string): Promise<v
 
   // Remove from tracking
   const doi = work.doi?.replace("https://doi.org/", "")?.toLowerCase();
-  if (doi) {
-    state.existingDOIs.delete(doi);
-    state.itemCollections.delete(doi);
-  }
+  if (doi) state.existingDOIs.delete(doi);
+  state.itemCollections.delete(workId);
   state.addedThisSession.delete(workId);
 
   updateRowButton(state, workId);
