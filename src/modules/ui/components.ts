@@ -81,6 +81,38 @@ export function cgComponents(scope: string): string {
     ${scope} .cg-chip--quiet { background: var(--cg-sage-tint-12); color: var(--cg-text-secondary); }
     ${scope} .cg-chip--danger { background: var(--cg-danger-tint); color: var(--cg-danger); }
 
+    /* ── Card surface (bordered, elevated) — mirrors the gallery. Container
+       only; the card's inner content keeps its surface-specific layout. ── */
+    ${scope} .cg-card {
+      border: 1px solid var(--cg-hairline);
+      border-radius: var(--cg-radius-lg);
+      background: var(--cg-surface-elevated);
+      padding: var(--cg-space-3);
+    }
+
+    /* ── Banner (inline note / prompt) — sage by default, amber variant. A
+       <strong> child becomes the banner's block heading. ── */
+    ${scope} .cg-banner {
+      border: 1px solid var(--cg-hairline);
+      border-radius: var(--cg-radius-md);
+      background: var(--cg-sage-tint-06);
+      color: var(--cg-text-secondary);
+      padding: 8px 10px;
+      font-size: var(--cg-size-caption);
+      line-height: 1.45;
+    }
+    ${scope} .cg-banner--amber { background: var(--cg-amber-tint); color: var(--cg-amber-strong); border-color: transparent; }
+    ${scope} .cg-banner strong { display: block; color: var(--cg-text-primary); font-weight: var(--cg-weight-semibold); margin-bottom: 2px; }
+
+    /* ── Eyebrow (small uppercase section label). ── */
+    ${scope} .cg-eyebrow {
+      font-size: var(--cg-size-caption2);
+      font-weight: var(--cg-weight-bold);
+      letter-spacing: var(--cg-track-caps);
+      text-transform: uppercase;
+      color: var(--cg-text-tertiary);
+    }
+
     @media (prefers-reduced-motion: reduce) {
       ${scope} .cg-btn { transition: none; }
       ${scope} .cg-btn:active { transform: none; }

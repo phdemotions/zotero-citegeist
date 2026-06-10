@@ -370,7 +370,7 @@ export function buildDialogHTML(title: string, sourceMetaLine: string): string {
     </div>
     <div class="cg-dialog-top">
       <div class="cg-header-text">
-        <div class="cg-dialog-eyebrow">Citation Network</div>
+        <div class="cg-eyebrow">Citation Network</div>
         <div class="cg-dialog-title" title="${escapeHTML(title)}">${escapeHTML(title)}</div>
         ${sourceMeta}
       </div>

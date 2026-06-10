@@ -78,11 +78,8 @@ export function getDialogCSS(): string {
       flex-shrink: 0;
     }
     .cg-header-text { min-width: 0; }
-    .cg-dialog-eyebrow {
-      font-size: 11px; font-weight: 600; color: var(--cg-text-tertiary);
-      text-transform: uppercase; letter-spacing: 0.06em;
-      font-family: var(--cg-font);
-    }
+    /* The dialog eyebrow uses the shared .cg-eyebrow primitive — see
+       src/modules/ui/components.ts. */
     .cg-dialog-title {
       font-size: 13px; font-weight: 650; color: var(--cg-text-primary);
       margin-top: 2px;
