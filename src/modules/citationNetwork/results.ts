@@ -143,17 +143,20 @@ function cleanDoi(work: OpenAlexWork): string | null {
 
 /**
  * Is this work already in the user's library? True when its DOI is in
- * `existingDOIs` OR it was added during this session. Mirrors the per-row
+ * `existingDOIs`, its OpenAlex work id is in `existingWorkIds` (so DOI-less
+ * items dedup too), OR it was added during this session. Mirrors the per-row
  * "In Library" badge logic in {@link renderResults}.
  */
 export function isWorkInLibrary(
   work: OpenAlexWork,
   existingDOIs: Set<string>,
+  existingWorkIds: Set<string>,
   addedThisSession: Set<string>,
 ): boolean {
   const doi = cleanDoi(work);
   if (doi && existingDOIs.has(doi)) return true;
-  return addedThisSession.has(shortWorkId(work));
+  const id = shortWorkId(work);
+  return existingWorkIds.has(id) || addedThisSession.has(id);
 }
 
 /**
@@ -177,6 +180,7 @@ function firstAuthorSortKey(work: OpenAlexWork): string {
 export interface NetworkSortContext {
   sortBy: NetworkSortKey;
   existingDOIs: Set<string>;
+  existingWorkIds: Set<string>;
   addedThisSession: Set<string>;
 }
 
@@ -217,8 +221,8 @@ export function compareNetworkWorks(
       return (a.display_name || a.title || "").localeCompare(b.display_name || b.title || "");
     }
     case "not-in-library": {
-      const ia = isWorkInLibrary(a, ctx.existingDOIs, ctx.addedThisSession);
-      const ib = isWorkInLibrary(b, ctx.existingDOIs, ctx.addedThisSession);
+      const ia = isWorkInLibrary(a, ctx.existingDOIs, ctx.existingWorkIds, ctx.addedThisSession);
+      const ib = isWorkInLibrary(b, ctx.existingDOIs, ctx.existingWorkIds, ctx.addedThisSession);
       if (ia !== ib) return ia ? 1 : -1; // not-in-library first
       return (b.cited_by_count || 0) - (a.cited_by_count || 0);
     }
@@ -255,7 +259,9 @@ export function getVisibleNetworkWorks(
   const trimmed = filter.trim().toLowerCase();
   if (trimmed) result = result.filter((w) => matchesFilter(w, trimmed));
   if (opts.hideInLibrary) {
-    result = result.filter((w) => !isWorkInLibrary(w, opts.existingDOIs, opts.addedThisSession));
+    result = result.filter(
+      (w) => !isWorkInLibrary(w, opts.existingDOIs, opts.existingWorkIds, opts.addedThisSession),
+    );
   }
   return [...result].sort((a, b) => compareNetworkWorks(a, b, opts));
 }
@@ -268,6 +274,7 @@ export function renderResults(state: NetworkState, filter = ""): void {
     sortBy: state.sortBy,
     hideInLibrary: state.hideInLibrary,
     existingDOIs: state.existingDOIs,
+    existingWorkIds: state.existingWorkIds,
     addedThisSession: state.addedThisSession,
   });
 
@@ -297,7 +304,9 @@ export function renderResults(state: NetworkState, filter = ""): void {
     const authors = formatAuthors(work.authorships);
     const source = getSourceName(work);
     const cleanDOI = work.doi ? work.doi.replace("https://doi.org/", "") : null;
-    const inLibrary = cleanDOI ? state.existingDOIs.has(cleanDOI.toLowerCase()) : false;
+    const inLibrary =
+      (cleanDOI ? state.existingDOIs.has(cleanDOI.toLowerCase()) : false) ||
+      state.existingWorkIds.has(workId);
     const titleText = work.display_name || work.title || "Untitled";
     const yearStr = work.publication_year ? String(work.publication_year) : "n.d.";
     const count = work.cited_by_count || 0;

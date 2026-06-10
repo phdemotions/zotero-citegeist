@@ -15,7 +15,7 @@
  */
 
 import { DEFAULT_CACHE_LIFETIME_DAYS, PREF_CACHE_LIFETIME_DAYS } from "../../constants";
-import { getRow } from "./db";
+import { getRow, mirrorSnapshot } from "./db";
 import {
   type AllMetrics,
   type CachedData,
@@ -138,6 +138,39 @@ export function getCachedCitationCount(item: CacheItemKey): number | null {
 
 export function getCachedOpenAlexId(item: CacheItemKey): string | null {
   return getRow(item.libraryID, item.key)?.open_alex_id ?? null;
+}
+
+/**
+ * All OpenAlex work ids Citegeist has cached (one per resolved library item).
+ * The citation-network browser uses this to mark results "in library" by work
+ * id, not just DOI — so DOI-less items (books, preprints) dedup correctly.
+ * Best-effort: sourced from the in-memory mirror, so a row orphaned by a
+ * since-deleted item can linger until GC, yielding a rare false positive
+ * (which only hides an "+ Add" button — strictly safer than a silent duplicate).
+ */
+export function getAllCachedOpenAlexIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const [, row] of mirrorSnapshot()) {
+    if (row.open_alex_id) ids.add(row.open_alex_id);
+  }
+  return ids;
+}
+
+/**
+ * Reverse lookup: the library item (by `libraryID` + `key`) whose cached
+ * OpenAlex work id matches `openAlexId`, or `null`. Lets the network browser
+ * file a DOI-less, already-in-library result into collections without a DOI
+ * search. Returns the first match (work ids are effectively unique per item).
+ */
+export function findCachedItemKeyByOpenAlexId(
+  openAlexId: string,
+): { libraryID: number; key: string } | null {
+  for (const [, row] of mirrorSnapshot()) {
+    if (row.open_alex_id === openAlexId) {
+      return { libraryID: row.library_id, key: row.item_key };
+    }
+  }
+  return null;
 }
 
 export function getCachedData(item: CacheItemKey): CachedData | null {

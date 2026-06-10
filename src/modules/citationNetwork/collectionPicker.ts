@@ -8,7 +8,73 @@
 
 import { escapeHTML, logError, safeInnerHTML } from "../utils";
 import type { CollectionNode, NetworkState } from "./types";
+import type { OpenAlexWork } from "../openalex";
+import { findCachedItemKeyByOpenAlexId } from "../cache";
 import { addItemToLibrary, updateAllAddButtons } from "./actions";
+
+/** Short OpenAlex work id (`W123`), stripped of the URL prefix. */
+function shortWorkId(work: OpenAlexWork): string {
+  return work.id.replace("https://openalex.org/", "");
+}
+
+/**
+ * Resolve the live Zotero item for a network result so its collections can be
+ * read or edited. Resolution order: the id tracked when the item was added
+ * this session → a cached-OpenAlex-id reverse lookup (covers prior-session
+ * library items, with or without a DOI) → a DOI search (legacy / not-yet-cached
+ * DOI items). Returns null when the work isn't in the library. The work id path
+ * is what lets DOI-less items (books, preprints) be filed at all.
+ */
+async function resolveLibraryItem(
+  state: NetworkState,
+  work: OpenAlexWork,
+): Promise<_ZoteroTypes.Item | null> {
+  const workId = shortWorkId(work);
+
+  const createdId = state.createdItemIds.get(workId);
+  if (createdId) {
+    const item = Zotero.Items.get(createdId);
+    if (item) return item;
+  }
+
+  const cached = findCachedItemKeyByOpenAlexId(workId);
+  if (cached) {
+    const id = Zotero.Items.getIDFromLibraryAndKey(cached.libraryID, cached.key);
+    if (id) {
+      const item = Zotero.Items.get(id);
+      if (item) return item;
+    }
+  }
+
+  const doi = work.doi?.replace("https://doi.org/", "");
+  if (doi) {
+    const s = new Zotero.Search();
+    s.libraryID = Zotero.Libraries.userLibraryID;
+    s.addCondition("DOI", "is", doi);
+    const ids = await s.search();
+    if (ids && ids.length > 0) {
+      const item = Zotero.Items.get(ids[0]);
+      if (item) return item;
+    }
+  }
+
+  return null;
+}
+
+/** Collections a network result's library item currently belongs to (empty if not found). */
+async function getItemCollectionsForWork(
+  state: NetworkState,
+  work: OpenAlexWork,
+): Promise<Set<number>> {
+  const cols = new Set<number>();
+  try {
+    const item = await resolveLibraryItem(state, work);
+    if (item) for (const colId of item.getCollections()) cols.add(colId);
+  } catch (e) {
+    logError("getItemCollectionsForWork", e);
+  }
+  return cols;
+}
 
 // ────────────────────────────────────────────────────────
 // Shared collection-option rendering
@@ -154,20 +220,20 @@ export async function toggleItemPicker(
   const work = state.results.find((w) => w.id.replace("https://openalex.org/", "") === workId);
   if (!work) return;
   const cleanDOI = work.doi?.replace("https://doi.org/", "")?.toLowerCase();
-  const inLibrary = cleanDOI ? state.existingDOIs.has(cleanDOI) : false;
+  const inLibrary =
+    (cleanDOI ? state.existingDOIs.has(cleanDOI) : false) || state.existingWorkIds.has(workId);
 
-  // Get current collections for this item
-  let currentCols = new Set<number>();
-  if (inLibrary && cleanDOI) {
-    const stored = state.itemCollections.get(cleanDOI);
-    if (stored) {
-      currentCols = new Set(stored);
-    } else {
-      currentCols = await getItemCollections(cleanDOI);
-      state.itemCollections.set(cleanDOI, currentCols);
-    }
+  // Current collections for this item, keyed by work id. Prefer the set we
+  // tracked when adding it this session; otherwise resolve from the library
+  // item (covers prior-session items, DOI-less included); otherwise defaults.
+  let currentCols: Set<number>;
+  const stored = state.itemCollections.get(workId);
+  if (stored) {
+    currentCols = new Set(stored);
+  } else if (inLibrary) {
+    currentCols = await getItemCollectionsForWork(state, work);
+    state.itemCollections.set(workId, currentCols);
   } else {
-    // New item — use defaults
     currentCols = new Set(state.defaultCollectionIds);
   }
 
@@ -405,37 +471,23 @@ export async function updateItemCollections(
 ): Promise<void> {
   const work = state.results.find((w) => w.id.replace("https://openalex.org/", "") === workId);
   if (!work) return;
-  const doi = work.doi?.replace("https://doi.org/", "")?.toLowerCase();
-  if (!doi) return;
 
   try {
-    // Find the Zotero item
-    const s = new Zotero.Search();
-    s.libraryID = Zotero.Libraries.userLibraryID;
-    s.addCondition("DOI", "is", work.doi!.replace("https://doi.org/", ""));
-    const ids = await s.search();
-    if (!ids || ids.length === 0) return;
-    const item = Zotero.Items.get(ids[0]);
+    // Resolve by work id (tracked add → cached reverse lookup → DOI search) so
+    // DOI-less items can be filed; the old DOI-only search silently no-op'd.
+    const item = await resolveLibraryItem(state, work);
     if (!item) return;
 
-    // Get current collections
     const currentCols = new Set<number>(item.getCollections());
-
-    // Add to new collections
     for (const colId of newCols) {
-      if (!currentCols.has(colId)) {
-        item.addToCollection(colId);
-      }
+      if (!currentCols.has(colId)) item.addToCollection(colId);
     }
-    // Remove from unchecked collections
     for (const colId of currentCols) {
-      if (!newCols.has(colId)) {
-        item.removeFromCollection(colId);
-      }
+      if (!newCols.has(colId)) item.removeFromCollection(colId);
     }
 
     await item.saveTx();
-    state.itemCollections.set(doi, new Set(newCols));
+    state.itemCollections.set(workId, new Set(newCols));
   } catch (e) {
     logError("updateItemCollections", e);
   }
@@ -511,27 +563,6 @@ export function buildCollectionTree(): CollectionNode[] {
     logError("buildCollectionTree", e);
   }
   return nodes;
-}
-
-export async function getItemCollections(doi: string): Promise<Set<number>> {
-  const cols = new Set<number>();
-  try {
-    const s = new Zotero.Search();
-    s.libraryID = Zotero.Libraries.userLibraryID;
-    s.addCondition("DOI", "is", doi);
-    const ids = await s.search();
-    if (ids && ids.length > 0) {
-      const item = Zotero.Items.get(ids[0]);
-      if (item) {
-        for (const colId of item.getCollections()) {
-          cols.add(colId);
-        }
-      }
-    }
-  } catch (e) {
-    logError("getItemCollections", e);
-  }
-  return cols;
 }
 
 /** Check if all ancestors of a collection node are expanded (data model). */

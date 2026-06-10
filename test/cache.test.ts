@@ -92,6 +92,8 @@ import {
   cacheWorkData,
   clearCache,
   confirmTitleMatch,
+  findCachedItemKeyByOpenAlexId,
+  getAllCachedOpenAlexIds,
   getCachedCitationCount,
   getCachedCountAndStaleness,
   getCachedData,
@@ -188,6 +190,21 @@ describe("cacheWorkData → read round-trip", () => {
     expect(d!.isTop1Percent).toBe(false);
     expect(d!.isRetracted).toBe(false);
     expect(d!.sourceId).toBe("S55");
+  });
+
+  it("getAllCachedOpenAlexIds returns every cached work id", async () => {
+    await cacheWorkData(mockItem("A"), makeWork({ id: "https://openalex.org/W123" }));
+    await cacheWorkData(mockItem("B"), makeWork({ id: "https://openalex.org/W456" }));
+    const ids = getAllCachedOpenAlexIds();
+    expect(ids.has("W123")).toBe(true);
+    expect(ids.has("W456")).toBe(true);
+    expect(ids.has("W999")).toBe(false);
+  });
+
+  it("findCachedItemKeyByOpenAlexId reverse-maps a work id to its library item", async () => {
+    await cacheWorkData(mockItem("A"), makeWork({ id: "https://openalex.org/W123" }));
+    expect(findCachedItemKeyByOpenAlexId("W123")).toEqual({ libraryID: 1, key: "A" });
+    expect(findCachedItemKeyByOpenAlexId("W404")).toBeNull();
   });
 
   it("populates getCachedMetrics", async () => {

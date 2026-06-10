@@ -17,6 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loads its citation network directly. The right-click menu entries are enabled
   on the same basis, so they no longer dead-end on an alert.
 
+### Fixed
+
+- **No more duplicate library items when adding a result without a DOI.** In the
+  citation network browser, a result already in your library but lacking a DOI
+  (common for books and preprints) used to show "+ Add" and create a second
+  copy when clicked. "Already in library" is now detected by the work's OpenAlex
+  id, not just its DOI.
+- **The "File" button now works for items added without a DOI.** Filing a
+  DOI-less result into collections previously did nothing; it now finds the
+  item by the id tracked when it was added (or its cached OpenAlex id) instead
+  of a DOI lookup.
+
 ## [2.0.2] — 2026-06-08
 
 ### Fixed

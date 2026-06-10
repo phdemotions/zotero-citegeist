@@ -15,6 +15,7 @@
  */
 
 import { resolveWorkForItem, canResolveWork } from "../citationService";
+import { getAllCachedOpenAlexIds } from "../cache";
 import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../utils";
 import { SEARCH_DEBOUNCE_MS, INFINITE_SCROLL_THRESHOLD_PX } from "../../constants";
 import type { NetworkMode, NetworkSortKey, NetworkState } from "./types";
@@ -262,6 +263,7 @@ export async function showCitationNetwork(
     sortBy: "citations",
     hideInLibrary: false,
     existingDOIs,
+    existingWorkIds: getAllCachedOpenAlexIds(),
     generation: 0,
     searchTimeout: null,
     defaultCollectionIds,

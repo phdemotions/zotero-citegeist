@@ -33,11 +33,13 @@ function titlesFor(
   works: OpenAlexWork[],
   existingDOIs = new Set<string>(),
   addedThisSession = new Set<string>(),
+  existingWorkIds = new Set<string>(),
 ): string[] {
   return getVisibleNetworkWorks(works, "", {
     sortBy,
     hideInLibrary: false,
     existingDOIs,
+    existingWorkIds,
     addedThisSession,
   }).map((w) => w.display_name);
 }
@@ -140,6 +142,7 @@ describe("getVisibleNetworkWorks filtering", () => {
     sortBy: "citations" as NetworkSortKey,
     hideInLibrary: false,
     existingDOIs: new Set<string>(),
+    existingWorkIds: new Set<string>(),
     addedThisSession: new Set<string>(),
     ...over,
   });
@@ -191,17 +194,22 @@ describe("getVisibleNetworkWorks filtering", () => {
 describe("isWorkInLibrary", () => {
   it("is true when the DOI is in existingDOIs (case-insensitive, prefix-stripped)", () => {
     const w = work({ id: "W1", doi: "https://doi.org/10.1/ABC" });
-    expect(isWorkInLibrary(w, new Set(["10.1/abc"]), new Set())).toBe(true);
+    expect(isWorkInLibrary(w, new Set(["10.1/abc"]), new Set(), new Set())).toBe(true);
+  });
+
+  it("is true when the work id is in existingWorkIds (DOI-less dedup)", () => {
+    const w = work({ id: "https://openalex.org/W7" }); // no DOI
+    expect(isWorkInLibrary(w, new Set(), new Set(["W7"]), new Set())).toBe(true);
   });
 
   it("is true when the short work id was added this session", () => {
     const w = work({ id: "https://openalex.org/W42" });
-    expect(isWorkInLibrary(w, new Set(), new Set(["W42"]))).toBe(true);
+    expect(isWorkInLibrary(w, new Set(), new Set(), new Set(["W42"]))).toBe(true);
   });
 
   it("is false otherwise", () => {
     const w = work({ id: "W1", doi: "https://doi.org/10.1/x" });
-    expect(isWorkInLibrary(w, new Set(["10.1/y"]), new Set(["W2"]))).toBe(false);
+    expect(isWorkInLibrary(w, new Set(["10.1/y"]), new Set(["W9"]), new Set(["W2"]))).toBe(false);
   });
 });
 
@@ -210,6 +218,7 @@ describe("compareNetworkWorks is a stable pure comparator", () => {
     const ctx: NetworkSortContext = {
       sortBy: "citations",
       existingDOIs: new Set(),
+      existingWorkIds: new Set(),
       addedThisSession: new Set(),
     };
     const a = work({ id: "W1", cited_by_count: 10 });

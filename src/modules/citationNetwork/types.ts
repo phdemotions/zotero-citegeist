@@ -74,6 +74,12 @@ export interface NetworkState {
   /** When true, results already in the user's library are hidden. */
   hideInLibrary: boolean;
   existingDOIs: Set<string>;
+  /**
+   * OpenAlex work ids already in the user's library (snapshot of the cache
+   * mirror at dialog open). Marks DOI-less results "in library" so they don't
+   * render as "+ Add" and create silent duplicates.
+   */
+  existingWorkIds: Set<string>;
   /** Incremented on tab switch to invalidate in-flight requests */
   generation: number;
   searchTimeout: ReturnType<typeof setTimeout> | null;
@@ -89,7 +95,7 @@ export interface NetworkState {
   undoTimers: Map<string, ReturnType<typeof setTimeout>>;
   /** Work IDs that were added this session (past undo window) */
   addedThisSession: Set<string>;
-  /** Map of item DOI → collection IDs it belongs to (for filing) */
+  /** Map of work ID → collection IDs it belongs to (for filing) */
   itemCollections: Map<string, Set<number>>;
   /** Map of work ID → Zotero item ID for undo tracking */
   createdItemIds: Map<string, number>;
