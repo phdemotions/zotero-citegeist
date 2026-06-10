@@ -31,7 +31,22 @@ import { showCitationNetwork } from "./citationNetwork";
 import { escapeHTML, logError, isBookType, toOrdinal } from "./utils";
 import { cgDesignTokens } from "./ui/tokens";
 import { cgComponents } from "./ui/components";
+import { resolveHostScheme } from "./ui/theme";
 import { SETTINGS_PANE_ID } from "../constants";
+
+/**
+ * Force `color-scheme` on the pane root to Zotero's actual theme — the same
+ * resolver the network dialog uses — so the pane's `light-dark()` tokens never
+ * diverge from the host when the OS appearance disagrees with Zotero's theme.
+ * Text already tracks Zotero via `--fill-*`; this keeps surfaces/tints/accents
+ * in lockstep too. Cheap and idempotent; safe to call on every render. See
+ * `ui/theme.ts`.
+ */
+function applyHostScheme(body: HTMLElement): void {
+  const root = body.querySelector<HTMLElement>("#citegeist-pane-root");
+  const win = root?.ownerDocument?.defaultView;
+  if (root && win) root.style.colorScheme = resolveHostScheme(win as Window);
+}
 
 /**
  * Open Zotero's Settings dialog directly to the Citegeist pane. Zotero hosts
@@ -503,6 +518,7 @@ export function registerCitationPane(pluginID: string): void {
         setEnabled(item.isRegularItem() && !item.deleted);
       },
       onRender: ({ body, item, setSectionSummary }) => {
+        applyHostScheme(body);
         const container = body.querySelector("#citegeist-content") as HTMLElement;
         if (!container) return;
 
@@ -528,6 +544,7 @@ export function registerCitationPane(pluginID: string): void {
         renderEmptyState(container, setSectionSummary, "loading");
       },
       onAsyncRender: async ({ body, item, setSectionSummary }) => {
+        applyHostScheme(body);
         const container = body.querySelector("#citegeist-content") as HTMLElement;
         if (!container) return;
 

@@ -29,6 +29,7 @@ import {
   updateDefaultCollectionLabel,
   buildCollectionTree,
 } from "./collectionPicker";
+import { resolveHostScheme } from "../ui/theme";
 
 export let activeDialog: HTMLElement | null = null;
 /**
@@ -103,6 +104,9 @@ export async function showCitationNetwork(
   const win = Zotero.getMainWindow();
   const doc = win.document;
   const parent = doc.body || doc.documentElement;
+  // Force the host (Zotero) theme so light-dark() tokens don't follow the OS.
+  const scheme = resolveHostScheme(win);
+  const isDark = scheme === "dark";
 
   const overlay = doc.createElementNS("http://www.w3.org/1999/xhtml", "div") as HTMLDivElement;
   overlay.id = "citegeist-network-overlay";
@@ -121,9 +125,12 @@ export async function showCitationNetwork(
     width: 780px; max-width: 90vw; max-height: 82vh;
     padding: 0; border: 1px solid rgba(128,128,128,0.1);
     border-radius: 12px;
-    /* Pre-stylesheet placeholder (slate, matching --cg-surface/--cg-text dark
-       arms); getDialogCSS() immediately overrides with the light-dark tokens. */
-    background: #141D18; color: #E7EEE9;
+    /* Force the host theme so light-dark() tokens resolve to Zotero's theme,
+       not the OS appearance, regardless of the main window's color-scheme. */
+    color-scheme: ${scheme};
+    /* Pre-stylesheet placeholder (matches the --cg-surface/--cg-text arms for
+       this theme); getDialogCSS() immediately takes over with the tokens. */
+    background: ${isDark ? "#141D18" : "#F8FAF9"}; color: ${isDark ? "#E7EEE9" : "#1A2820"};
     box-shadow: 0 20px 40px rgba(0,0,0,0.5), 0 0 1px rgba(128,128,128,0.1);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-size: 13px; line-height: 1.4;

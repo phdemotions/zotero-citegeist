@@ -13,8 +13,11 @@
  * whole plugin.
  *
  * `light-dark()` needs Firefox 128+ (Zotero 9 ships on it) and a `color-scheme`
- * on the surface; both surface roots set one. On older builds the function
- * degrades to its first (light) argument.
+ * on the surface. Both surface roots FORCE `color-scheme` to Zotero's actual
+ * theme at render time via `resolveHostScheme()` (ui/theme.ts) — never relying
+ * on the inherited value, which can follow the OS appearance even when Zotero
+ * is themed the opposite way. On older builds the function degrades to its
+ * first (light) argument.
  */
 
 export interface CgTokenOptions {
