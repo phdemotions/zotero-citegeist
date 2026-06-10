@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.3] — 2026-06-10
+
+### Added
+
+- **A settings shortcut (gear) in the Citation Intelligence pane header** opens
+  Zotero → Settings → Citegeist directly — where the OpenAlex email and cache
+  settings live. Zotero hosts plugin settings in its Settings dialog, not the
+  Add-ons window, so this makes them easier to find.
+
 ### Changed
 
 - **The citation network browser now opens for any item Citegeist can identify,
@@ -19,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The citation network browser now matches Zotero's light/dark theme.** When
+  your computer's appearance and Zotero's theme disagreed (for example, a Dark
+  desktop with Zotero set to Light), the browser window rendered in the wrong
+  theme — typically faint text on a dark panel while the rest of Zotero was
+  light. It now follows Zotero's actual theme in both directions.
+- **The Citegeist icon now appears in the item pane's section header and
+  sidenav.** It was blank because the icon relied on Zotero supplying a paint
+  color (`context-fill`), which Zotero 7 doesn't do for full-color item-pane
+  section icons; it now uses the self-colored mark.
 - **No more duplicate library items when adding a result without a DOI.** In the
   citation network browser, a result already in your library but lacking a DOI
   (common for books and preprints) used to show "+ Add" and create a second
@@ -28,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DOI-less result into collections previously did nothing; it now finds the
   item by the id tracked when it was added (or its cached OpenAlex id) instead
   of a DOI lookup.
+
+### Internal
+
+- **Shared component primitives.** The item pane's buttons now compose from a
+  single `.cg-btn` primitive (filled / tinted / plain, plus a compact size)
+  emitted by `src/modules/ui/components.ts` — the component-level companion to
+  the `tokens.ts` module — replacing per-surface bespoke button CSS.
+- **`color-scheme` is forced to Zotero's resolved theme** on both surfaces via
+  `src/modules/ui/theme.ts`, so `light-dark()` tokens track the host theme
+  instead of inheriting the OS appearance. (This is the mechanism behind the
+  light/dark fix above.)
 
 ## [2.0.2] — 2026-06-08
 
@@ -413,6 +442,7 @@ network browser got a thorough pass alongside it:
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[2.0.3]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/phdemotions/zotero-citegeist/compare/v1.3.0...v2.0.0

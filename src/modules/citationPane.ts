@@ -30,6 +30,42 @@ import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork } from "./citationNetwork";
 import { escapeHTML, logError, isBookType, toOrdinal } from "./utils";
 import { cgDesignTokens } from "./ui/tokens";
+import { cgComponents } from "./ui/components";
+import { resolveHostScheme } from "./ui/theme";
+import { SETTINGS_PANE_ID } from "../constants";
+
+/**
+ * Force `color-scheme` on the pane root to Zotero's actual theme — the same
+ * resolver the network dialog uses — so the pane's `light-dark()` tokens never
+ * diverge from the host when the OS appearance disagrees with Zotero's theme.
+ * Text already tracks Zotero via `--fill-*`; this keeps surfaces/tints/accents
+ * in lockstep too. Cheap and idempotent; safe to call on every render. See
+ * `ui/theme.ts`.
+ */
+function applyHostScheme(body: HTMLElement): void {
+  const root = body.querySelector<HTMLElement>("#citegeist-pane-root");
+  const win = root?.ownerDocument?.defaultView;
+  if (root && win) root.style.colorScheme = resolveHostScheme(win as Window);
+}
+
+/**
+ * Open Zotero's Settings dialog directly to the Citegeist pane. Zotero hosts
+ * plugin preferences in the Settings dialog (not the Add-ons window), so this
+ * gives the item pane a one-click shortcut to where the email/cache settings
+ * actually live. `Zotero.Utilities.Internal.openPreferences` isn't in the
+ * typings, hence the cast.
+ */
+function openCitegeistSettings(): void {
+  try {
+    (
+      Zotero as unknown as {
+        Utilities: { Internal: { openPreferences(paneID: string): void } };
+      }
+    ).Utilities.Internal.openPreferences(SETTINGS_PANE_ID);
+  } catch (e) {
+    logError("openCitegeistSettings", e);
+  }
+}
 
 /**
  * Per-item refresh in-flight set. Keyed by Zotero item ID so a refresh
@@ -166,16 +202,21 @@ export function registerCitationPane(pluginID: string): void {
       pluginID,
       header: {
         l10nID: "citegeist-pane-header",
-        icon: "chrome://citegeist/content/icons/icon-16.svg",
+        // Self-colored SVG (explicit sage), NOT the context-fill SVG: Zotero 7
+        // renders item-pane section icons without supplying a paint via
+        // -moz-context-properties, so a context-fill icon paints blank. An
+        // explicit-colored SVG renders regardless of the icon treatment.
+        icon: "chrome://citegeist/content/icons/icon-20-color.svg",
       },
       sidenav: {
         l10nID: "citegeist-pane-sidenav",
-        icon: "chrome://citegeist/content/icons/icon-20.svg",
+        icon: "chrome://citegeist/content/icons/icon-20-color.svg",
       },
       bodyXHTML: `
       <div id="citegeist-pane-root" xmlns="http://www.w3.org/1999/xhtml">
         <style>
           ${cgDesignTokens("#citegeist-pane-root", { embedded: true })}
+          ${cgComponents("#citegeist-pane-root")}
           /*
            * Pane-local layer. Design tokens come from the canonical module
            * (src/modules/ui/tokens.ts, which mirrors
@@ -209,7 +250,7 @@ export function registerCitationPane(pluginID: string): void {
             color: var(--cg-text-primary);
           }
           .cg-loading {
-            color: var(--fill-secondary);
+            color: var(--cg-text-secondary);
             display: flex;
             align-items: center;
             gap: 8px;
@@ -218,8 +259,8 @@ export function registerCitationPane(pluginID: string): void {
           .cg-loading::before {
             content: "";
             width: 12px; height: 12px;
-            border: 2px solid var(--fill-quinary, #ddd);
-            border-top-color: var(--accent-blue40, #8FAD9F);
+            border: 2px solid var(--cg-sage-tint-15);
+            border-top-color: var(--cg-sage-accent);
             border-radius: 50%;
             animation: cg-spin 0.8s linear infinite;
             flex-shrink: 0;
@@ -230,14 +271,14 @@ export function registerCitationPane(pluginID: string): void {
           @media (prefers-reduced-motion: reduce) {
             .cg-loading::before { animation-duration: 0.001ms !important; }
           }
-          .cg-no-identifier { color: var(--fill-secondary); padding: 4px 0; }
+          .cg-no-identifier { color: var(--cg-text-secondary); padding: 4px 0; }
 
           .cg-retracted {
-            background: var(--accent-red5, #fee);
-            border: 1px solid var(--accent-red20, #fcc);
+            background: var(--cg-danger-tint);
+            border: 1px solid var(--cg-danger-tint-strong);
             border-radius: 4px;
             padding: 5px 8px;
-            color: var(--accent-red, #c00);
+            color: var(--cg-danger);
             font-weight: 600;
             font-size: 11px;
             margin-bottom: 8px;
@@ -254,25 +295,25 @@ export function registerCitationPane(pluginID: string): void {
             font-size: 24px;
             font-weight: 800;
             letter-spacing: -0.8px;
-            color: var(--fill-primary);
+            color: var(--cg-text-primary);
             font-variant-numeric: tabular-nums;
           }
           .cg-headline-label {
             font-size: 12px;
-            color: var(--fill-secondary);
+            color: var(--cg-text-secondary);
             margin-right: 6px;
           }
           .cg-headline-sep {
-            color: var(--fill-quinary, #ccc);
+            color: var(--cg-text-tertiary);
             margin: 0 2px;
             font-size: 10px;
           }
           .cg-headline-detail {
             font-size: 11px;
-            color: var(--fill-secondary);
+            color: var(--cg-text-secondary);
           }
           .cg-headline-detail strong {
-            color: var(--fill-primary);
+            color: var(--cg-text-primary);
             font-weight: 600;
           }
 
@@ -335,58 +376,13 @@ export function registerCitationPane(pluginID: string): void {
             margin-left: 0;
           }
 
-          #citegeist-pane-root .cg-actions {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 12px;
-          }
-          #citegeist-pane-root .cg-action-btn {
-            flex: 1;
-            padding: 14px 12px;
-            border: 1px solid var(--cg-sage-border);
-            border-radius: 8px;
-            background: var(--cg-sage-bg);
-            color: var(--cg-sage-fg);
-            font-size: 13px;
-            font-weight: 600;
-            font-family: inherit;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            text-decoration: none;
-            -moz-user-select: none;
-            user-select: none;
-            line-height: 1.4;
-            transition: background 0.12s, border-color 0.12s, color 0.12s;
-          }
-          #citegeist-pane-root .cg-action-btn:focus-visible {
-            outline: 2px solid var(--cg-sage-fg);
-            outline-offset: 2px;
-          }
-          #citegeist-pane-root .cg-action-btn:hover {
-            background: light-dark(rgba(60, 110, 95, 0.16), rgba(143, 173, 159, 0.18));
-            border-color: var(--cg-sage-fg);
-            color: var(--cg-text-primary);
-          }
-          #citegeist-pane-root .cg-action-btn-primary {
-            background: var(--cg-primary-bg);
-            border-color: transparent;
-            color: var(--cg-primary-fg);
-            font-weight: 600;
-            font-size: 13px;
-          }
-          #citegeist-pane-root .cg-action-btn-primary:hover {
-            background: var(--cg-primary-bg-hover);
-            border-color: transparent;
-            color: var(--cg-primary-fg);
-          }
-
+          /* .cg-actions + .cg-btn (filled / tinted / plain / sm) now come from
+             cgComponents() — see src/modules/ui/components.ts. */
           .cg-trend {
-            border-top: 1px solid var(--fill-quinary, rgba(255,255,255,0.06));
+            border-top: 1px solid var(--cg-sage-tint-08);
             padding-top: 7px;
             font-size: 11px;
-            color: var(--fill-secondary, #8e8e93);
+            color: var(--cg-text-secondary);
             line-height: 1.4;
           }
 
@@ -409,37 +405,37 @@ export function registerCitationPane(pluginID: string): void {
             color: var(--cg-amber-fg-strong);
           }
           .cg-match-card {
-            border: 1px solid rgba(143,173,159,0.25);
-            border-radius: 8px;
-            padding: 10px 12px;
-            margin-bottom: 10px;
+            border: 1px solid var(--cg-sage-tint-25);
+            border-radius: var(--cg-radius-lg);
+            padding: var(--cg-space-4);
+            margin-bottom: var(--cg-space-3);
             font-size: 11px;
             line-height: 1.5;
           }
           .cg-match-card-title {
             font-weight: 600;
             font-size: 12px;
-            color: var(--fill-primary);
-            margin-bottom: 3px;
+            color: var(--cg-text-primary);
+            margin-bottom: var(--cg-space-1);
           }
           .cg-match-card-meta {
-            color: var(--fill-secondary, #8e8e93);
+            color: var(--cg-text-secondary);
             font-size: 11px;
-            margin-bottom: 2px;
+            margin-bottom: var(--cg-space-1);
           }
           .cg-match-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 8px;
-            margin-bottom: 6px;
+            gap: var(--cg-space-2);
+            margin-bottom: var(--cg-space-3);
           }
           .cg-match-eyebrow {
             font-size: 10px;
             font-weight: 700;
             letter-spacing: 0.05em;
             text-transform: uppercase;
-            color: var(--fill-secondary, #8e8e93);
+            color: var(--cg-text-secondary);
           }
           .cg-match-chip {
             font-size: 10px;
@@ -457,18 +453,14 @@ export function registerCitationPane(pluginID: string): void {
           .cg-match-prompt {
             font-size: 11px;
             line-height: 1.45;
-            color: var(--fill-secondary, #8e8e93);
-            margin-bottom: 8px;
+            color: var(--cg-text-secondary);
+            margin-bottom: var(--cg-space-3);
           }
           .cg-match-legend {
             font-size: 10px;
-            color: var(--fill-secondary, #8e8e93);
+            color: var(--cg-text-secondary);
             opacity: 0.85;
-            margin-bottom: 10px;
-          }
-          .cg-match-actions {
-            display: flex;
-            gap: 6px;
+            margin-bottom: var(--cg-space-3);
           }
           #citegeist-pane-root .cg-match-confirm:disabled,
           #citegeist-pane-root .cg-match-dismiss:disabled {
@@ -485,56 +477,22 @@ export function registerCitationPane(pluginID: string): void {
           #citegeist-pane-root .cg-match-verify:hover {
             text-decoration: underline;
           }
-          #citegeist-pane-root .cg-match-confirm {
-            flex: 1;
-            padding: 7px 10px;
-            background: var(--cg-primary-bg);
-            border: none;
-            border-radius: 6px;
-            color: var(--cg-primary-fg);
-            font-size: 12px;
-            font-weight: 600;
-            font-family: inherit;
-            cursor: pointer;
-          }
-          #citegeist-pane-root .cg-match-confirm:focus-visible {
-            outline: 2px solid var(--cg-sage-fg);
-            outline-offset: 2px;
-          }
-          #citegeist-pane-root .cg-match-confirm:hover {
-            background: var(--cg-primary-bg-hover);
-          }
-          #citegeist-pane-root .cg-match-dismiss {
-            flex: 1;
-            padding: 7px 10px;
-            background: transparent;
-            border: 1px solid var(--cg-sage-border);
-            border-radius: 6px;
-            color: var(--cg-text-secondary);
-            font-size: 12px;
-            font-family: inherit;
-            cursor: pointer;
-          }
-          #citegeist-pane-root .cg-match-dismiss:focus-visible {
-            outline: 2px solid var(--cg-sage-fg);
-            outline-offset: 2px;
-          }
-          #citegeist-pane-root .cg-match-dismiss:hover {
-            background: var(--cg-sage-bg);
-            color: var(--cg-text-primary);
-          }
+          /* Confirm / "Not this paper" reuse the shared .cg-btn / .cg-btn--filled /
+             .cg-btn--tinted primitives (assigned in renderSuggestion) so they
+             match the data view's buttons exactly. Only the :disabled hook above
+             is local to the suggestion card. */
           .cg-doi-prompt {
-            border: 1px solid rgba(143,173,159,0.25);
+            border: 1px solid var(--cg-sage-tint-25);
             border-radius: 6px;
             padding: 8px 10px;
             margin-top: 10px;
             font-size: 11px;
-            color: var(--fill-secondary, #8e8e93);
+            color: var(--cg-text-secondary);
             line-height: 1.45;
           }
           .cg-doi-prompt strong {
             display: block;
-            color: var(--fill-primary);
+            color: var(--cg-text-primary);
             font-size: 11px;
             margin-bottom: 4px;
           }
@@ -543,33 +501,8 @@ export function registerCitationPane(pluginID: string): void {
             gap: 6px;
             margin-top: 6px;
           }
-          #citegeist-pane-root .cg-doi-yes {
-            padding: 5px 10px;
-            background: var(--cg-sage-bg);
-            border: 1px solid var(--cg-sage-border);
-            border-radius: 5px;
-            color: var(--cg-sage-fg);
-            font-size: 11px;
-            font-weight: 600;
-            font-family: inherit;
-            cursor: pointer;
-          }
-          #citegeist-pane-root .cg-doi-yes:focus-visible {
-            outline: 2px solid var(--cg-sage-fg);
-            outline-offset: 2px;
-          }
-          #citegeist-pane-root .cg-doi-yes:hover {
-            background: light-dark(rgba(60, 110, 95, 0.16), rgba(143, 173, 159, 0.25));
-          }
-          #citegeist-pane-root .cg-doi-no {
-            padding: 5px 10px;
-            background: transparent;
-            border: none;
-            color: var(--fill-secondary, #8e8e93);
-            font-size: 11px;
-            font-family: inherit;
-            cursor: pointer;
-          }
+          /* DOI-prompt buttons use the shared .cg-btn--sm primitive
+             (assigned in renderDoiPrompt) — see ui/components.ts. */
         </style>
         <div id="citegeist-content"></div>
       </div>
@@ -585,6 +518,7 @@ export function registerCitationPane(pluginID: string): void {
         setEnabled(item.isRegularItem() && !item.deleted);
       },
       onRender: ({ body, item, setSectionSummary }) => {
+        applyHostScheme(body);
         const container = body.querySelector("#citegeist-content") as HTMLElement;
         if (!container) return;
 
@@ -610,6 +544,7 @@ export function registerCitationPane(pluginID: string): void {
         renderEmptyState(container, setSectionSummary, "loading");
       },
       onAsyncRender: async ({ body, item, setSectionSummary }) => {
+        applyHostScheme(body);
         const container = body.querySelector("#citegeist-content") as HTMLElement;
         if (!container) return;
 
@@ -704,6 +639,12 @@ export function registerCitationPane(pluginID: string): void {
             }
           },
         },
+        {
+          type: "citegeist-settings",
+          icon: "chrome://zotero/skin/16/universal/options.svg",
+          l10nID: "citegeist-pane-settings",
+          onClick: () => openCitegeistSettings(),
+        },
       ],
     });
   } catch (e) {
@@ -738,7 +679,7 @@ function renderDoiPrompt(container: HTMLElement, item: _ZoteroTypes.Item, doi: s
 
   const yesBtn = doc.createElement("button");
   yesBtn.type = "button";
-  yesBtn.className = "cg-doi-yes";
+  yesBtn.className = "cg-btn cg-btn--sm cg-btn--filled cg-doi-yes";
   yesBtn.textContent = "Add DOI";
   yesBtn.addEventListener("click", async () => {
     try {
@@ -752,7 +693,7 @@ function renderDoiPrompt(container: HTMLElement, item: _ZoteroTypes.Item, doi: s
 
   const noBtn = doc.createElement("button");
   noBtn.type = "button";
-  noBtn.className = "cg-doi-no";
+  noBtn.className = "cg-btn cg-btn--sm cg-btn--plain cg-doi-no";
   noBtn.textContent = "No thanks";
   noBtn.addEventListener("click", () => prompt.remove());
 
@@ -931,16 +872,18 @@ function renderSuggestion(
   legend.textContent = "~ estimated until you confirm";
   card.appendChild(legend);
 
-  // Primary / secondary actions.
+  // Primary / secondary actions — reuse the shared button primitives so the
+  // suggestion card matches the data view exactly (the cg-match-* classes are
+  // kept only as JS/`:disabled` hooks).
   const actions = doc.createElement("div");
-  actions.className = "cg-match-actions";
+  actions.className = "cg-actions";
   actions.appendChild(
-    makeGuardedButton("Confirm match", "cg-match-confirm", () =>
+    makeGuardedButton("Confirm match", "cg-btn cg-btn--filled cg-match-confirm", () =>
       onConfirm().catch((e) => logError("onConfirm", e)),
     ),
   );
   actions.appendChild(
-    makeGuardedButton("Not this paper", "cg-match-dismiss", () =>
+    makeGuardedButton("Not this paper", "cg-btn cg-btn--tinted cg-match-dismiss", () =>
       onDismiss().catch((e) => logError("onDismiss", e)),
     ),
   );
@@ -1054,7 +997,7 @@ function renderPane(
   ): HTMLButtonElement => {
     const btn = doc.createElement("button");
     btn.type = "button";
-    btn.className = "cg-action-btn" + (variant === "primary" ? " cg-action-btn-primary" : "");
+    btn.className = "cg-btn " + (variant === "primary" ? "cg-btn--filled" : "cg-btn--tinted");
     btn.textContent = label;
     btn.setAttribute("aria-label", ariaLabel);
     btn.addEventListener("click", () => {

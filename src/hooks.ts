@@ -9,7 +9,7 @@ import { registerMenus, unregisterMenus, setMenuPluginID } from "./modules/menu"
 import { clearSourceStatsCache } from "./modules/openalex";
 import { initCache, closeCache, migrateFromExtraV1, garbageCollectOrphans } from "./modules/cache";
 import { logError } from "./modules/utils";
-import { PREF_LAST_BACKUP_PATH } from "./constants";
+import { PREF_LAST_BACKUP_PATH, SETTINGS_PANE_ID } from "./constants";
 
 const FTL_LINK_ID = "citegeist-ftl-link";
 
@@ -93,6 +93,9 @@ export async function onStartup(data: PluginData): Promise<void> {
   // cache-independent UI, so it registers even when the cache failed.
   Zotero.PreferencePanes.register({
     pluginID,
+    // Explicit id so the item pane's settings button can deep-link here via
+    // Zotero.Utilities.Internal.openPreferences(SETTINGS_PANE_ID).
+    id: SETTINGS_PANE_ID,
     src: rootURI + "content/preferences.xhtml",
     label: "Citegeist",
     image: "chrome://citegeist/content/icons/icon-16.svg",

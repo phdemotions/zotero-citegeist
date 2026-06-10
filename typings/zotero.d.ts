@@ -266,6 +266,7 @@ declare const Zotero: {
   PreferencePanes: {
     register(options: {
       pluginID: string;
+      id?: string;
       src: string;
       label: string;
       image: string;

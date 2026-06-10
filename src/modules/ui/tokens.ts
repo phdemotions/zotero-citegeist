@@ -13,8 +13,11 @@
  * whole plugin.
  *
  * `light-dark()` needs Firefox 128+ (Zotero 9 ships on it) and a `color-scheme`
- * on the surface; both surface roots set one. On older builds the function
- * degrades to its first (light) argument.
+ * on the surface. Both surface roots FORCE `color-scheme` to Zotero's actual
+ * theme at render time via `resolveHostScheme()` (ui/theme.ts) — never relying
+ * on the inherited value, which can follow the OS appearance even when Zotero
+ * is themed the opposite way. On older builds the function degrades to its
+ * first (light) argument.
  */
 
 export interface CgTokenOptions {
@@ -126,6 +129,17 @@ export function cgDesignTokens(scope: string, opts: CgTokenOptions = {}): string
       --cg-sage-tint-25: light-dark(rgba(47, 107, 90, 0.25), rgba(143, 173, 159, 0.27));
       --cg-sage-tint-35: light-dark(rgba(47, 107, 90, 0.35), rgba(143, 173, 159, 0.35));
 
+      /* Hairline border (cards, rows, plain buttons) — mirrors the gallery. */
+      --cg-hairline: light-dark(rgba(60, 110, 95, 0.12), rgba(143, 173, 159, 0.12));
+
+      /* Fixed-green primary button — theme-AGNOSTIC on purpose: a pale-sage
+         accent on white would be illegible in dark mode, so the filled button
+         uses this deep green (white text) in BOTH schemes. Shared by the pane
+         and dialog primary buttons so the one green lives in one place. */
+      --cg-primary-bg: #2F6B5A;
+      --cg-primary-bg-hover: #245546;
+      --cg-primary-fg: #FFFFFF;
+
       /* ── Amber: evidence weight only (top-percentile, suggestion banner) ── */
       --cg-amber: light-dark(#8B5A1A, #D4A84B);
       --cg-amber-strong: light-dark(#6F4715, #E0B458);
@@ -137,6 +151,14 @@ export function cgDesignTokens(scope: string, opts: CgTokenOptions = {}): string
       --cg-danger-strong: light-dark(#A43020, #FF6961);
       --cg-danger-tint: light-dark(rgba(196, 64, 48, 0.10), rgba(255, 69, 58, 0.12));
       --cg-danger-tint-strong: light-dark(rgba(196, 64, 48, 0.18), rgba(255, 69, 58, 0.22));
+
+      /* ── Success: "added to library" / undo affordance. Dark arms preserve
+         the prior frozen #4A7D6B / rgba(74,125,107,…); light arms add the
+         proper deep-sage so light mode no longer shows the dark-arm green. ── */
+      --cg-success: light-dark(#2F6B5A, #4A7D6B);
+      --cg-success-tint: light-dark(rgba(47, 107, 90, 0.12), rgba(74, 125, 107, 0.12));
+      --cg-success-tint-strong: light-dark(rgba(47, 107, 90, 0.20), rgba(74, 125, 107, 0.20));
+      --cg-success-border: light-dark(rgba(47, 107, 90, 0.30), rgba(74, 125, 107, 0.30));
 
       /* ── Focus ring (instant, never animated) ── */
       --cg-focus-ring: var(--cg-sage-accent);

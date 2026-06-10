@@ -16,10 +16,12 @@
  */
 
 import { cgDesignTokens } from "../ui/tokens";
+import { cgComponents } from "../ui/components";
 
 export function getDialogCSS(): string {
   return `
     ${cgDesignTokens("#citegeist-network-dialog")}
+    ${cgComponents("#citegeist-network-dialog")}
 
     /* ── Dialog root: Slate palette — green-undertoned ── */
     /* Legacy dialog token names mapped onto the canonical layer. Quaternary
@@ -79,18 +81,18 @@ export function getDialogCSS(): string {
     .cg-dialog-eyebrow {
       font-size: 11px; font-weight: 600; color: var(--cg-text-tertiary);
       text-transform: uppercase; letter-spacing: 0.06em;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-dialog-title {
       font-size: 13px; font-weight: 650; color: var(--cg-text-primary);
       margin-top: 2px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-source-authors {
       font-size: 11px; color: var(--cg-text-tertiary); margin-top: 3px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-count-stack { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
     .cg-stat {
@@ -124,7 +126,7 @@ export function getDialogCSS(): string {
       cursor: pointer; border: none; background: transparent;
       color: var(--cg-text-secondary); border-radius: 5px;
       transition: background 0.15s, color 0.15s;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-tab.active { background: var(--cg-sage-tint-16); color: var(--cg-text-primary); }
     .cg-tab:hover:not(.active) { color: var(--cg-text-hover); }
@@ -140,10 +142,10 @@ export function getDialogCSS(): string {
       border-radius: 7px; font-size: 12px;
       background: var(--cg-sage-tint-06); color: var(--cg-text-primary); outline: none;
       transition: border-color 0.15s, box-shadow 0.15s;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-search-input:focus {
-      border-color: rgba(143,173,159,0.4);
+      border-color: var(--cg-sage-tint-35);
       box-shadow: 0 0 0 3px var(--cg-sage-accent-tint-12);
       background: var(--cg-sage-tint-08);
     }
@@ -156,12 +158,12 @@ export function getDialogCSS(): string {
       background: var(--cg-sage-tint-06); color: var(--cg-text-secondary);
       font-size: 11px; font-weight: 600; cursor: pointer; white-space: nowrap;
       transition: background 0.12s, color 0.12s, border-color 0.12s;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-hide-in-library:hover { color: var(--cg-text-hover); }
     .cg-hide-in-library:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 1px; }
     .cg-hide-in-library.cg-switch-on {
-      color: var(--cg-text-primary); border-color: rgba(143,173,159,0.4);
+      color: var(--cg-text-primary); border-color: var(--cg-sage-tint-35);
       background: var(--cg-sage-tint-16);
     }
     .cg-switch {
@@ -181,13 +183,13 @@ export function getDialogCSS(): string {
     .cg-sort-label {
       display: inline-flex; align-items: center; gap: 5px;
       font-size: 11px; color: var(--cg-text-tertiary); white-space: nowrap;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-sort-select {
       padding: 6px 8px; border: 1px solid var(--cg-sage-tint-15);
       border-radius: 7px; font-size: 11px;
       background: var(--cg-sage-tint-06); color: var(--cg-text-hover); cursor: pointer;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-sort-select:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 1px; }
     @media (max-width: 600px) {
@@ -212,7 +214,7 @@ export function getDialogCSS(): string {
     .cg-result-title {
       font-size: 13px; font-weight: 500; line-height: 1.4;
       margin-bottom: 3px; color: var(--cg-text-primary);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-result-title a {
       color: var(--cg-text-primary); text-decoration: none;
@@ -227,7 +229,7 @@ export function getDialogCSS(): string {
     }
     .cg-result-meta {
       font-size: 11px; color: var(--cg-text-secondary); line-height: 1.4;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-result-meta-authors {
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -240,7 +242,7 @@ export function getDialogCSS(): string {
     .cg-result-badge {
       font-size: 10px; padding: 1px 7px; border-radius: 4px;
       font-weight: 600; letter-spacing: 0.1px;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-badge-oa { background: var(--cg-sage-accent-tint-12); color: var(--cg-sage-accent); }
     .cg-badge-retracted { background: var(--cg-red-bg); color: var(--cg-red-fg); }
@@ -256,7 +258,7 @@ export function getDialogCSS(): string {
       font-size: 15px; font-weight: 700;
       font-variant-numeric: tabular-nums; letter-spacing: -0.3px;
       font-feature-settings: 'kern' 1, 'tnum' 1;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-count-high { color: var(--cg-sage-accent); font-weight: 800; }
     .cg-count-medium { color: var(--cg-text-primary); }
@@ -269,37 +271,37 @@ export function getDialogCSS(): string {
       border: 1px solid var(--cg-sage-accent-tint-25);
       font-size: 11px; font-weight: 500;
       transition: border-color 0.12s;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-split-btn > .cg-split-main:first-child { border-radius: 6px 0 0 6px; }
     .cg-split-btn > .cg-split-arrow:last-of-type { border-radius: 0 6px 6px 0; }
-    .cg-split-btn:hover { border-color: rgba(143,173,159,0.4); }
+    .cg-split-btn:hover { border-color: var(--cg-sage-tint-35); }
     .cg-split-main {
-      padding: 5px 11px; background: rgba(143,173,159,0.13); color: var(--cg-sage-accent);
+      padding: 5px 11px; background: var(--cg-sage-tint-12); color: var(--cg-sage-accent);
       border: none; cursor: pointer; min-height: 26px;
       white-space: nowrap; max-width: 180px;
       overflow: hidden; text-overflow: ellipsis;
       transition: background 0.12s;
     }
-    .cg-split-main:hover { background: rgba(143,173,159,0.21); }
+    .cg-split-main:hover { background: var(--cg-sage-tint-20); }
     .cg-split-main:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: -2px; }
     .cg-split-arrow {
-      padding: 5px 7px; background: rgba(143,173,159,0.10); color: var(--cg-sage-accent);
-      border: none; border-left: 1px solid rgba(143,173,159,0.22);
+      padding: 5px 7px; background: var(--cg-sage-tint-10); color: var(--cg-sage-accent);
+      border: none; border-left: 1px solid var(--cg-sage-tint-22);
       cursor: pointer; font-size: 9px; min-height: 26px;
       display: flex; align-items: center;
       transition: background 0.12s;
     }
-    .cg-split-arrow:hover { background: rgba(143,173,159,0.21); }
+    .cg-split-arrow:hover { background: var(--cg-sage-tint-20); }
     .cg-split-arrow:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: -2px; }
 
     /* Added state */
-    .cg-split-btn.cg-state-added { border-color: rgba(74,125,107,0.3); }
+    .cg-split-btn.cg-state-added { border-color: var(--cg-success-border); }
     .cg-split-btn.cg-state-added .cg-split-main {
-      background: rgba(74,125,107,0.12); color: #4A7D6B;
+      background: var(--cg-success-tint); color: var(--cg-success);
     }
     .cg-split-btn.cg-state-added .cg-split-main:hover {
-      background: rgba(74,125,107,0.20);
+      background: var(--cg-success-tint-strong);
     }
 
     /* File state (in library) */
@@ -321,7 +323,7 @@ export function getDialogCSS(): string {
     /* Adding spinner */
     .cg-spinner {
       display: inline-block; width: 12px; height: 12px;
-      border: 2px solid rgba(143,173,159,0.2);
+      border: 2px solid var(--cg-sage-tint-20);
       border-top-color: var(--cg-sage-accent); border-radius: 50%;
       animation: cg-spin 0.6s linear infinite;
       vertical-align: middle;
@@ -342,15 +344,15 @@ export function getDialogCSS(): string {
       font-size: 12px; line-height: 1.55; color: var(--cg-text-secondary);
       display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical;
       overflow: hidden;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-abstract-loading {
       font-size: 12px; color: var(--cg-text-tertiary); font-style: italic;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-abstract-none {
       font-size: 12px; color: var(--cg-text-quaternary); font-style: italic;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
 
     /* ── Expand affordance ── */
@@ -358,7 +360,7 @@ export function getDialogCSS(): string {
       font-size: 10px; color: var(--cg-text-quaternary);
       margin-top: 4px; cursor: pointer;
       transition: color 0.12s;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-result-item:hover .cg-expand-hint { color: var(--cg-text-secondary); }
     .cg-expand-chevron {
@@ -372,7 +374,7 @@ export function getDialogCSS(): string {
     /* ── Undo countdown bar ── */
     .cg-undo-bar {
       position: absolute; bottom: 0; left: 0; height: 2px;
-      background: #4A7D6B; border-radius: 0 0 6px 6px;
+      background: var(--cg-success); border-radius: 0 0 6px 6px;
       animation: cg-undo-shrink 8s linear forwards;
     }
     @keyframes cg-undo-shrink { from { width: 100%; } to { width: 0; } }
@@ -395,18 +397,11 @@ export function getDialogCSS(): string {
     /* Inline error banner shown under a row when Add fails (read-only
        library, network drop, validation throw). Auto-dismisses in 5s. */
     .cg-row-error {
-      margin-top: 6px; padding: 6px 10px; border-radius: 6px;
-      background: rgba(196, 64, 48, 0.10);
-      color: #C44030; font-size: 12px; line-height: 1.4;
-      border: 1px solid rgba(196, 64, 48, 0.30);
+      margin-top: 6px; padding: 6px 10px; border-radius: var(--cg-radius-md);
+      background: var(--cg-danger-tint);
+      color: var(--cg-danger); font-size: 12px; line-height: 1.4;
+      border: 1px solid var(--cg-danger-tint-strong);
       role: alert;
-    }
-    @media (prefers-color-scheme: dark) {
-      .cg-row-error {
-        background: rgba(220, 90, 70, 0.18);
-        color: #FFB8AC;
-        border-color: rgba(220, 90, 70, 0.40);
-      }
     }
 
     /* ── Skeleton loading ── */
@@ -434,7 +429,7 @@ export function getDialogCSS(): string {
       position: absolute; right: 0; top: calc(100% + 4px);
       width: 270px; max-height: 300px;
       display: flex; flex-direction: column;
-      background: var(--material-background, #1A241E); border: 1px solid rgba(56,104,87,0.2);
+      background: var(--cg-surface-elevated); border: 1px solid var(--cg-sage-tint-20);
       border-radius: 10px;
       box-shadow: 0 12px 40px rgba(14,22,18,0.6);
       z-index: 20;
@@ -455,14 +450,14 @@ export function getDialogCSS(): string {
       cursor: pointer; border: none; background: transparent;
       width: 100%; text-align: left;
       transition: background 0.1s;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-picker-option:hover { background: var(--cg-sage-tint-08); }
     .cg-picker-option:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: -2px; }
     .cg-picker-option[hidden] { display: none; }
     .cg-picker-check {
       width: 14px; height: 14px; flex-shrink: 0;
-      border: 1.5px solid rgba(56,104,87,0.25); border-radius: 3px;
+      border: 1.5px solid var(--cg-sage-tint-25); border-radius: 3px;
       display: flex; align-items: center; justify-content: center;
       font-size: 10px; color: transparent;
     }
@@ -488,14 +483,14 @@ export function getDialogCSS(): string {
       display: flex; justify-content: flex-end; padding: 6px 12px;
       border-top: 1px solid var(--cg-sage-tint-10);
       flex-shrink: 0;
-      background: var(--material-background, #1A241E);
+      background: var(--cg-surface-elevated);
       border-radius: 0 0 10px 10px;
     }
     .cg-picker-done {
       padding: 5px 16px; border-radius: 6px; font-size: 11px; font-weight: 600;
       background: #2F6B5A; color: #FFFFFF; border: none; cursor: pointer;
       transition: background 0.12s;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-picker-done:hover { background: #245546; }
     .cg-picker-done:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 2px; }
@@ -510,14 +505,14 @@ export function getDialogCSS(): string {
     }
     .cg-footer-info {
       font-size: 11px; color: var(--cg-text-tertiary);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-footer-right {
       display: flex; align-items: center; gap: 8px;
     }
     .cg-footer-label {
       font-size: 11px; color: var(--cg-text-tertiary);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-default-chip {
       display: inline-flex; align-items: center; gap: 5px;
@@ -526,7 +521,7 @@ export function getDialogCSS(): string {
       border: 1px solid var(--cg-sage-tint-15);
       cursor: pointer; white-space: nowrap; max-width: 200px;
       transition: background 0.12s;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-default-chip:hover { background: var(--cg-sage-tint-12); }
     .cg-default-chip:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 1px; }
@@ -538,7 +533,7 @@ export function getDialogCSS(): string {
       position: absolute; bottom: calc(100% + 6px); right: 0;
       width: 270px; max-height: 300px;
       display: flex; flex-direction: column;
-      background: var(--material-background, #1A241E); border: 1px solid rgba(56,104,87,0.2);
+      background: var(--cg-surface-elevated); border: 1px solid var(--cg-sage-tint-20);
       border-radius: 10px;
       box-shadow: 0 12px 40px rgba(14,22,18,0.6);
       z-index: 20;
@@ -549,12 +544,12 @@ export function getDialogCSS(): string {
     /* ── States ── */
     .cg-loading-more {
       text-align: center; padding: 20px; font-size: 12px; color: var(--cg-text-quaternary);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-empty {
       text-align: center; padding: 48px 24px;
       color: var(--cg-text-tertiary); font-size: 13px; line-height: 1.5;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
     .cg-empty-title {
       font-size: 14px; font-weight: 600; color: var(--cg-text-secondary); margin-bottom: 4px;
@@ -563,7 +558,7 @@ export function getDialogCSS(): string {
       text-align: center; padding: 8px 14px; font-size: 11px;
       color: var(--cg-text-quaternary); background: rgba(56,104,87,0.03);
       border-top: 1px solid var(--cg-sage-tint-06);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--cg-font);
     }
 
     /* Respect the user's OS-level Reduce Motion preference. Collapses
