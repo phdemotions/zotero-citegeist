@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Citegeist icon now appears in the item pane's section header and
+  sidenav.** It was blank because the icon relied on Zotero supplying a paint
+  color (`context-fill`), which Zotero 7 doesn't do for full-color item-pane
+  section icons; it now uses the self-colored mark.
 - **No more duplicate library items when adding a result without a DOI.** In the
   citation network browser, a result already in your library but lacking a DOI
   (common for books and preprints) used to show "+ Add" and create a second

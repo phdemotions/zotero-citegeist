@@ -186,11 +186,14 @@ export function registerCitationPane(pluginID: string): void {
       pluginID,
       header: {
         l10nID: "citegeist-pane-header",
-        icon: "chrome://citegeist/content/icons/icon-16.svg",
+        // Self-colored PNG, not the context-fill SVG: Zotero 7 renders item-pane
+        // section icons as full-color images (it does NOT supply a paint via
+        // -moz-context-properties here), so a context-fill icon paints blank.
+        icon: "chrome://citegeist/content/icons/icon-32-color.png",
       },
       sidenav: {
         l10nID: "citegeist-pane-sidenav",
-        icon: "chrome://citegeist/content/icons/icon-20.svg",
+        icon: "chrome://citegeist/content/icons/icon-32-color.png",
       },
       bodyXHTML: `
       <div id="citegeist-pane-root" xmlns="http://www.w3.org/1999/xhtml">
