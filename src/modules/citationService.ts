@@ -8,6 +8,7 @@
  *   3. arXiv ID     — "arXiv: 2205.01833" line in Extra field
  *   4. arXiv ID     — item.getField("archiveID") (Zotero preprint field)
  *   5. arXiv ID     — arxiv.org URL in item.getField("url")
+ *   6. ISBN         — item.getField("ISBN") (books, book sections)
  */
 
 import {
@@ -122,8 +123,8 @@ export function extractIdentifier(item: _ZoteroTypes.Item): ItemIdentifier | nul
  * OpenAlex work — i.e. the item has a user-confirmed title-match id, or any
  * recognized identifier (DOI / PMID / arXiv / ISBN).
  *
- * This is the single predicate the menu, pane, and dialog all gate on, so the
- * "View citing works / references" affordance is not offered for an item with
+ * This is the single predicate the menu and citation-network dialog gate on, so
+ * the "View citing works / references" affordance is not offered for an item with
  * no recognized identifier. (Previously the menu gated on `extractIdentifier`
  * while the dialog hard-required a DOI, so a PMID/arXiv/ISBN-only item showed
  * an enabled menu entry that dead-ended on a "no DOI" alert.) One residual

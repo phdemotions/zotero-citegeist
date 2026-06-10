@@ -308,7 +308,14 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
         l10nID: "citegeist-menu-fetch",
         icon: "chrome://citegeist/content/icons/icon-16.svg",
         onShowing: (_e, ctx) =>
-          ctx.setVisible((ctx.items ?? []).some(canResolveWork) || eligibleSelectedCount() > 0),
+          // Use the supplied context items when present; only fall back to the
+          // pane selection when ctx omits them — avoids a second eligibility
+          // pass when ctx.items is present but all-ineligible.
+          ctx.setVisible(
+            ctx.items && ctx.items.length > 0
+              ? ctx.items.some(canResolveWork)
+              : eligibleSelectedCount() > 0,
+          ),
         onCommand: () => {
           runFetchSelected(Zotero.getMainWindow()).catch((e) => logError("menu fetch", e));
         },
@@ -423,11 +430,15 @@ function registerViaDOM(win: Window): void {
     // and hide Fetch when no selected items are eligible — a no-op click looked
     // like the feature was broken.
     itemMenu.addEventListener("popupshowing", () => {
-      const eligibleCount = eligibleSelectedCount();
+      // Materialize the selection once and reuse it for every gate — the
+      // getSelectedItems() call and the canResolveWork pass are the only
+      // non-trivial cost here, and "select all → right-click" can make the
+      // selection large.
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
+      const eligibleCount = items.filter(canResolveWork).length;
       fetchItem.hidden = eligibleCount === 0;
       sep.hidden = eligibleCount === 0 && items.length !== 1;
-      const singleResolvable = singleSelectedResolvable();
+      const singleResolvable = items.length === 1 && eligibleCount === 1;
       citingItem.hidden = !singleResolvable;
       refsItem.hidden = !singleResolvable;
     });

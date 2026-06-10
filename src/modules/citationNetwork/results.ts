@@ -20,7 +20,11 @@ import {
   type NetworkState,
 } from "./types";
 import { getDefaultCollectionName } from "./actions";
-import { DEFAULT_NETWORK_PAGE_SIZE, PREF_NETWORK_PAGE_SIZE } from "../../constants";
+import {
+  DEFAULT_NETWORK_PAGE_SIZE,
+  OPENALEX_BOOK_WORK_TYPES,
+  PREF_NETWORK_PAGE_SIZE,
+} from "../../constants";
 
 /**
  * Inner HTML for the results empty-state. Pure (no DOM/state) so each branch —
@@ -38,10 +42,7 @@ export function emptyStateHTML(opts: {
   if (opts.hideInLibraryWithResults) {
     return `<div class="cg-empty"><div class="cg-empty-title">Nothing new here</div>Every ${opts.mode === "citing" ? "citing work" : "reference"} is already in your library. Turn off “Hide in library” to see them.</div>`;
   }
-  if (
-    opts.mode === "references" &&
-    ["book", "book-chapter", "monograph"].includes(opts.sourceWorkType ?? "")
-  ) {
+  if (opts.mode === "references" && OPENALEX_BOOK_WORK_TYPES.includes(opts.sourceWorkType ?? "")) {
     // OpenAlex rarely has a machine-readable reference list for books, so an
     // empty list means "not indexed", not "this book cites nothing". Say so
     // plainly rather than implying the book has no references.

@@ -10,9 +10,6 @@ import { FakeDocument, makeItem, flushAsync } from "./_helpers/menuHarness";
 
 const mocks = vi.hoisted(() => ({
   fetchAndCacheItems: vi.fn(async () => ({ fresh: 1, cached: 0, suggestion: 0, errors: 0 })),
-  extractIdentifier: vi.fn((item: { hasIdentifier?: boolean }) =>
-    item.hasIdentifier !== false ? { type: "doi", value: "10.1/test" } : null,
-  ),
   canResolveWork: vi.fn(
     (item: { isRegularItem?: () => boolean; hasIdentifier?: boolean }) =>
       item.isRegularItem?.() !== false && item.hasIdentifier !== false,
@@ -23,7 +20,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../src/modules/citationService", () => ({
   fetchAndCacheItems: mocks.fetchAndCacheItems,
-  extractIdentifier: mocks.extractIdentifier,
   canResolveWork: mocks.canResolveWork,
 }));
 vi.mock("../src/modules/citationColumn", () => ({
