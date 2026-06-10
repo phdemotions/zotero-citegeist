@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The citation network browser now matches Zotero's light/dark theme.** When
+  your computer's appearance and Zotero's theme disagreed (for example, a Dark
+  desktop with Zotero set to Light), the browser window rendered in the wrong
+  theme — typically faint text on a dark panel while the rest of Zotero was
+  light. It now follows Zotero's actual theme in both directions.
 - **The Citegeist icon now appears in the item pane's section header and
   sidenav.** It was blank because the icon relied on Zotero supplying a paint
   color (`context-fill`), which Zotero 7 doesn't do for full-color item-pane
@@ -41,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DOI-less result into collections previously did nothing; it now finds the
   item by the id tracked when it was added (or its cached OpenAlex id) instead
   of a DOI lookup.
+
+### Internal
+
+- **Shared component primitives.** The item pane's buttons now compose from a
+  single `.cg-btn` primitive (filled / tinted / plain, plus a compact size)
+  emitted by `src/modules/ui/components.ts` — the component-level companion to
+  the `tokens.ts` module — replacing per-surface bespoke button CSS.
+- **`color-scheme` is forced to Zotero's resolved theme** on both surfaces via
+  `src/modules/ui/theme.ts`, so `light-dark()` tokens track the host theme
+  instead of inheriting the OS appearance. (This is the mechanism behind the
+  light/dark fix above.)
 
 ## [2.0.2] — 2026-06-08
 
