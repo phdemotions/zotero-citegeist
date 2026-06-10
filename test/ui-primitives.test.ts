@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { cgComponents } from "../src/modules/ui/components";
 import { cgDesignTokens } from "../src/modules/ui/tokens";
@@ -58,5 +60,29 @@ describe("cgDesignTokens", () => {
     // host theme, so it stays a consistent slate regardless of host.
     expect(modal).toContain("--cg-text-primary");
     expect(modal).not.toContain("var(--fill-primary)");
+  });
+});
+
+/**
+ * Gallery ↔ code parity. `src/modules/ui/components.ts` is the CANONICAL source
+ * for the component primitives; `docs/design-system/citegeist-primitives.html`
+ * is the illustrative reference. This guards against the reference silently
+ * falling behind the code — every primitive class the app actually ships must
+ * be documented in the gallery, so a new primitive can't be added without also
+ * showing it in the spec.
+ */
+describe("gallery documents every shipped primitive", () => {
+  it("every .cg-* class emitted by cgComponents appears in the gallery", () => {
+    // Strip CSS comments first so class names mentioned in prose (e.g. a
+    // comment referencing a surface's layout class) aren't mistaken for
+    // emitted selectors.
+    const selectorsOnly = cgComponents(SCOPE).replace(/\/\*[\s\S]*?\*\//g, "");
+    const emitted = new Set([...selectorsOnly.matchAll(/\.(cg-[a-z0-9-]+)/g)].map((m) => m[1]));
+    const galleryPath = fileURLToPath(
+      new URL("../docs/design-system/citegeist-primitives.html", import.meta.url),
+    );
+    const gallery = readFileSync(galleryPath, "utf8");
+    const missing = [...emitted].filter((cls) => !gallery.includes(cls)).sort();
+    expect(missing).toEqual([]);
   });
 });

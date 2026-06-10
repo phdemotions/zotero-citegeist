@@ -6,11 +6,15 @@
     <title>Citegeist Design Primitives</title>
     <style>
       /* ============================================================
-         CITEGEIST DESIGN PRIMITIVES — canonical token + component layer
+         CITEGEIST DESIGN PRIMITIVES — illustrative reference
          ------------------------------------------------------------
-         One source of truth for both Citegeist surfaces:
+         The CANONICAL primitives ship from code — tokens.ts (cgDesignTokens)
+         and components.ts (cgComponents) under src/modules/ui/. This gallery
+         mirrors them for both Citegeist surfaces:
            • the embedded item pane  (#citegeist-pane-root)   — inherits Zotero theme
            • the modal network dialog (#citegeist-network-dialog) — owns a slate surface
+         test/ui-primitives.test.ts enforces that every shipped primitive class
+         is documented here.
          Aligned to Apple HIG metrics (SF type ramp, 4pt spacing, 6/8px control
          radii, iOS state transitions) and Zotero standards (theme-driven where
          embedded, light-dark() with hardcoded fallbacks, WCAG AA, reduce-motion).
@@ -85,6 +89,12 @@
         /* Foreground for filled-accent surfaces: white on the dark-green light
            accent, dark slate on the pale dark-mode accent (WCAG AA both ways). */
         --cg-on-accent: light-dark(#ffffff, #11201a);
+
+        /* Fixed-green primary button — theme-agnostic (white text in BOTH
+           schemes; the pale-sage accent would be illegible on white in dark). */
+        --cg-primary-bg: #2f6b5a;
+        --cg-primary-bg-hover: #245546;
+        --cg-primary-fg: #ffffff;
         --cg-sage-tint-06: light-dark(rgba(47, 107, 90, 0.06), rgba(143, 173, 159, 0.08));
         --cg-sage-tint-12: light-dark(rgba(47, 107, 90, 0.12), rgba(143, 173, 159, 0.14));
         --cg-sage-tint-20: light-dark(rgba(47, 107, 90, 0.2), rgba(143, 173, 159, 0.22));
@@ -132,43 +142,48 @@
         line-height: 1.45;
       }
 
-      /* Buttons — HIG filled / tinted / plain. Min 28px hit target. */
+      /* Buttons — filled / tinted / plain (+ compact --sm). Mirrors
+         src/modules/ui/components.ts (the canonical source). The action row
+         (.cg-actions) makes stacked buttons equal-width. */
       .cg-btn {
         font-family: inherit;
         font-size: var(--cg-size-subhead);
         font-weight: var(--cg-weight-semibold);
-        min-height: 28px;
-        padding: 6px 14px;
-        border-radius: var(--cg-radius-md);
+        padding: 14px var(--cg-space-3);
         border: 1px solid transparent;
+        border-radius: var(--cg-radius-lg);
         cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        user-select: none;
+        line-height: 1.4;
         transition: background var(--cg-dur-fast) var(--cg-ease),
-          transform var(--cg-dur-fast) var(--cg-ease), color var(--cg-dur-fast) var(--cg-ease);
+          border-color var(--cg-dur-fast) var(--cg-ease),
+          color var(--cg-dur-fast) var(--cg-ease), transform var(--cg-dur-fast) var(--cg-ease);
       }
       .cg-btn:active { transform: scale(var(--cg-press)); }
-      /* Inline leading icon inside a button — monochrome, inherits text color
-         (no emoji; keeps the single-accent, HIG-restrained look). */
+      .cg-btn:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 2px; }
+      .cg-btn:disabled { opacity: 0.55; cursor: default; transform: none; }
+      .cg-btn--filled { background: var(--cg-primary-bg); color: var(--cg-primary-fg); border-color: transparent; }
+      .cg-btn--filled:hover { background: var(--cg-primary-bg-hover); color: var(--cg-primary-fg); }
+      .cg-btn--tinted { background: var(--cg-sage-tint-08); color: var(--cg-sage-accent); border-color: var(--cg-sage-tint-35); }
+      .cg-btn--tinted:hover { background: var(--cg-sage-tint-20); border-color: var(--cg-sage-accent); color: var(--cg-text-primary); }
+      .cg-btn--plain { background: transparent; color: var(--cg-text-secondary); border-color: var(--cg-hairline); }
+      .cg-btn--plain:hover { color: var(--cg-text-primary); background: var(--cg-sage-tint-06); }
+      .cg-btn--sm { padding: var(--cg-space-1) var(--cg-space-3); font-size: var(--cg-size-caption); border-radius: var(--cg-radius-md); }
+      .cg-actions { display: flex; gap: var(--cg-space-2); }
+      .cg-actions > .cg-btn { flex: 1; }
+      /* Documentation-only demo helpers (NOT part of the primitive): an inline
+         leading icon, and statically-rendered focus rings for the gallery. */
       .cg-btn--icon { display: inline-flex; align-items: center; gap: 5px; }
       .cg-btn--icon svg { width: 12px; height: 12px; flex-shrink: 0; }
-      .cg-btn:focus-visible { outline: none; box-shadow: var(--cg-focus); }
-      /* Documentation-only: render the keyboard focus ring statically so the
-         gallery can SHOW it (real focus uses :focus-visible above). */
-      .cg-btn.is-focus { outline: none; box-shadow: var(--cg-focus); }
+      .cg-btn.is-focus { outline: 2px solid var(--cg-sage-accent); outline-offset: 2px; }
       .cg-search__input.is-focus {
         border-color: var(--cg-sage-accent);
         box-shadow: 0 0 0 3px var(--cg-sage-tint-12);
       }
-      .cg-btn--filled { background: var(--cg-sage-accent); color: var(--cg-on-accent); }
-      .cg-btn--filled:hover { background: var(--cg-sage-accent-strong); }
-      .cg-btn--tinted { background: var(--cg-sage-tint-12); color: var(--cg-sage-accent); }
-      .cg-btn--tinted:hover { background: var(--cg-sage-tint-20); }
-      .cg-btn--plain {
-        background: transparent;
-        color: var(--cg-text-secondary);
-        border-color: var(--cg-hairline);
-      }
-      .cg-btn--plain:hover { color: var(--cg-text-primary); background: var(--cg-sage-tint-06); }
-      .cg-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
 
       /* Chip / badge — pill, caps caption */
       .cg-chip {
@@ -186,6 +201,7 @@
       }
       .cg-chip--amber { background: var(--cg-amber-tint); color: var(--cg-amber-strong); }
       .cg-chip--quiet { background: var(--cg-sage-tint-12); color: var(--cg-text-secondary); }
+      .cg-chip--danger { background: var(--cg-danger-tint); color: var(--cg-danger); }
 
       /* Stat tile — equal-weight metric grid */
       .cg-stat-grid {
@@ -358,6 +374,15 @@
       }
       .cg-banner--amber { background: var(--cg-amber-tint); color: var(--cg-amber-strong); border-color: transparent; }
       .cg-banner strong { display: block; color: var(--cg-text-primary); font-weight: var(--cg-weight-semibold); margin-bottom: 2px; }
+
+      /* Eyebrow — small uppercase section label */
+      .cg-eyebrow {
+        font-size: var(--cg-size-caption2);
+        font-weight: var(--cg-weight-bold);
+        letter-spacing: var(--cg-track-caps);
+        text-transform: uppercase;
+        color: var(--cg-text-tertiary);
+      }
 
       /* Skeleton */
       .cg-skel {
