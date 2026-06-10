@@ -30,6 +30,7 @@ import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork } from "./citationNetwork";
 import { escapeHTML, logError, isBookType, toOrdinal } from "./utils";
 import { cgDesignTokens } from "./ui/tokens";
+import { cgComponents } from "./ui/components";
 import { SETTINGS_PANE_ID } from "../constants";
 
 /**
@@ -200,6 +201,7 @@ export function registerCitationPane(pluginID: string): void {
       <div id="citegeist-pane-root" xmlns="http://www.w3.org/1999/xhtml">
         <style>
           ${cgDesignTokens("#citegeist-pane-root", { embedded: true })}
+          ${cgComponents("#citegeist-pane-root")}
           /*
            * Pane-local layer. Design tokens come from the canonical module
            * (src/modules/ui/tokens.ts, which mirrors
@@ -359,53 +361,8 @@ export function registerCitationPane(pluginID: string): void {
             margin-left: 0;
           }
 
-          #citegeist-pane-root .cg-actions {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 12px;
-          }
-          #citegeist-pane-root .cg-action-btn {
-            flex: 1;
-            padding: 14px 12px;
-            border: 1px solid var(--cg-sage-border);
-            border-radius: 8px;
-            background: var(--cg-sage-bg);
-            color: var(--cg-sage-fg);
-            font-size: 13px;
-            font-weight: 600;
-            font-family: inherit;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            text-decoration: none;
-            -moz-user-select: none;
-            user-select: none;
-            line-height: 1.4;
-            transition: background 0.12s, border-color 0.12s, color 0.12s;
-          }
-          #citegeist-pane-root .cg-action-btn:focus-visible {
-            outline: 2px solid var(--cg-sage-fg);
-            outline-offset: 2px;
-          }
-          #citegeist-pane-root .cg-action-btn:hover {
-            background: light-dark(rgba(60, 110, 95, 0.16), rgba(143, 173, 159, 0.18));
-            border-color: var(--cg-sage-fg);
-            color: var(--cg-text-primary);
-          }
-          #citegeist-pane-root .cg-action-btn-primary {
-            background: var(--cg-primary-bg);
-            border-color: transparent;
-            color: var(--cg-primary-fg);
-            font-weight: 600;
-            font-size: 13px;
-          }
-          #citegeist-pane-root .cg-action-btn-primary:hover {
-            background: var(--cg-primary-bg-hover);
-            border-color: transparent;
-            color: var(--cg-primary-fg);
-          }
-
+          /* .cg-actions + .cg-btn (filled / tinted / plain / sm) now come from
+             cgComponents() — see src/modules/ui/components.ts. */
           .cg-trend {
             border-top: 1px solid var(--cg-sage-tint-08);
             padding-top: 7px;
@@ -505,10 +462,10 @@ export function registerCitationPane(pluginID: string): void {
           #citegeist-pane-root .cg-match-verify:hover {
             text-decoration: underline;
           }
-          /* Confirm / "Not this paper" reuse the shared .cg-action-btn /
-             .cg-action-btn-primary primitives (assigned in renderSuggestion) so
-             they match the data view's buttons exactly. Only the :disabled hook
-             above is local to the suggestion card. */
+          /* Confirm / "Not this paper" reuse the shared .cg-btn / .cg-btn--filled /
+             .cg-btn--tinted primitives (assigned in renderSuggestion) so they
+             match the data view's buttons exactly. Only the :disabled hook above
+             is local to the suggestion card. */
           .cg-doi-prompt {
             border: 1px solid var(--cg-sage-tint-25);
             border-radius: 6px;
@@ -529,33 +486,8 @@ export function registerCitationPane(pluginID: string): void {
             gap: 6px;
             margin-top: 6px;
           }
-          #citegeist-pane-root .cg-doi-yes {
-            padding: 5px 10px;
-            background: var(--cg-sage-bg);
-            border: 1px solid var(--cg-sage-border);
-            border-radius: 5px;
-            color: var(--cg-sage-fg);
-            font-size: 11px;
-            font-weight: 600;
-            font-family: inherit;
-            cursor: pointer;
-          }
-          #citegeist-pane-root .cg-doi-yes:focus-visible {
-            outline: 2px solid var(--cg-sage-fg);
-            outline-offset: 2px;
-          }
-          #citegeist-pane-root .cg-doi-yes:hover {
-            background: light-dark(rgba(60, 110, 95, 0.16), rgba(143, 173, 159, 0.25));
-          }
-          #citegeist-pane-root .cg-doi-no {
-            padding: 5px 10px;
-            background: transparent;
-            border: none;
-            color: var(--cg-text-secondary);
-            font-size: 11px;
-            font-family: inherit;
-            cursor: pointer;
-          }
+          /* DOI-prompt buttons use the shared .cg-btn--sm primitive
+             (assigned in renderDoiPrompt) — see ui/components.ts. */
         </style>
         <div id="citegeist-content"></div>
       </div>
@@ -730,7 +662,7 @@ function renderDoiPrompt(container: HTMLElement, item: _ZoteroTypes.Item, doi: s
 
   const yesBtn = doc.createElement("button");
   yesBtn.type = "button";
-  yesBtn.className = "cg-doi-yes";
+  yesBtn.className = "cg-btn cg-btn--sm cg-btn--filled cg-doi-yes";
   yesBtn.textContent = "Add DOI";
   yesBtn.addEventListener("click", async () => {
     try {
@@ -744,7 +676,7 @@ function renderDoiPrompt(container: HTMLElement, item: _ZoteroTypes.Item, doi: s
 
   const noBtn = doc.createElement("button");
   noBtn.type = "button";
-  noBtn.className = "cg-doi-no";
+  noBtn.className = "cg-btn cg-btn--sm cg-btn--plain cg-doi-no";
   noBtn.textContent = "No thanks";
   noBtn.addEventListener("click", () => prompt.remove());
 
@@ -929,12 +861,12 @@ function renderSuggestion(
   const actions = doc.createElement("div");
   actions.className = "cg-actions";
   actions.appendChild(
-    makeGuardedButton("Confirm match", "cg-action-btn cg-action-btn-primary cg-match-confirm", () =>
+    makeGuardedButton("Confirm match", "cg-btn cg-btn--filled cg-match-confirm", () =>
       onConfirm().catch((e) => logError("onConfirm", e)),
     ),
   );
   actions.appendChild(
-    makeGuardedButton("Not this paper", "cg-action-btn cg-match-dismiss", () =>
+    makeGuardedButton("Not this paper", "cg-btn cg-btn--tinted cg-match-dismiss", () =>
       onDismiss().catch((e) => logError("onDismiss", e)),
     ),
   );
@@ -1048,7 +980,7 @@ function renderPane(
   ): HTMLButtonElement => {
     const btn = doc.createElement("button");
     btn.type = "button";
-    btn.className = "cg-action-btn" + (variant === "primary" ? " cg-action-btn-primary" : "");
+    btn.className = "cg-btn " + (variant === "primary" ? "cg-btn--filled" : "cg-btn--tinted");
     btn.textContent = label;
     btn.setAttribute("aria-label", ariaLabel);
     btn.addEventListener("click", () => {

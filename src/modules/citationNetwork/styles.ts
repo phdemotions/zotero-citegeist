@@ -16,10 +16,12 @@
  */
 
 import { cgDesignTokens } from "../ui/tokens";
+import { cgComponents } from "../ui/components";
 
 export function getDialogCSS(): string {
   return `
     ${cgDesignTokens("#citegeist-network-dialog")}
+    ${cgComponents("#citegeist-network-dialog")}
 
     /* ── Dialog root: Slate palette — green-undertoned ── */
     /* Legacy dialog token names mapped onto the canonical layer. Quaternary

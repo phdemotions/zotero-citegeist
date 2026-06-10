@@ -126,6 +126,17 @@ export function cgDesignTokens(scope: string, opts: CgTokenOptions = {}): string
       --cg-sage-tint-25: light-dark(rgba(47, 107, 90, 0.25), rgba(143, 173, 159, 0.27));
       --cg-sage-tint-35: light-dark(rgba(47, 107, 90, 0.35), rgba(143, 173, 159, 0.35));
 
+      /* Hairline border (cards, rows, plain buttons) — mirrors the gallery. */
+      --cg-hairline: light-dark(rgba(60, 110, 95, 0.12), rgba(143, 173, 159, 0.12));
+
+      /* Fixed-green primary button — theme-AGNOSTIC on purpose: a pale-sage
+         accent on white would be illegible in dark mode, so the filled button
+         uses this deep green (white text) in BOTH schemes. Shared by the pane
+         and dialog primary buttons so the one green lives in one place. */
+      --cg-primary-bg: #2F6B5A;
+      --cg-primary-bg-hover: #245546;
+      --cg-primary-fg: #FFFFFF;
+
       /* ── Amber: evidence weight only (top-percentile, suggestion banner) ── */
       --cg-amber: light-dark(#8B5A1A, #D4A84B);
       --cg-amber-strong: light-dark(#6F4715, #E0B458);
