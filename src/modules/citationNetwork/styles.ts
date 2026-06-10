@@ -486,14 +486,8 @@ export function getDialogCSS(): string {
       background: var(--cg-surface-elevated);
       border-radius: 0 0 10px 10px;
     }
-    .cg-picker-done {
-      padding: 5px 16px; border-radius: 6px; font-size: 11px; font-weight: 600;
-      background: #2F6B5A; color: #FFFFFF; border: none; cursor: pointer;
-      transition: background 0.12s;
-      font-family: var(--cg-font);
-    }
-    .cg-picker-done:hover { background: #245546; }
-    .cg-picker-done:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 2px; }
+    /* The picker's Done button uses the shared .cg-btn--sm .cg-btn--filled
+       primitive (assigned in collectionPicker.ts) — see ui/components.ts. */
 
     /* ── Footer ── */
     .cg-dialog-footer {
