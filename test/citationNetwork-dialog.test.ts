@@ -1,5 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildDialogHTML, getItemSourceMetaLine } from "../src/modules/citationNetwork/dialog";
+import {
+  buildDialogHTML,
+  getItemSourceMetaLine,
+  showCitationNetwork,
+} from "../src/modules/citationNetwork/dialog";
+
+// The dialog resolves the work through citationService; mock that surface so the
+// identifier gate can be driven without standing up the OpenAlex/cache stack.
+const serviceMocks = vi.hoisted(() => ({
+  canResolveWork: vi.fn(),
+  resolveWorkForItem: vi.fn(),
+}));
+vi.mock("../src/modules/citationService", () => ({
+  canResolveWork: serviceMocks.canResolveWork,
+  resolveWorkForItem: serviceMocks.resolveWorkForItem,
+}));
 
 function makeItem(opts: {
   creators?: Array<{ lastName?: string; name?: string; creatorTypeID?: number }>;
@@ -127,5 +142,27 @@ describe("buildDialogHTML", () => {
     ]) {
       expect(html).toContain(`value="${v}"`);
     }
+  });
+});
+
+describe("showCitationNetwork identifier gate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("alerts and bails when the item cannot be resolved to a work", async () => {
+    const alert = vi.fn();
+    vi.stubGlobal("Services", { prompt: { alert } });
+    vi.stubGlobal("Zotero", { debug: vi.fn() });
+    serviceMocks.canResolveWork.mockReturnValue(false);
+
+    const item = { id: 1, getField: () => "" } as unknown as _ZoteroTypes.Item;
+    await showCitationNetwork(item, "citing");
+
+    expect(alert).toHaveBeenCalledTimes(1);
+    // Services.prompt.alert(parent, title, message) — assert the rewritten copy.
+    expect(String(alert.mock.calls[0][2])).toMatch(/can't identify this item/i);
+    // Gate rejected before any resolution work.
+    expect(serviceMocks.resolveWorkForItem).not.toHaveBeenCalled();
   });
 });

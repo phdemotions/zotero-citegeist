@@ -13,7 +13,10 @@ const mocks = vi.hoisted(() => ({
   extractIdentifier: vi.fn((item: { hasIdentifier?: boolean }) =>
     item.hasIdentifier !== false ? { type: "doi", value: "10.1/test" } : null,
   ),
-  canResolveWork: vi.fn((item: { hasIdentifier?: boolean }) => item.hasIdentifier !== false),
+  canResolveWork: vi.fn(
+    (item: { isRegularItem?: () => boolean; hasIdentifier?: boolean }) =>
+      item.isRegularItem?.() !== false && item.hasIdentifier !== false,
+  ),
   invalidateColumnCache: vi.fn(),
   showCitationNetwork: vi.fn(async () => {}),
 }));
@@ -144,6 +147,26 @@ describe("MenuManager path (Zotero 8+)", () => {
     const visCiting1 = vi.fn();
     citingShowing({} as Event, { items: [makeItem(1)], setVisible: visCiting1 });
     expect(visCiting1).toHaveBeenCalledWith(true);
+  });
+
+  it("gates View Citing/References on canResolveWork, not mere single-selection", () => {
+    installZotero(true);
+    registerMenus(win);
+    const item = findMenu("main/library/item");
+    const citingShowing = item.menus[1].onShowing!;
+    const refsShowing = item.menus[2].onShowing!;
+
+    // Single resolvable item → View entries shown.
+    const visResolvable = vi.fn();
+    citingShowing({} as Event, { items: [makeItem(1, true)], setVisible: visResolvable });
+    expect(visResolvable).toHaveBeenCalledWith(true);
+
+    // Single NON-resolvable item (no recognized identifier, no confirmed match)
+    // → hidden. Pins the gate to canResolveWork; a revert to a single-select-only
+    // check would wrongly reveal it.
+    const visNonResolvable = vi.fn();
+    refsShowing({} as Event, { items: [makeItem(2, false)], setVisible: visNonResolvable });
+    expect(visNonResolvable).toHaveBeenCalledWith(false);
   });
 
   it("runs the View Citing action from onCommand", () => {

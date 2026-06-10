@@ -16,7 +16,7 @@
  * paths stay in sync.
  */
 
-import { fetchAndCacheItems, extractIdentifier, canResolveWork } from "./citationService";
+import { fetchAndCacheItems, canResolveWork } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import { showCitationNetwork } from "./citationNetwork";
 import { logError } from "./utils";
@@ -120,13 +120,9 @@ function gatherCollectionItems(
   }
 }
 
-function isEligible(item: _ZoteroTypes.Item): boolean {
-  return item.isRegularItem() && extractIdentifier(item) !== null;
-}
-
-/** Count of currently-selected items that can be fetched. */
+/** Count of currently-selected items Citegeist can resolve to an OpenAlex work. */
 function eligibleSelectedCount(): number {
-  return Zotero.getActiveZoteroPane().getSelectedItems().filter(isEligible).length;
+  return Zotero.getActiveZoteroPane().getSelectedItems().filter(canResolveWork).length;
 }
 
 /** True when exactly one item is selected and the browser can resolve it to a work. */
@@ -142,7 +138,7 @@ async function runFetchSelected(win: Window): Promise<void> {
   const items = pane.getSelectedItems();
   if (items.length === 0) return;
 
-  const eligible = items.filter(isEligible);
+  const eligible = items.filter(canResolveWork);
   // Modal alert when nothing is eligible — onShowing/popupshowing already hides
   // the entry, but a programmatic invocation or a mid-popup selection change
   // can land here with eligible.length=0.
@@ -233,7 +229,7 @@ async function runFetchCollection(win: Window): Promise<void> {
   }
 
   const totalItems = allItems.size;
-  const eligible = [...allItems.values()].filter(isEligible);
+  const eligible = [...allItems.values()].filter(canResolveWork);
 
   // Hard fallback when nothing is eligible — the ProgressWindow's corner
   // notification is easy to miss, leaving the user thinking the click did
@@ -312,7 +308,7 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
         l10nID: "citegeist-menu-fetch",
         icon: "chrome://citegeist/content/icons/icon-16.svg",
         onShowing: (_e, ctx) =>
-          ctx.setVisible((ctx.items ?? []).some(isEligible) || eligibleSelectedCount() > 0),
+          ctx.setVisible((ctx.items ?? []).some(canResolveWork) || eligibleSelectedCount() > 0),
         onCommand: () => {
           runFetchSelected(Zotero.getMainWindow()).catch((e) => logError("menu fetch", e));
         },

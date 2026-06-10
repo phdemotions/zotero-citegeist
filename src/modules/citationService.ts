@@ -123,15 +123,44 @@ export function extractIdentifier(item: _ZoteroTypes.Item): ItemIdentifier | nul
  * recognized identifier (DOI / PMID / arXiv / ISBN).
  *
  * This is the single predicate the menu, pane, and dialog all gate on, so the
- * "View citing works / references" affordance is never offered for an item the
- * browser would then reject. Previously the menu gated on `extractIdentifier`
+ * "View citing works / references" affordance is not offered for an item with
+ * no recognized identifier. (Previously the menu gated on `extractIdentifier`
  * while the dialog hard-required a DOI, so a PMID/arXiv/ISBN-only item showed
- * an enabled menu entry that dead-ended on a "no DOI" alert.
+ * an enabled menu entry that dead-ended on a "no DOI" alert.) One residual
+ * corner: an item whose only link is a confirmed match id that has since been
+ * de-indexed from OpenAlex still passes here, then lands on the dialog's
+ * graceful "Not found" state rather than an alert — the intended UX.
  */
 export function canResolveWork(item: _ZoteroTypes.Item): boolean {
   if (!item.isRegularItem()) return false;
   if (getTitleMatchMeta(item).confirmedOpenAlexId) return true;
   return extractIdentifier(item) !== null;
+}
+
+/**
+ * Map a resolved identifier to its OpenAlex client call. The single place that
+ * switches on `ItemIdentifier.type` — shared by `resolveWorkForItem` and
+ * `fetchAndCacheItem` so the mapping (and its exhaustiveness) lives in exactly
+ * one spot. Returns `null` when the work isn't on OpenAlex; throws
+ * `OpenAlexNetworkError` when the service is unreachable. The `default` arm is
+ * an exhaustiveness guard: adding a new identifier type fails to compile here,
+ * pointing at the unhandled case, rather than silently returning `undefined`.
+ */
+function fetchWorkByIdentifier(identifier: ItemIdentifier): Promise<OpenAlexWork | null> {
+  switch (identifier.type) {
+    case "doi":
+      return getWorkByDOI(identifier.value);
+    case "pmid":
+      return getWorkByPMID(identifier.value);
+    case "arxiv":
+      return getWorkByArxivId(identifier.value);
+    case "isbn":
+      return getWorkByISBN(identifier.value);
+    default: {
+      const unhandled: never = identifier.type;
+      throw new Error(`Unhandled identifier type: ${String(unhandled)}`);
+    }
+  }
 }
 
 /**
@@ -157,16 +186,7 @@ export async function resolveWorkForItem(item: _ZoteroTypes.Item): Promise<OpenA
   const identifier = extractIdentifier(item);
   if (!identifier) return null;
 
-  switch (identifier.type) {
-    case "doi":
-      return getWorkByDOI(identifier.value);
-    case "pmid":
-      return getWorkByPMID(identifier.value);
-    case "arxiv":
-      return getWorkByArxivId(identifier.value);
-    case "isbn":
-      return getWorkByISBN(identifier.value);
-  }
+  return fetchWorkByIdentifier(identifier);
 }
 
 /**
@@ -213,20 +233,7 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
 
   let work: OpenAlexWork | null;
   try {
-    switch (identifier.type) {
-      case "doi":
-        work = await getWorkByDOI(identifier.value);
-        break;
-      case "pmid":
-        work = await getWorkByPMID(identifier.value);
-        break;
-      case "arxiv":
-        work = await getWorkByArxivId(identifier.value);
-        break;
-      case "isbn":
-        work = await getWorkByISBN(identifier.value);
-        break;
-    }
+    work = await fetchWorkByIdentifier(identifier);
   } catch (e) {
     if (e instanceof OpenAlexNetworkError) {
       logError(`fetchAndCacheItem(${item.id})`, e);

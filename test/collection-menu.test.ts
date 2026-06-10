@@ -23,7 +23,10 @@ const mocks = vi.hoisted(() => ({
   extractIdentifier: vi.fn((item: { hasIdentifier?: boolean }) =>
     item.hasIdentifier !== false ? { type: "doi", value: "10.1/test" } : null,
   ),
-  canResolveWork: vi.fn((item: { hasIdentifier?: boolean }) => item.hasIdentifier !== false),
+  canResolveWork: vi.fn(
+    (item: { isRegularItem?: () => boolean; hasIdentifier?: boolean }) =>
+      item.isRegularItem?.() !== false && item.hasIdentifier !== false,
+  ),
   invalidateColumnCache: vi.fn(),
 }));
 

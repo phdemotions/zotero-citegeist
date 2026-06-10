@@ -122,6 +122,7 @@ import {
   writePendingSuggestion,
   confirmTitleMatch,
 } from "../src/modules/cache";
+import { OpenAlexNetworkError } from "../src/modules/utils";
 
 const mockedGetWorkByDOI = vi.mocked(getWorkByDOI);
 const mockedGetWorkByPMID = vi.mocked(getWorkByPMID);
@@ -589,5 +590,55 @@ describe("resolveWorkForItem", () => {
     expect(await resolveWorkForItem(item)).toBe(work);
     expect(mockedGetWorkById).toHaveBeenCalledWith("W90300");
     expect(mockedGetWorkByDOI).toHaveBeenCalledWith("10.1234/test");
+  });
+
+  it("returns null when a stale confirmed id misses and the item has no fallback identifier", async () => {
+    const item = mockItem({ extra: "no identifier here" });
+    await writePendingSuggestion(
+      item,
+      {
+        id: "https://openalex.org/W90400",
+        display_name: "De-indexed Work",
+        cited_by_count: 1,
+        fwci: null,
+        publication_year: 2020,
+        doi: null,
+      },
+      "high",
+      0.95,
+    );
+    await confirmTitleMatch(item, "high");
+    mockedGetWorkById.mockResolvedValue(null); // confirmed id gone, nothing to fall back to
+
+    expect(await resolveWorkForItem(item)).toBeNull();
+    expect(mockedGetWorkById).toHaveBeenCalledWith("W90400");
+    expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
+  });
+
+  it("propagates OpenAlexNetworkError instead of swallowing it as null", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    mockedGetWorkByDOI.mockRejectedValue(new OpenAlexNetworkError("unreachable"));
+    await expect(resolveWorkForItem(item)).rejects.toBeInstanceOf(OpenAlexNetworkError);
+  });
+
+  it("propagates OpenAlexNetworkError thrown while resolving a confirmed id", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    await writePendingSuggestion(
+      item,
+      {
+        id: "https://openalex.org/W90500",
+        display_name: "Confirmed Work",
+        cited_by_count: 1,
+        fwci: null,
+        publication_year: 2020,
+        doi: null,
+      },
+      "high",
+      0.95,
+    );
+    await confirmTitleMatch(item, "high");
+    mockedGetWorkById.mockRejectedValue(new OpenAlexNetworkError("unreachable"));
+    await expect(resolveWorkForItem(item)).rejects.toBeInstanceOf(OpenAlexNetworkError);
+    expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
   });
 });
