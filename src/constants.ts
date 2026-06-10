@@ -12,6 +12,13 @@ export const OPENALEX_RATE_LIMIT_MS = 125;
 export const OPENALEX_REQUEST_TIMEOUT_MS = 30_000;
 /** Exponential backoff delays on 429 / 5xx (ms). */
 export const OPENALEX_RETRY_DELAYS_MS = [2000, 4000];
+/**
+ * OpenAlex `work.type` values treated as books. OpenAlex rarely indexes a
+ * machine-readable reference list for these, so the network browser shows a
+ * book-aware empty state rather than implying the work cites nothing. These are
+ * OpenAlex work types, distinct from the Zotero item types in `isBookType`.
+ */
+export const OPENALEX_BOOK_WORK_TYPES: readonly string[] = ["book", "book-chapter", "monograph"];
 
 // ── Cache lifetimes ──
 /** Default cache lifetime in days when the pref is unset or invalid. */

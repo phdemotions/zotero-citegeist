@@ -1,33 +1,35 @@
 # Citegeist — Status
 
-> **Last Updated:** 2026-06-08
-> **Phase:** v2.0.2 released — dark-mode dialog tint fix + canonical design tokens; auto-update channel self-maintaining
+> **Last Updated:** 2026-06-10
+> **Phase:** v2.0.2 released; `main` ahead with the any-identifier citation-network browser (#50) in [Unreleased], awaiting the next tagged release
 > **Build:** Clean
 
 ---
 
 ## Current State
 
-| Attribute        | Value                                                                          |
-| ---------------- | ------------------------------------------------------------------------------ |
-| **Version**      | 2.0.2 (released 2026-06-08 — Zenodo concept DOI 10.5281/zenodo.19433716)       |
-| **Build Status** | Clean (326 tests passing, typecheck clean, lint clean, XPI 91.9 KB)           |
-| **Open Issues**  | P0: 0, P1: 0, P2: 3, P3: 2 (see ISSUES.md)                                     |
-| **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, Zotero 7.0.10–9, SQLite, Node 22 |
-| **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                          |
+| Attribute        | Value                                                                                   |
+| ---------------- | --------------------------------------------------------------------------------------- |
+| **Version**      | 2.0.2 (released 2026-06-08 — Zenodo concept DOI 10.5281/zenodo.19433716)                |
+| **Build Status** | Clean (351 tests passing, typecheck clean, lint clean, XPI ~92 KB)                      |
+| **Open Issues**  | P0: 0, P1: 0, P2: 2, P3: 2 (see ISSUES.md)                                              |
+| **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, Zotero 7.0.10–9, SQLite, Node 22          |
+| **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                                   |
 | **Distribution** | GitHub Releases → auto-update via `release` Release (self-maintaining); Zenodo-archived |
 
 ---
 
 ## In Progress
 
-_None — v2.0.2 is released and clean (326 tests, lint clean, build clean)._
+_None — working tree clean on `main`; PR #50 merged. The next tagged release will publish the [Unreleased] CHANGELOG entry to users._
+
+**Merged to `main` 2026-06-10 (in [Unreleased], not yet tagged):** the citation-network browser now opens for **any** resolved identifier — DOI → PMID → arXiv → ISBN → confirmed title match — not just DOI, so "View Citing Works"/"View References" no longer dead-end on a "requires a DOI" alert (#50). The browser always queried OpenAlex by work id, so the DOI gate was an unnecessary limitation (an old audit's "genuinely needs a DOI" assumption was wrong). Resolution centralized in `canResolveWork`/`resolveWorkForItem`/`fetchWorkByIdentifier`; menu gating unified on `canResolveWork`. Hardened across four `ce-review` passes (correctness · adversarial · maintainability/perf/standards · security/api-contract) — zero P0–P2; added book-aware empty-state copy, menu/`getRow` hot-path perf, item-scoped resolve-error logging. Earlier the same session: static license badge + full README claim audit (#49 — fixed the stale device-sync FAQ, default-collection picker location, migration-backup path/retention). **Follow-up opened:** DEBT-007 — work-id-keyed dedup/filing — carved out to its own PR to keep #50 single-concern.
 
 **Shipped 2026-06-08 (v2.0.2):** dark-mode citation-network tint fix — the dialog's sage-tint scale had a self-referential dark-theme arm (`light-dark(…, var(--cg-sage-tint-NN))`), invalid at computed-value time, so every dark-mode tint collapsed to transparent; now defined correctly. Design tokens (spacing, radii, type, motion, color ramps) consolidated into a canonical module `src/modules/ui/tokens.ts` that both the item pane and the network dialog consume; `docs/design-system/citegeist-primitives.html` added as the design reference (#45). Pane visually unchanged.
 
 **Shipped 2026-06-08 (v2.0.1):** batch/collection/library column repaint fix (#35), redesigned title-match confirm/discard card (#36), citation network browser improvements — new sort modes (first author, not-in-library) + hide-in-library filter + source-metadata header (#32), Zotero 8+ MenuManager with DOM fallback (#33), Zenodo DOI surfacing (#34), TS6/ESLint10/action-gh-release-v3 deps (#37). v2.0.0 (SQLite cache migration) shipped 2026-06-08 (#30).
 
-**Possible next:** show the candidate's *authors* in the title-match card — deferred because it needs a new `pending_authors` cache column + a schema migration (the cache uses plain `CREATE TABLE IF NOT EXISTS`, no column-add path). See BACKLOG.
+**Possible next:** show the candidate's _authors_ in the title-match card — deferred because it needs a new `pending_authors` cache column + a schema migration (the cache uses plain `CREATE TABLE IF NOT EXISTS`, no column-add path). See BACKLOG.
 
 ---
 
@@ -156,12 +158,12 @@ See `BACKLOG.md` for full details.
 
 ## Release History
 
-| Version | Date       | Summary                                                                     |
-| ------- | ---------- | --------------------------------------------------------------------------- |
-| 2.0.2   | 2026-06-08 | Dark-mode dialog tint fix; canonical design-token module (both surfaces)    |
+| Version | Date       | Summary                                                                      |
+| ------- | ---------- | ---------------------------------------------------------------------------- |
+| 2.0.2   | 2026-06-08 | Dark-mode dialog tint fix; canonical design-token module (both surfaces)     |
 | 2.0.1   | 2026-06-08 | Column repaint fix, redesigned title-match card, network browser sort/filter |
-| 2.0.0   | 2026-06-08 | SQLite-backed cache (migrated from Extra-field storage)                     |
-| 1.0.3   | 2026-04-09 | Non-DOI identifiers (PMID/arXiv/ISBN), rankings refresh (ABDC '25, AJG '24) |
-| 1.0.2   | 2026-04-08 | Family design language, FWCI/percentile sort                                |
-| 1.0.1   | 2026-04-08 | Quality pass: error handling, tooling, tests, docs                          |
-| 1.0.0   | 2026-04-05 | Initial public release                                                      |
+| 2.0.0   | 2026-06-08 | SQLite-backed cache (migrated from Extra-field storage)                      |
+| 1.0.3   | 2026-04-09 | Non-DOI identifiers (PMID/arXiv/ISBN), rankings refresh (ABDC '25, AJG '24)  |
+| 1.0.2   | 2026-04-08 | Family design language, FWCI/percentile sort                                 |
+| 1.0.1   | 2026-04-08 | Quality pass: error handling, tooling, tests, docs                           |
+| 1.0.0   | 2026-04-05 | Initial public release                                                       |

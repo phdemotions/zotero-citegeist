@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   compareNetworkWorks,
+  emptyStateHTML,
   getVisibleNetworkWorks,
   isWorkInLibrary,
   type NetworkSortContext,
@@ -214,5 +215,72 @@ describe("compareNetworkWorks is a stable pure comparator", () => {
     const a = work({ id: "W1", cited_by_count: 10 });
     const b = work({ id: "W2", cited_by_count: 10 });
     expect(compareNetworkWorks(a, b, ctx)).toBe(0);
+  });
+});
+
+describe("emptyStateHTML", () => {
+  it("uses book-aware copy for an empty references list on a book source", () => {
+    const html = emptyStateHTML({
+      mode: "references",
+      hasFilter: false,
+      hideInLibraryWithResults: false,
+      sourceWorkType: "book",
+    });
+    expect(html).toContain("No references found");
+    expect(html).toContain("doesn't index a reference list");
+    expect(html).not.toContain("has no references in OpenAlex");
+  });
+
+  it("applies the book copy to book-chapter and monograph types too", () => {
+    for (const t of ["book-chapter", "monograph"]) {
+      expect(
+        emptyStateHTML({
+          mode: "references",
+          hasFilter: false,
+          hideInLibraryWithResults: false,
+          sourceWorkType: t,
+        }),
+      ).toContain("No references found");
+    }
+  });
+
+  it("uses the generic references copy for a non-book source", () => {
+    const html = emptyStateHTML({
+      mode: "references",
+      hasFilter: false,
+      hideInLibraryWithResults: false,
+      sourceWorkType: "article",
+    });
+    expect(html).toContain("This work has no references in OpenAlex");
+  });
+
+  it("does not apply book copy in citing mode even for a book source", () => {
+    const html = emptyStateHTML({
+      mode: "citing",
+      hasFilter: false,
+      hideInLibraryWithResults: false,
+      sourceWorkType: "book",
+    });
+    expect(html).toContain("This work has no citing works in OpenAlex");
+  });
+
+  it("prioritizes the filter empty-state over everything else", () => {
+    const html = emptyStateHTML({
+      mode: "references",
+      hasFilter: true,
+      hideInLibraryWithResults: false,
+      sourceWorkType: "book",
+    });
+    expect(html).toContain("No matches");
+  });
+
+  it("shows the hide-in-library empty-state when toggled with results present", () => {
+    const html = emptyStateHTML({
+      mode: "citing",
+      hasFilter: false,
+      hideInLibraryWithResults: true,
+      sourceWorkType: "article",
+    });
+    expect(html).toContain("Nothing new here");
   });
 });

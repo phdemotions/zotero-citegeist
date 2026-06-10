@@ -8,6 +8,7 @@
  *   3. arXiv ID     — "arXiv: 2205.01833" line in Extra field
  *   4. arXiv ID     — item.getField("archiveID") (Zotero preprint field)
  *   5. arXiv ID     — arxiv.org URL in item.getField("url")
+ *   6. ISBN         — item.getField("ISBN") (books, book sections)
  */
 
 import {
@@ -118,6 +119,78 @@ export function extractIdentifier(item: _ZoteroTypes.Item): ItemIdentifier | nul
 }
 
 /**
+ * True when the citation-network browser can resolve this item to an
+ * OpenAlex work — i.e. the item has a user-confirmed title-match id, or any
+ * recognized identifier (DOI / PMID / arXiv / ISBN).
+ *
+ * This is the single predicate the menu and citation-network dialog gate on, so
+ * the "View citing works / references" affordance is not offered for an item with
+ * no recognized identifier. (Previously the menu gated on `extractIdentifier`
+ * while the dialog hard-required a DOI, so a PMID/arXiv/ISBN-only item showed
+ * an enabled menu entry that dead-ended on a "no DOI" alert.) One residual
+ * corner: an item whose only link is a confirmed match id that has since been
+ * de-indexed from OpenAlex still passes here, then lands on the dialog's
+ * graceful "Not found" state rather than an alert — the intended UX.
+ */
+export function canResolveWork(item: _ZoteroTypes.Item): boolean {
+  if (!item.isRegularItem()) return false;
+  if (getTitleMatchMeta(item).confirmedOpenAlexId) return true;
+  return extractIdentifier(item) !== null;
+}
+
+/**
+ * Map a resolved identifier to its OpenAlex client call. The single place that
+ * switches on `ItemIdentifier.type` — shared by `resolveWorkForItem` and
+ * `fetchAndCacheItem` so the mapping (and its exhaustiveness) lives in exactly
+ * one spot. Returns `null` when the work isn't on OpenAlex; throws
+ * `OpenAlexNetworkError` when the service is unreachable. The `default` arm is
+ * an exhaustiveness guard: adding a new identifier type fails to compile here,
+ * pointing at the unhandled case, rather than silently returning `undefined`.
+ */
+function fetchWorkByIdentifier(identifier: ItemIdentifier): Promise<OpenAlexWork | null> {
+  switch (identifier.type) {
+    case "doi":
+      return getWorkByDOI(identifier.value);
+    case "pmid":
+      return getWorkByPMID(identifier.value);
+    case "arxiv":
+      return getWorkByArxivId(identifier.value);
+    case "isbn":
+      return getWorkByISBN(identifier.value);
+    default: {
+      const unhandled: never = identifier.type;
+      throw new Error(`Unhandled identifier type: ${String(unhandled)}`);
+    }
+  }
+}
+
+/**
+ * Resolve a Zotero item to its OpenAlex work for the citation-network browser.
+ * Tries the user-confirmed title-match id first, then the best available
+ * identifier (DOI → PMID → arXiv → ISBN), mirroring `fetchAndCacheItem`'s
+ * resolution order.
+ *
+ * Unlike `fetchAndCacheItem`, this never short-circuits on cache freshness: the
+ * browser always needs the live work object, whose `id` drives the citing and
+ * referenced-works queries. Returns `null` when the item has no resolvable
+ * identifier or the work isn't on OpenAlex; throws `OpenAlexNetworkError` when
+ * the service is unreachable (callers render the "OpenAlex unavailable" state).
+ */
+export async function resolveWorkForItem(item: _ZoteroTypes.Item): Promise<OpenAlexWork | null> {
+  const matchMeta = getTitleMatchMeta(item);
+  if (matchMeta.confirmedOpenAlexId) {
+    const confirmed = await getWorkById(matchMeta.confirmedOpenAlexId);
+    if (confirmed) return confirmed;
+    // Confirmed id no longer resolves — fall through to identifier lookup.
+  }
+
+  const identifier = extractIdentifier(item);
+  if (!identifier) return null;
+
+  return fetchWorkByIdentifier(identifier);
+}
+
+/**
  * Fetch citation data for a single Zotero item and cache it.
  * Returns the work data on success so callers can use it without a second API call.
  */
@@ -161,20 +234,7 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
 
   let work: OpenAlexWork | null;
   try {
-    switch (identifier.type) {
-      case "doi":
-        work = await getWorkByDOI(identifier.value);
-        break;
-      case "pmid":
-        work = await getWorkByPMID(identifier.value);
-        break;
-      case "arxiv":
-        work = await getWorkByArxivId(identifier.value);
-        break;
-      case "isbn":
-        work = await getWorkByISBN(identifier.value);
-        break;
-    }
+    work = await fetchWorkByIdentifier(identifier);
   } catch (e) {
     if (e instanceof OpenAlexNetworkError) {
       logError(`fetchAndCacheItem(${item.id})`, e);

@@ -20,15 +20,16 @@ const mocks = vi.hoisted(() => ({
       errors: 0,
     }),
   ),
-  extractIdentifier: vi.fn((item: { hasIdentifier?: boolean }) =>
-    item.hasIdentifier !== false ? { type: "doi", value: "10.1/test" } : null,
+  canResolveWork: vi.fn(
+    (item: { isRegularItem?: () => boolean; hasIdentifier?: boolean }) =>
+      item.isRegularItem?.() !== false && item.hasIdentifier !== false,
   ),
   invalidateColumnCache: vi.fn(),
 }));
 
 vi.mock("../src/modules/citationService", () => ({
   fetchAndCacheItems: mocks.fetchAndCacheItems,
-  extractIdentifier: mocks.extractIdentifier,
+  canResolveWork: mocks.canResolveWork,
 }));
 vi.mock("../src/modules/citationColumn", () => ({
   invalidateColumnCache: mocks.invalidateColumnCache,

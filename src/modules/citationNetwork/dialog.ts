@@ -14,7 +14,7 @@
  *  - Abstracts fetched on-demand and cached
  */
 
-import { getWorkByDOI } from "../openalex";
+import { resolveWorkForItem, canResolveWork } from "../citationService";
 import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../utils";
 import { SEARCH_DEBOUNCE_MS, INFINITE_SCROLL_THRESHOLD_PX } from "../../constants";
 import type { NetworkMode, NetworkSortKey, NetworkState } from "./types";
@@ -51,12 +51,11 @@ export async function showCitationNetwork(
 ): Promise<void> {
   Zotero.debug(`[Citegeist] showCitationNetwork called: mode=${mode}, itemID=${item.id}`);
 
-  const doi = item.getField("DOI");
-  if (!doi || !doi.trim()) {
+  if (!canResolveWork(item)) {
     Services.prompt.alert(
       null,
       "Citegeist",
-      "This item has no DOI. Citation network requires a DOI.",
+      "Citegeist can't identify this item. Add a DOI, PMID, arXiv ID, or ISBN — or confirm a title match — then try again.",
     );
     return;
   }
@@ -81,7 +80,7 @@ export async function showCitationNetwork(
       // No state yet (first dialog still in early-skeleton phase, lost
       // the race). Mark the in-flight invocation as closed via the same
       // event the `markClosed` listener watches for — without it, the
-      // first dialog's `Promise.all([getWorkByDOI, ...])` resume path
+      // first dialog's `Promise.all([resolveWorkForItem, ...])` resume path
       // would rely solely on the `activeDialog !== overlay` identity
       // check (held today, latent footgun if a future refactor reads
       // `phase` directly). Then drop the overlay. (Iter W note)
@@ -200,10 +199,10 @@ export async function showCitationNetwork(
   let work;
   let existingDOIs;
   try {
-    [work, existingDOIs] = await Promise.all([getWorkByDOI(doi), getExistingDOIs()]);
+    [work, existingDOIs] = await Promise.all([resolveWorkForItem(item), getExistingDOIs()]);
   } catch (e) {
     if (closedBeforeReady()) return;
-    logError("showCitationNetwork load", e);
+    logError(`showCitationNetwork load (item ${item.id}, ${mode})`, e);
     if (body) {
       const msg =
         e instanceof OpenAlexNetworkError
@@ -304,7 +303,8 @@ export async function showCitationNetwork(
  * Venue \u00B7 Year`. Authors use last names only; more than three collapse to
  * "Surname et al.". Any missing part is dropped; returns "" when nothing is
  * available. Filters to authors when Zotero can resolve the creator type \u2014
- * the network browser is DOI-gated, so editors essentially never appear here.
+ * books resolved by ISBN may carry editors rather than authors, which we
+ * intentionally drop here so the header stays a clean author line.
  */
 export function getItemSourceMetaLine(item: _ZoteroTypes.Item): string {
   const parts: string[] = [];

@@ -179,12 +179,13 @@ export function requireDb(): _ZoteroTypes.DBConnection {
 }
 
 export function getRow(libraryID: number, itemKey: string): ItemCacheRow | undefined {
-  const row = mirror.get(mirrorKey(libraryID, itemKey));
+  const key = mirrorKey(libraryID, itemKey);
+  const row = mirror.get(key);
   // One-shot debug — fires once per unique key per session so logs
   // don't explode. Lets us verify the column read path matches what
   // upsertRow wrote.
-  if (!getRowLoggedKeys.has(mirrorKey(libraryID, itemKey))) {
-    getRowLoggedKeys.add(mirrorKey(libraryID, itemKey));
+  if (!getRowLoggedKeys.has(key)) {
+    getRowLoggedKeys.add(key);
     Zotero.debug(
       `[Citegeist] getRow: lib=${libraryID} key=${itemKey} -> ${row ? `count=${row.cited_by_count}` : "MISS"} (mirror.size=${mirror.size})`,
     );

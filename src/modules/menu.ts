@@ -16,7 +16,7 @@
  * paths stay in sync.
  */
 
-import { fetchAndCacheItems, extractIdentifier } from "./citationService";
+import { fetchAndCacheItems, canResolveWork } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import { showCitationNetwork } from "./citationNetwork";
 import { logError } from "./utils";
@@ -120,19 +120,15 @@ function gatherCollectionItems(
   }
 }
 
-function isEligible(item: _ZoteroTypes.Item): boolean {
-  return item.isRegularItem() && extractIdentifier(item) !== null;
-}
-
-/** Count of currently-selected items that can be fetched. */
+/** Count of currently-selected items Citegeist can resolve to an OpenAlex work. */
 function eligibleSelectedCount(): number {
-  return Zotero.getActiveZoteroPane().getSelectedItems().filter(isEligible).length;
+  return Zotero.getActiveZoteroPane().getSelectedItems().filter(canResolveWork).length;
 }
 
-/** True when exactly one item is selected and it has a recognized identifier. */
-function singleSelectedWithIdentifier(): boolean {
+/** True when exactly one item is selected and the browser can resolve it to a work. */
+function singleSelectedResolvable(): boolean {
   const items = Zotero.getActiveZoteroPane().getSelectedItems();
-  return items.length === 1 && isEligible(items[0]);
+  return items.length === 1 && canResolveWork(items[0]);
 }
 
 // ── Actions (shared by DOM + MenuManager handlers) ───────────────────────────
@@ -142,7 +138,7 @@ async function runFetchSelected(win: Window): Promise<void> {
   const items = pane.getSelectedItems();
   if (items.length === 0) return;
 
-  const eligible = items.filter(isEligible);
+  const eligible = items.filter(canResolveWork);
   // Modal alert when nothing is eligible — onShowing/popupshowing already hides
   // the entry, but a programmatic invocation or a mid-popup selection change
   // can land here with eligible.length=0.
@@ -233,7 +229,7 @@ async function runFetchCollection(win: Window): Promise<void> {
   }
 
   const totalItems = allItems.size;
-  const eligible = [...allItems.values()].filter(isEligible);
+  const eligible = [...allItems.values()].filter(canResolveWork);
 
   // Hard fallback when nothing is eligible — the ProgressWindow's corner
   // notification is easy to miss, leaving the user thinking the click did
@@ -312,7 +308,14 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
         l10nID: "citegeist-menu-fetch",
         icon: "chrome://citegeist/content/icons/icon-16.svg",
         onShowing: (_e, ctx) =>
-          ctx.setVisible((ctx.items ?? []).some(isEligible) || eligibleSelectedCount() > 0),
+          // Use the supplied context items when present; only fall back to the
+          // pane selection when ctx omits them — avoids a second eligibility
+          // pass when ctx.items is present but all-ineligible.
+          ctx.setVisible(
+            ctx.items && ctx.items.length > 0
+              ? ctx.items.some(canResolveWork)
+              : eligibleSelectedCount() > 0,
+          ),
         onCommand: () => {
           runFetchSelected(Zotero.getMainWindow()).catch((e) => logError("menu fetch", e));
         },
@@ -320,13 +323,13 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-citing",
-        onShowing: (_e, ctx) => ctx.setVisible(itemsSingleEligible(ctx.items)),
+        onShowing: (_e, ctx) => ctx.setVisible(itemsSingleResolvable(ctx.items)),
         onCommand: () => runViewNetwork("citing"),
       },
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-refs",
-        onShowing: (_e, ctx) => ctx.setVisible(itemsSingleEligible(ctx.items)),
+        onShowing: (_e, ctx) => ctx.setVisible(itemsSingleResolvable(ctx.items)),
         onCommand: () => runViewNetwork("references"),
       },
     ],
@@ -369,11 +372,11 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
  * `items` (the documented access path) but falls back to the active pane's
  * selection if the context omits them.
  */
-function itemsSingleEligible(items: _ZoteroTypes.Item[] | undefined): boolean {
+function itemsSingleResolvable(items: _ZoteroTypes.Item[] | undefined): boolean {
   if (items && items.length > 0) {
-    return items.length === 1 && isEligible(items[0]);
+    return items.length === 1 && canResolveWork(items[0]);
   }
-  return singleSelectedWithIdentifier();
+  return singleSelectedResolvable();
 }
 
 // ── DOM path (Zotero 7.0.x fallback) ─────────────────────────────────────────
@@ -427,13 +430,17 @@ function registerViaDOM(win: Window): void {
     // and hide Fetch when no selected items are eligible — a no-op click looked
     // like the feature was broken.
     itemMenu.addEventListener("popupshowing", () => {
-      const eligibleCount = eligibleSelectedCount();
+      // Materialize the selection once and reuse it for every gate — the
+      // getSelectedItems() call and the canResolveWork pass are the only
+      // non-trivial cost here, and "select all → right-click" can make the
+      // selection large.
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
+      const eligibleCount = items.filter(canResolveWork).length;
       fetchItem.hidden = eligibleCount === 0;
       sep.hidden = eligibleCount === 0 && items.length !== 1;
-      const singleWithIdentifier = singleSelectedWithIdentifier();
-      citingItem.hidden = !singleWithIdentifier;
-      refsItem.hidden = !singleWithIdentifier;
+      const singleResolvable = items.length === 1 && eligibleCount === 1;
+      citingItem.hidden = !singleResolvable;
+      refsItem.hidden = !singleResolvable;
     });
   }
 
