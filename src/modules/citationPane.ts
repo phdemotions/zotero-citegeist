@@ -233,7 +233,7 @@ export function registerCitationPane(pluginID: string): void {
             color: var(--cg-text-primary);
           }
           .cg-loading {
-            color: var(--fill-secondary);
+            color: var(--cg-text-secondary);
             display: flex;
             align-items: center;
             gap: 8px;
@@ -242,8 +242,8 @@ export function registerCitationPane(pluginID: string): void {
           .cg-loading::before {
             content: "";
             width: 12px; height: 12px;
-            border: 2px solid var(--fill-quinary, #ddd);
-            border-top-color: var(--accent-blue40, #8FAD9F);
+            border: 2px solid var(--cg-sage-tint-15);
+            border-top-color: var(--cg-sage-accent);
             border-radius: 50%;
             animation: cg-spin 0.8s linear infinite;
             flex-shrink: 0;
@@ -254,14 +254,14 @@ export function registerCitationPane(pluginID: string): void {
           @media (prefers-reduced-motion: reduce) {
             .cg-loading::before { animation-duration: 0.001ms !important; }
           }
-          .cg-no-identifier { color: var(--fill-secondary); padding: 4px 0; }
+          .cg-no-identifier { color: var(--cg-text-secondary); padding: 4px 0; }
 
           .cg-retracted {
-            background: var(--accent-red5, #fee);
-            border: 1px solid var(--accent-red20, #fcc);
+            background: var(--cg-danger-tint);
+            border: 1px solid var(--cg-danger-tint-strong);
             border-radius: 4px;
             padding: 5px 8px;
-            color: var(--accent-red, #c00);
+            color: var(--cg-danger);
             font-weight: 600;
             font-size: 11px;
             margin-bottom: 8px;
@@ -278,25 +278,25 @@ export function registerCitationPane(pluginID: string): void {
             font-size: 24px;
             font-weight: 800;
             letter-spacing: -0.8px;
-            color: var(--fill-primary);
+            color: var(--cg-text-primary);
             font-variant-numeric: tabular-nums;
           }
           .cg-headline-label {
             font-size: 12px;
-            color: var(--fill-secondary);
+            color: var(--cg-text-secondary);
             margin-right: 6px;
           }
           .cg-headline-sep {
-            color: var(--fill-quinary, #ccc);
+            color: var(--cg-text-tertiary);
             margin: 0 2px;
             font-size: 10px;
           }
           .cg-headline-detail {
             font-size: 11px;
-            color: var(--fill-secondary);
+            color: var(--cg-text-secondary);
           }
           .cg-headline-detail strong {
-            color: var(--fill-primary);
+            color: var(--cg-text-primary);
             font-weight: 600;
           }
 
@@ -407,10 +407,10 @@ export function registerCitationPane(pluginID: string): void {
           }
 
           .cg-trend {
-            border-top: 1px solid var(--fill-quinary, rgba(255,255,255,0.06));
+            border-top: 1px solid var(--cg-sage-tint-08);
             padding-top: 7px;
             font-size: 11px;
-            color: var(--fill-secondary, #8e8e93);
+            color: var(--cg-text-secondary);
             line-height: 1.4;
           }
 
@@ -433,8 +433,8 @@ export function registerCitationPane(pluginID: string): void {
             color: var(--cg-amber-fg-strong);
           }
           .cg-match-card {
-            border: 1px solid rgba(143,173,159,0.25);
-            border-radius: 8px;
+            border: 1px solid var(--cg-sage-tint-25);
+            border-radius: var(--cg-radius-lg);
             padding: 10px 12px;
             margin-bottom: 10px;
             font-size: 11px;
@@ -443,11 +443,11 @@ export function registerCitationPane(pluginID: string): void {
           .cg-match-card-title {
             font-weight: 600;
             font-size: 12px;
-            color: var(--fill-primary);
+            color: var(--cg-text-primary);
             margin-bottom: 3px;
           }
           .cg-match-card-meta {
-            color: var(--fill-secondary, #8e8e93);
+            color: var(--cg-text-secondary);
             font-size: 11px;
             margin-bottom: 2px;
           }
@@ -463,7 +463,7 @@ export function registerCitationPane(pluginID: string): void {
             font-weight: 700;
             letter-spacing: 0.05em;
             text-transform: uppercase;
-            color: var(--fill-secondary, #8e8e93);
+            color: var(--cg-text-secondary);
           }
           .cg-match-chip {
             font-size: 10px;
@@ -481,12 +481,12 @@ export function registerCitationPane(pluginID: string): void {
           .cg-match-prompt {
             font-size: 11px;
             line-height: 1.45;
-            color: var(--fill-secondary, #8e8e93);
+            color: var(--cg-text-secondary);
             margin-bottom: 8px;
           }
           .cg-match-legend {
             font-size: 10px;
-            color: var(--fill-secondary, #8e8e93);
+            color: var(--cg-text-secondary);
             opacity: 0.85;
             margin-bottom: 10px;
           }
@@ -548,17 +548,17 @@ export function registerCitationPane(pluginID: string): void {
             color: var(--cg-text-primary);
           }
           .cg-doi-prompt {
-            border: 1px solid rgba(143,173,159,0.25);
+            border: 1px solid var(--cg-sage-tint-25);
             border-radius: 6px;
             padding: 8px 10px;
             margin-top: 10px;
             font-size: 11px;
-            color: var(--fill-secondary, #8e8e93);
+            color: var(--cg-text-secondary);
             line-height: 1.45;
           }
           .cg-doi-prompt strong {
             display: block;
-            color: var(--fill-primary);
+            color: var(--cg-text-primary);
             font-size: 11px;
             margin-bottom: 4px;
           }
@@ -589,7 +589,7 @@ export function registerCitationPane(pluginID: string): void {
             padding: 5px 10px;
             background: transparent;
             border: none;
-            color: var(--fill-secondary, #8e8e93);
+            color: var(--cg-text-secondary);
             font-size: 11px;
             font-family: inherit;
             cursor: pointer;

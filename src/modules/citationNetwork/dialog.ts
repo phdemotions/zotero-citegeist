@@ -121,7 +121,9 @@ export async function showCitationNetwork(
     width: 780px; max-width: 90vw; max-height: 82vh;
     padding: 0; border: 1px solid rgba(128,128,128,0.1);
     border-radius: 12px;
-    background: var(--material-background, #2c2c2e); color: var(--fill-primary, #e8e8ed);
+    /* Pre-stylesheet placeholder (slate, matching --cg-surface/--cg-text dark
+       arms); getDialogCSS() immediately overrides with the light-dark tokens. */
+    background: #141D18; color: #E7EEE9;
     box-shadow: 0 20px 40px rgba(0,0,0,0.5), 0 0 1px rgba(128,128,128,0.1);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-size: 13px; line-height: 1.4;

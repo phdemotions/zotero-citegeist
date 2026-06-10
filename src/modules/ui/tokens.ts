@@ -138,6 +138,14 @@ export function cgDesignTokens(scope: string, opts: CgTokenOptions = {}): string
       --cg-danger-tint: light-dark(rgba(196, 64, 48, 0.10), rgba(255, 69, 58, 0.12));
       --cg-danger-tint-strong: light-dark(rgba(196, 64, 48, 0.18), rgba(255, 69, 58, 0.22));
 
+      /* ── Success: "added to library" / undo affordance. Dark arms preserve
+         the prior frozen #4A7D6B / rgba(74,125,107,…); light arms add the
+         proper deep-sage so light mode no longer shows the dark-arm green. ── */
+      --cg-success: light-dark(#2F6B5A, #4A7D6B);
+      --cg-success-tint: light-dark(rgba(47, 107, 90, 0.12), rgba(74, 125, 107, 0.12));
+      --cg-success-tint-strong: light-dark(rgba(47, 107, 90, 0.20), rgba(74, 125, 107, 0.20));
+      --cg-success-border: light-dark(rgba(47, 107, 90, 0.30), rgba(74, 125, 107, 0.30));
+
       /* ── Focus ring (instant, never animated) ── */
       --cg-focus-ring: var(--cg-sage-accent);
       --cg-focus: 0 0 0 2px var(--cg-surface), 0 0 0 4px var(--cg-sage-accent);
