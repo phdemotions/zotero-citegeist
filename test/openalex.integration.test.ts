@@ -5,21 +5,22 @@
  * which has been cited thousands of times and is unlikely to change or disappear.
  *
  * Purpose: catch OpenAlex API *contract* changes that would break Citegeist.
- * It is therefore resilient to network conditions — it uses the polite pool
- * (mailto), like the plugin does at runtime, plus a generous timeout, and it
- * SKIPS rather than fails when OpenAlex is unreachable or returns a transient
- * error. A network blip is not a contract regression and must not red the
- * build; the test only fails if the response shape Citegeist depends on changed.
+ * It is therefore resilient to network conditions — a generous timeout, the
+ * polite pool when OPENALEX_MAILTO is set, and most importantly it SKIPS rather
+ * than fails when OpenAlex is unreachable or returns a transient error. A
+ * network blip is not a contract regression and must not red the build; the
+ * test only fails if the response shape Citegeist depends on actually changed.
  */
 import { describe, it, expect } from "vitest";
 
 const OPENALEX_BASE = "https://api.openalex.org";
 const KNOWN_DOI = "10.1126/science.122.3159.108"; // Garfield 1955
 
-// Polite pool: the same courtesy the plugin extends at runtime — faster, more
-// reliable responses than the anonymous common pool. Override via the
-// OPENALEX_MAILTO env var in CI if a different contact is preferred.
-const MAILTO = process.env.OPENALEX_MAILTO || "citegeist@opusvita.org";
+// Polite pool, opt-in only: set OPENALEX_MAILTO in the CI environment to route
+// this test through OpenAlex's polite pool (faster, more reliable). We do NOT
+// commit a default contact address — an unset env var just uses the anonymous
+// common pool, and the skip-on-network handling below keeps that from flaking.
+const MAILTO = process.env.OPENALEX_MAILTO;
 
 const SELECT_FIELDS =
   "id,doi,title,display_name,publication_year,cited_by_count," +
@@ -29,15 +30,17 @@ const SELECT_FIELDS =
 describe("OpenAlex API integration", () => {
   it("returns expected fields for a known DOI", async (ctx) => {
     const url =
-      `${OPENALEX_BASE}/works/doi:${encodeURIComponent(KNOWN_DOI)}` +
-      `?select=${SELECT_FIELDS}&mailto=${encodeURIComponent(MAILTO)}`;
+      `${OPENALEX_BASE}/works/doi:${encodeURIComponent(KNOWN_DOI)}?select=${SELECT_FIELDS}` +
+      (MAILTO ? `&mailto=${encodeURIComponent(MAILTO)}` : "");
 
     let response: Response;
     try {
       response = await fetch(url, {
         headers: {
           Accept: "application/json",
-          "User-Agent": `Citegeist/test (integration; mailto:${MAILTO})`,
+          "User-Agent": MAILTO
+            ? `Citegeist/test (integration; mailto:${MAILTO})`
+            : "Citegeist/test (integration)",
         },
         signal: AbortSignal.timeout(20000),
       });
