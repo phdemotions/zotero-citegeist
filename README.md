@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/phdemotions/zotero-citegeist/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/phdemotions/zotero-citegeist?style=flat-square&color=5a9cff" /></a>
   <a href="https://github.com/phdemotions/zotero-citegeist/releases/latest"><img alt="Downloads" src="https://img.shields.io/github/downloads/phdemotions/zotero-citegeist/total?style=flat-square&color=30d158" /></a>
-  <a href="https://github.com/phdemotions/zotero-citegeist/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/phdemotions/zotero-citegeist?style=flat-square&color=8e8e93" /></a>
+  <a href="https://github.com/phdemotions/zotero-citegeist/blob/main/LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0-8e8e93?style=flat-square" /></a>
   <a href="https://doi.org/10.5281/zenodo.19433716"><img alt="DOI" src="https://zenodo.org/badge/DOI/10.5281/zenodo.19433716.svg" /></a>
 </p>
 
@@ -108,7 +108,7 @@ Select any item in your library and look at the right-hand detail panel. You'll 
 | **FWCI**             | How this paper compares to the world average for its field and year. **1.0** = average, **2.0** = twice the average.             |
 | **Percentile**       | Where this paper ranks compared to all papers in its field and year. "85th %ile" means cited more than 85% of comparable papers. |
 | **Top 1% / Top 10%** | A badge appears if the paper is among the most-cited in its field                                                                |
-| **Trend**            | Whether citation rates are rising or falling (e.g., "45 citations in 2025, +23%")                                                |
+| **Trend**            | Whether citation rates are rising or falling (e.g., "↗ 45 citations in 2025 (+23%)")                                             |
 
 Below the stats, two buttons let you explore the paper's citation network:
 
@@ -130,7 +130,7 @@ Each result shows:
 - **Title** (click to open the full record)
 - **Authors, journal, and year**
 - **Citation count** (color-coded by impact)
-- **Badges:** Open Access, Retracted, In Library
+- **Badges:** Open Access, Retracted, In Library, No DOI
 
 Click any result to expand its **abstract**.
 
@@ -142,7 +142,7 @@ Each result has a button to add it directly to your Zotero library:
 2. **Click the dropdown arrow** to choose specific collections
 3. Papers already in your library show a **File** button for moving between collections
 
-**Set a default collection** using the picker at the top of the browser. This saves clicks when adding multiple papers to the same project folder.
+**Set a default collection** using the picker in the browser footer. This saves clicks when adding multiple papers to the same project folder.
 
 **Tip:** Open a key paper in your field, view its citing works, sort by most cited, and add the relevant ones to your library &mdash; all without leaving Zotero.
 
@@ -154,11 +154,11 @@ Each result has a button to add it directly to your Zotero library:
 
 Right-click one or more items in your library:
 
-| Menu item                 | What it does                                                                      |
-| ------------------------- | --------------------------------------------------------------------------------- |
-| **Fetch Citation Counts** | Fetches (or refreshes) citation data for selected items. Works with multi-select. |
-| **View Citing Works...**  | Opens the citation network browser (single items with a DOI only)                 |
-| **View References...**    | Opens the citation network browser in references mode                             |
+| Menu item                 | What it does                                                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------------- |
+| **Fetch Citation Counts** | Fetches (or refreshes) citation data for selected items. Works with multi-select.             |
+| **View Citing Works...**  | Opens the citation network browser. Single-select only; the item needs a DOI to load results. |
+| **View References...**    | Opens the citation network browser in references mode                                         |
 
 #### On collections (folders)
 
@@ -275,7 +275,9 @@ No. Everything is free, no sign-up required. Optionally add your email in settin
 <details>
 <summary><strong>Does my data sync across devices?</strong></summary>
 
-Yes. Citation data is stored inside each item in your Zotero library, so it syncs automatically through Zotero Sync. Citegeist never modifies your existing data &mdash; it only adds its own fields.
+Cached metrics (citation counts, FWCI, percentiles, journal metrics) live in a local, per-device SQLite file (`<profile>/citegeist.sqlite`) and do **not** sync. The first time you open Zotero on a new device, items refetch from OpenAlex automatically &mdash; expect a brief loading period, after which it's instant.
+
+The one thing that **does** sync is your manually confirmed title matches. When you confirm a match for an item without a DOI, Citegeist writes a single `Citegeist match ID: W…` line to that item's Extra field, which travels with Zotero Sync so your confirmation reaches every device. See [Multi-device behavior](#multi-device-behavior) above for the full picture.
 
 </details>
 
@@ -330,9 +332,9 @@ v2.0.0 moved cached citation data out of Zotero's `Extra` field and into a plugi
 
 **Safety net Citegeist creates for you (automatic):**
 
-Before the migration touches a single item, Citegeist writes a JSON snapshot of every Extra field it's about to modify to your Zotero data directory. The file is named `citegeist-migration-backup-<timestamp>.json` and contains the full, verbatim Extra contents for every item being migrated, keyed by `library_id` + `item_key`. After migration completes, a one-time alert tells you exactly where the file lives.
+Before the migration touches a single item, Citegeist writes a JSON snapshot of every Extra field it's about to modify to a `citegeist-backups/` folder inside your Zotero data directory. The file is named `citegeist-migration-backup-<timestamp>.json` and contains the full, verbatim Extra contents for every item being migrated, keyed by `library_id` + `item_key`. After migration completes, a one-time alert tells you exactly where the file lives.
 
-If anything looks wrong after migration — a note missing, an unfamiliar change to an item's Extra — open that JSON file, find the item by its key, and paste the `extra` value back into the item's Extra field via Zotero's UI. The file stays on disk permanently; delete it once you've confirmed everything is fine.
+If anything looks wrong after migration — a note missing, an unfamiliar change to an item's Extra — open that JSON file, find the item by its key, and paste the `extra` value back into the item's Extra field via Zotero's UI. The file isn't deleted automatically (Citegeist keeps the five most recent migration backups); delete it once you've confirmed everything is fine.
 
 **If something looks wrong after upgrading:**
 
