@@ -435,8 +435,8 @@ export function registerCitationPane(pluginID: string): void {
           .cg-match-card {
             border: 1px solid var(--cg-sage-tint-25);
             border-radius: var(--cg-radius-lg);
-            padding: 10px 12px;
-            margin-bottom: 10px;
+            padding: var(--cg-space-4);
+            margin-bottom: var(--cg-space-3);
             font-size: 11px;
             line-height: 1.5;
           }
@@ -444,19 +444,19 @@ export function registerCitationPane(pluginID: string): void {
             font-weight: 600;
             font-size: 12px;
             color: var(--cg-text-primary);
-            margin-bottom: 3px;
+            margin-bottom: var(--cg-space-1);
           }
           .cg-match-card-meta {
             color: var(--cg-text-secondary);
             font-size: 11px;
-            margin-bottom: 2px;
+            margin-bottom: var(--cg-space-1);
           }
           .cg-match-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 8px;
-            margin-bottom: 6px;
+            gap: var(--cg-space-2);
+            margin-bottom: var(--cg-space-3);
           }
           .cg-match-eyebrow {
             font-size: 10px;
@@ -482,17 +482,13 @@ export function registerCitationPane(pluginID: string): void {
             font-size: 11px;
             line-height: 1.45;
             color: var(--cg-text-secondary);
-            margin-bottom: 8px;
+            margin-bottom: var(--cg-space-3);
           }
           .cg-match-legend {
             font-size: 10px;
             color: var(--cg-text-secondary);
             opacity: 0.85;
-            margin-bottom: 10px;
-          }
-          .cg-match-actions {
-            display: flex;
-            gap: 6px;
+            margin-bottom: var(--cg-space-3);
           }
           #citegeist-pane-root .cg-match-confirm:disabled,
           #citegeist-pane-root .cg-match-dismiss:disabled {
@@ -509,44 +505,10 @@ export function registerCitationPane(pluginID: string): void {
           #citegeist-pane-root .cg-match-verify:hover {
             text-decoration: underline;
           }
-          #citegeist-pane-root .cg-match-confirm {
-            flex: 1;
-            padding: 7px 10px;
-            background: var(--cg-primary-bg);
-            border: none;
-            border-radius: 6px;
-            color: var(--cg-primary-fg);
-            font-size: 12px;
-            font-weight: 600;
-            font-family: inherit;
-            cursor: pointer;
-          }
-          #citegeist-pane-root .cg-match-confirm:focus-visible {
-            outline: 2px solid var(--cg-sage-fg);
-            outline-offset: 2px;
-          }
-          #citegeist-pane-root .cg-match-confirm:hover {
-            background: var(--cg-primary-bg-hover);
-          }
-          #citegeist-pane-root .cg-match-dismiss {
-            flex: 1;
-            padding: 7px 10px;
-            background: transparent;
-            border: 1px solid var(--cg-sage-border);
-            border-radius: 6px;
-            color: var(--cg-text-secondary);
-            font-size: 12px;
-            font-family: inherit;
-            cursor: pointer;
-          }
-          #citegeist-pane-root .cg-match-dismiss:focus-visible {
-            outline: 2px solid var(--cg-sage-fg);
-            outline-offset: 2px;
-          }
-          #citegeist-pane-root .cg-match-dismiss:hover {
-            background: var(--cg-sage-bg);
-            color: var(--cg-text-primary);
-          }
+          /* Confirm / "Not this paper" reuse the shared .cg-action-btn /
+             .cg-action-btn-primary primitives (assigned in renderSuggestion) so
+             they match the data view's buttons exactly. Only the :disabled hook
+             above is local to the suggestion card. */
           .cg-doi-prompt {
             border: 1px solid var(--cg-sage-tint-25);
             border-radius: 6px;
@@ -961,16 +923,18 @@ function renderSuggestion(
   legend.textContent = "~ estimated until you confirm";
   card.appendChild(legend);
 
-  // Primary / secondary actions.
+  // Primary / secondary actions — reuse the shared button primitives so the
+  // suggestion card matches the data view exactly (the cg-match-* classes are
+  // kept only as JS/`:disabled` hooks).
   const actions = doc.createElement("div");
-  actions.className = "cg-match-actions";
+  actions.className = "cg-actions";
   actions.appendChild(
-    makeGuardedButton("Confirm match", "cg-match-confirm", () =>
+    makeGuardedButton("Confirm match", "cg-action-btn cg-action-btn-primary cg-match-confirm", () =>
       onConfirm().catch((e) => logError("onConfirm", e)),
     ),
   );
   actions.appendChild(
-    makeGuardedButton("Not this paper", "cg-match-dismiss", () =>
+    makeGuardedButton("Not this paper", "cg-action-btn cg-match-dismiss", () =>
       onDismiss().catch((e) => logError("onDismiss", e)),
     ),
   );
