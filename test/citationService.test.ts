@@ -69,6 +69,7 @@ vi.mock("../src/modules/openalex", () => ({
   getWorkByPMID: vi.fn(),
   getWorkByArxivId: vi.fn(),
   getWorkByISBN: vi.fn(),
+  getWorkById: vi.fn(),
   getSourceStats: vi.fn().mockResolvedValue(null),
   normalizeDOI: (doi: string) =>
     doi
@@ -101,20 +102,32 @@ vi.mock("../src/modules/openalex", () => ({
   },
 }));
 
-import { fetchAndCacheItem, extractIdentifier } from "../src/modules/citationService";
+import {
+  fetchAndCacheItem,
+  extractIdentifier,
+  canResolveWork,
+  resolveWorkForItem,
+} from "../src/modules/citationService";
 import {
   getWorkByDOI,
   getWorkByPMID,
   getWorkByArxivId,
   getWorkByISBN,
+  getWorkById,
 } from "../src/modules/openalex";
 import { _resetForTesting } from "../src/modules/cache/db";
-import { initCache, cacheWorkData } from "../src/modules/cache";
+import {
+  initCache,
+  cacheWorkData,
+  writePendingSuggestion,
+  confirmTitleMatch,
+} from "../src/modules/cache";
 
 const mockedGetWorkByDOI = vi.mocked(getWorkByDOI);
 const mockedGetWorkByPMID = vi.mocked(getWorkByPMID);
 const mockedGetWorkByArxivId = vi.mocked(getWorkByArxivId);
 const mockedGetWorkByISBN = vi.mocked(getWorkByISBN);
+const mockedGetWorkById = vi.mocked(getWorkById);
 
 function mockItem(
   overrides: {
@@ -423,5 +436,158 @@ describe("fetchAndCacheItem", () => {
     const result = await fetchAndCacheItem(item);
     expect(result.status).toBe("error");
     if (result.status === "error") expect(result.error).toBe("no-match");
+  });
+});
+
+// ── canResolveWork ────────────────────────────────────────────────────────────
+
+describe("canResolveWork", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    fakeDb = makeFakeDb();
+    _resetForTesting();
+    await initCache();
+  });
+
+  it("returns true for an item with a DOI", () => {
+    expect(canResolveWork(mockItem({ doi: "10.1234/test" }))).toBe(true);
+  });
+
+  it("returns true for a PMID-only item", () => {
+    expect(canResolveWork(mockItem({ extra: "PMID: 12345678" }))).toBe(true);
+  });
+
+  it("returns true for an arXiv-only item", () => {
+    expect(canResolveWork(mockItem({ extra: "arXiv: 2205.01833" }))).toBe(true);
+  });
+
+  it("returns true for an ISBN-only item", () => {
+    expect(canResolveWork(mockItem({ isbn: "9780262046309", itemType: "book" }))).toBe(true);
+  });
+
+  it("returns false for an item with no recognized identifier", () => {
+    expect(canResolveWork(mockItem({ extra: "just a note" }))).toBe(false);
+  });
+
+  it("returns false for a non-regular item (note, attachment)", () => {
+    expect(canResolveWork(mockItem({ isRegular: false, doi: "10.1234/test" }))).toBe(false);
+  });
+
+  it("returns true for a confirmed title match even with no other identifier", async () => {
+    const item = mockItem({ extra: "no identifier here" });
+    await writePendingSuggestion(
+      item,
+      {
+        id: "https://openalex.org/W90100",
+        display_name: "Confirmed Work",
+        cited_by_count: 1,
+        fwci: null,
+        publication_year: 2020,
+        doi: null,
+      },
+      "high",
+      0.95,
+    );
+    await confirmTitleMatch(item, "high");
+    expect(canResolveWork(item)).toBe(true);
+  });
+});
+
+// ── resolveWorkForItem ──────────────────────────────────────────────────────────
+
+describe("resolveWorkForItem", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    fakeDb = makeFakeDb();
+    _resetForTesting();
+    await initCache();
+  });
+
+  it("resolves via DOI when present", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    const work = makeFakeWork();
+    mockedGetWorkByDOI.mockResolvedValue(work);
+    expect(await resolveWorkForItem(item)).toBe(work);
+    expect(mockedGetWorkByDOI).toHaveBeenCalledWith("10.1234/test");
+  });
+
+  it("resolves via PMID when no DOI", async () => {
+    const item = mockItem({ extra: "PMID: 12345678" });
+    const work = makeFakeWork();
+    mockedGetWorkByPMID.mockResolvedValue(work);
+    expect(await resolveWorkForItem(item)).toBe(work);
+    expect(mockedGetWorkByPMID).toHaveBeenCalledWith("12345678");
+    expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
+  });
+
+  it("resolves via arXiv when no DOI or PMID", async () => {
+    const item = mockItem({ extra: "arXiv: 2205.01833" });
+    const work = makeFakeWork();
+    mockedGetWorkByArxivId.mockResolvedValue(work);
+    expect(await resolveWorkForItem(item)).toBe(work);
+    expect(mockedGetWorkByArxivId).toHaveBeenCalledWith("2205.01833");
+  });
+
+  it("resolves via ISBN when no other identifier", async () => {
+    const item = mockItem({ isbn: "9780262046309", itemType: "book" });
+    const work = makeFakeWork();
+    mockedGetWorkByISBN.mockResolvedValue(work);
+    expect(await resolveWorkForItem(item)).toBe(work);
+    expect(mockedGetWorkByISBN).toHaveBeenCalledWith("9780262046309");
+  });
+
+  it("returns null when the item has no resolvable identifier", async () => {
+    const item = mockItem({ extra: "no id" });
+    expect(await resolveWorkForItem(item)).toBeNull();
+    expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
+  });
+
+  it("prefers a confirmed title-match id over identifier lookup", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    await writePendingSuggestion(
+      item,
+      {
+        id: "https://openalex.org/W90200",
+        display_name: "Confirmed Work",
+        cited_by_count: 1,
+        fwci: null,
+        publication_year: 2020,
+        doi: null,
+      },
+      "high",
+      0.95,
+    );
+    await confirmTitleMatch(item, "high");
+    const confirmedWork = makeFakeWork({ id: "https://openalex.org/W90200" });
+    mockedGetWorkById.mockResolvedValue(confirmedWork);
+
+    expect(await resolveWorkForItem(item)).toBe(confirmedWork);
+    expect(mockedGetWorkById).toHaveBeenCalledWith("W90200");
+    expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
+  });
+
+  it("falls through to identifier lookup when the confirmed id no longer resolves", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    await writePendingSuggestion(
+      item,
+      {
+        id: "https://openalex.org/W90300",
+        display_name: "Stale Confirmed Work",
+        cited_by_count: 1,
+        fwci: null,
+        publication_year: 2020,
+        doi: null,
+      },
+      "high",
+      0.95,
+    );
+    await confirmTitleMatch(item, "high");
+    mockedGetWorkById.mockResolvedValue(null); // confirmed id gone from OpenAlex
+    const work = makeFakeWork();
+    mockedGetWorkByDOI.mockResolvedValue(work);
+
+    expect(await resolveWorkForItem(item)).toBe(work);
+    expect(mockedGetWorkById).toHaveBeenCalledWith("W90300");
+    expect(mockedGetWorkByDOI).toHaveBeenCalledWith("10.1234/test");
   });
 });

@@ -154,11 +154,11 @@ Each result has a button to add it directly to your Zotero library:
 
 Right-click one or more items in your library:
 
-| Menu item                 | What it does                                                                                  |
-| ------------------------- | --------------------------------------------------------------------------------------------- |
-| **Fetch Citation Counts** | Fetches (or refreshes) citation data for selected items. Works with multi-select.             |
-| **View Citing Works...**  | Opens the citation network browser. Single-select only; the item needs a DOI to load results. |
-| **View References...**    | Opens the citation network browser in references mode                                         |
+| Menu item                 | What it does                                                                                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Fetch Citation Counts** | Fetches (or refreshes) citation data for selected items. Works with multi-select.                                                                |
+| **View Citing Works...**  | Opens the citation network browser. Single-select only; needs a recognized identifier (DOI, PMID, arXiv ID, or ISBN) or a confirmed title match. |
+| **View References...**    | Opens the citation network browser in references mode                                                                                            |
 
 #### On collections (folders)
 

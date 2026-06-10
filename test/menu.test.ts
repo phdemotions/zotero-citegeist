@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   extractIdentifier: vi.fn((item: { hasIdentifier?: boolean }) =>
     item.hasIdentifier !== false ? { type: "doi", value: "10.1/test" } : null,
   ),
+  canResolveWork: vi.fn((item: { hasIdentifier?: boolean }) => item.hasIdentifier !== false),
   invalidateColumnCache: vi.fn(),
   showCitationNetwork: vi.fn(async () => {}),
 }));
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../src/modules/citationService", () => ({
   fetchAndCacheItems: mocks.fetchAndCacheItems,
   extractIdentifier: mocks.extractIdentifier,
+  canResolveWork: mocks.canResolveWork,
 }));
 vi.mock("../src/modules/citationColumn", () => ({
   invalidateColumnCache: mocks.invalidateColumnCache,

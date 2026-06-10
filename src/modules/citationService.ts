@@ -118,6 +118,58 @@ export function extractIdentifier(item: _ZoteroTypes.Item): ItemIdentifier | nul
 }
 
 /**
+ * True when the citation-network browser can resolve this item to an
+ * OpenAlex work — i.e. the item has a user-confirmed title-match id, or any
+ * recognized identifier (DOI / PMID / arXiv / ISBN).
+ *
+ * This is the single predicate the menu, pane, and dialog all gate on, so the
+ * "View citing works / references" affordance is never offered for an item the
+ * browser would then reject. Previously the menu gated on `extractIdentifier`
+ * while the dialog hard-required a DOI, so a PMID/arXiv/ISBN-only item showed
+ * an enabled menu entry that dead-ended on a "no DOI" alert.
+ */
+export function canResolveWork(item: _ZoteroTypes.Item): boolean {
+  if (!item.isRegularItem()) return false;
+  if (getTitleMatchMeta(item).confirmedOpenAlexId) return true;
+  return extractIdentifier(item) !== null;
+}
+
+/**
+ * Resolve a Zotero item to its OpenAlex work for the citation-network browser.
+ * Tries the user-confirmed title-match id first, then the best available
+ * identifier (DOI → PMID → arXiv → ISBN), mirroring `fetchAndCacheItem`'s
+ * resolution order.
+ *
+ * Unlike `fetchAndCacheItem`, this never short-circuits on cache freshness: the
+ * browser always needs the live work object, whose `id` drives the citing and
+ * referenced-works queries. Returns `null` when the item has no resolvable
+ * identifier or the work isn't on OpenAlex; throws `OpenAlexNetworkError` when
+ * the service is unreachable (callers render the "OpenAlex unavailable" state).
+ */
+export async function resolveWorkForItem(item: _ZoteroTypes.Item): Promise<OpenAlexWork | null> {
+  const matchMeta = getTitleMatchMeta(item);
+  if (matchMeta.confirmedOpenAlexId) {
+    const confirmed = await getWorkById(matchMeta.confirmedOpenAlexId);
+    if (confirmed) return confirmed;
+    // Confirmed id no longer resolves — fall through to identifier lookup.
+  }
+
+  const identifier = extractIdentifier(item);
+  if (!identifier) return null;
+
+  switch (identifier.type) {
+    case "doi":
+      return getWorkByDOI(identifier.value);
+    case "pmid":
+      return getWorkByPMID(identifier.value);
+    case "arxiv":
+      return getWorkByArxivId(identifier.value);
+    case "isbn":
+      return getWorkByISBN(identifier.value);
+  }
+}
+
+/**
  * Fetch citation data for a single Zotero item and cache it.
  * Returns the work data on success so callers can use it without a second API call.
  */

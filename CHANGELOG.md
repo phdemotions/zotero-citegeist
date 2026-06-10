@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The citation network browser now opens for any item Citegeist can identify,
+  not just items with a DOI.** "View Citing Works" and "View References"
+  previously opened and then stopped with a "requires a DOI" message for papers
+  found via PubMed ID, arXiv ID, or ISBN, or via a confirmed title match.
+  Citegeist now resolves the work from whichever identifier the item has and
+  loads its citation network directly. The right-click menu entries are enabled
+  on the same basis, so they no longer dead-end on an alert.
+
 ## [2.0.2] — 2026-06-08
 
 ### Fixed

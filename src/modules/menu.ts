@@ -16,7 +16,7 @@
  * paths stay in sync.
  */
 
-import { fetchAndCacheItems, extractIdentifier } from "./citationService";
+import { fetchAndCacheItems, extractIdentifier, canResolveWork } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import { showCitationNetwork } from "./citationNetwork";
 import { logError } from "./utils";
@@ -129,10 +129,10 @@ function eligibleSelectedCount(): number {
   return Zotero.getActiveZoteroPane().getSelectedItems().filter(isEligible).length;
 }
 
-/** True when exactly one item is selected and it has a recognized identifier. */
-function singleSelectedWithIdentifier(): boolean {
+/** True when exactly one item is selected and the browser can resolve it to a work. */
+function singleSelectedResolvable(): boolean {
   const items = Zotero.getActiveZoteroPane().getSelectedItems();
-  return items.length === 1 && isEligible(items[0]);
+  return items.length === 1 && canResolveWork(items[0]);
 }
 
 // ── Actions (shared by DOM + MenuManager handlers) ───────────────────────────
@@ -320,13 +320,13 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-citing",
-        onShowing: (_e, ctx) => ctx.setVisible(itemsSingleEligible(ctx.items)),
+        onShowing: (_e, ctx) => ctx.setVisible(itemsSingleResolvable(ctx.items)),
         onCommand: () => runViewNetwork("citing"),
       },
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-refs",
-        onShowing: (_e, ctx) => ctx.setVisible(itemsSingleEligible(ctx.items)),
+        onShowing: (_e, ctx) => ctx.setVisible(itemsSingleResolvable(ctx.items)),
         onCommand: () => runViewNetwork("references"),
       },
     ],
@@ -369,11 +369,11 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
  * `items` (the documented access path) but falls back to the active pane's
  * selection if the context omits them.
  */
-function itemsSingleEligible(items: _ZoteroTypes.Item[] | undefined): boolean {
+function itemsSingleResolvable(items: _ZoteroTypes.Item[] | undefined): boolean {
   if (items && items.length > 0) {
-    return items.length === 1 && isEligible(items[0]);
+    return items.length === 1 && canResolveWork(items[0]);
   }
-  return singleSelectedWithIdentifier();
+  return singleSelectedResolvable();
 }
 
 // ── DOM path (Zotero 7.0.x fallback) ─────────────────────────────────────────
@@ -431,9 +431,9 @@ function registerViaDOM(win: Window): void {
       const items = Zotero.getActiveZoteroPane().getSelectedItems();
       fetchItem.hidden = eligibleCount === 0;
       sep.hidden = eligibleCount === 0 && items.length !== 1;
-      const singleWithIdentifier = singleSelectedWithIdentifier();
-      citingItem.hidden = !singleWithIdentifier;
-      refsItem.hidden = !singleWithIdentifier;
+      const singleResolvable = singleSelectedResolvable();
+      citingItem.hidden = !singleResolvable;
+      refsItem.hidden = !singleResolvable;
     });
   }
 
