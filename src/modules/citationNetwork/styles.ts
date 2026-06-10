@@ -239,15 +239,8 @@ export function getDialogCSS(): string {
     .cg-result-badges {
       display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap; align-items: center;
     }
-    .cg-result-badge {
-      font-size: 10px; padding: 1px 7px; border-radius: 4px;
-      font-weight: 600; letter-spacing: 0.1px;
-      font-family: var(--cg-font);
-    }
-    .cg-badge-oa { background: var(--cg-sage-accent-tint-12); color: var(--cg-sage-accent); }
-    .cg-badge-retracted { background: var(--cg-red-bg); color: var(--cg-red-fg); }
-    .cg-badge-in-library { background: var(--cg-sage-accent-tint-12); color: var(--cg-sage-accent); }
-    .cg-badge-no-doi { background: var(--cg-sage-tint-06); color: var(--cg-text-tertiary); }
+    /* Result badges use the shared .cg-chip primitive (default sage / --quiet /
+       --danger) — see src/modules/ui/components.ts. The row above owns layout. */
 
     /* ── Right column: count + action ── */
     .cg-result-right {

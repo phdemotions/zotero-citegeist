@@ -317,22 +317,9 @@ export function registerCitationPane(pluginID: string): void {
             font-weight: 600;
           }
 
-          .cg-badge {
-            font-size: 9px;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-weight: 700;
-            margin-left: 4px;
-            vertical-align: middle;
-          }
-          .cg-badge-top1 {
-            background: var(--cg-amber-bg);
-            color: var(--cg-amber-fg);
-          }
-          .cg-badge-top10 {
-            background: var(--cg-sage-bg);
-            color: var(--cg-sage-fg);
-          }
+          /* Percentile badges use the shared .cg-chip primitive
+             (.cg-chip--amber for Top 1%) — see src/modules/ui/components.ts.
+             The .cg-metric-badge wrapper below owns placement. */
 
           .cg-metric-grid {
             display: grid;
@@ -971,9 +958,9 @@ function renderPane(
     const pctVal =
       data.percentile !== null ? escapeHTML(toOrdinal(Math.round(data.percentile))) : "—";
     const pctBadge = data.isTop1Percent
-      ? `<span class="cg-metric-badge"><span class="cg-badge cg-badge-top1">Top 1%</span></span>`
+      ? `<span class="cg-metric-badge"><span class="cg-chip cg-chip--amber">Top 1%</span></span>`
       : data.isTop10Percent
-        ? `<span class="cg-metric-badge"><span class="cg-badge cg-badge-top10">Top 10%</span></span>`
+        ? `<span class="cg-metric-badge"><span class="cg-chip">Top 10%</span></span>`
         : "";
     grid.appendChild(makeTile("PERCENTILE", pctVal, pctBadge));
 

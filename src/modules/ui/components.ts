@@ -59,6 +59,28 @@ export function cgComponents(scope: string): string {
     ${scope} .cg-actions { display: flex; gap: var(--cg-space-2); margin-bottom: var(--cg-space-3); }
     ${scope} .cg-actions > .cg-btn { flex: 1; }
 
+    /* ── Chip / badge primitive (canonical uppercase pill — mirrors the
+       gallery). One pill for percentile, Open Access, retracted, in-library,
+       etc.; semantic colour comes from the modifier. Layout-free: the row
+       container (.cg-result-badges / .cg-metric-badge) owns placement. ── */
+    ${scope} .cg-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--cg-space-1);
+      font-size: var(--cg-size-caption);
+      font-weight: var(--cg-weight-bold);
+      letter-spacing: var(--cg-track-caps);
+      text-transform: uppercase;
+      padding: 2px var(--cg-space-2);
+      border-radius: var(--cg-radius-pill);
+      background: var(--cg-sage-tint-12);
+      color: var(--cg-sage-accent);
+      white-space: nowrap;
+    }
+    ${scope} .cg-chip--amber { background: var(--cg-amber-tint); color: var(--cg-amber-strong); }
+    ${scope} .cg-chip--quiet { background: var(--cg-sage-tint-12); color: var(--cg-text-secondary); }
+    ${scope} .cg-chip--danger { background: var(--cg-danger-tint); color: var(--cg-danger); }
+
     @media (prefers-reduced-motion: reduce) {
       ${scope} .cg-btn { transition: none; }
       ${scope} .cg-btn:active { transform: none; }

@@ -247,10 +247,10 @@ export function updateRowButton(state: NetworkState, workId: string): void {
   // Update badges
   const badges = itemEl.querySelector(".cg-result-badges");
   if (badges) {
-    const hasLibBadge = badges.querySelector(".cg-badge-in-library");
+    const hasLibBadge = badges.querySelector(".cg-in-library");
     if (showAsInLibrary && !hasLibBadge) {
       const badge = doc.createElementNS("http://www.w3.org/1999/xhtml", "span") as HTMLSpanElement;
-      badge.className = "cg-result-badge cg-badge-in-library";
+      badge.className = "cg-chip cg-in-library";
       badge.textContent = "In Library";
       badges.appendChild(badge);
     } else if (!showAsInLibrary && hasLibBadge) {
