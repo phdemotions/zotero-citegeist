@@ -135,6 +135,15 @@ describe("MenuManager path (Zotero 8+)", () => {
     fetchShowing({} as Event, { items: [], setVisible: visFetchNone });
     expect(visFetchNone).toHaveBeenCalledWith(false);
 
+    // ctx.items is authoritative when present: a single non-resolvable target
+    // hides Fetch even though the pane selection holds an eligible item. Pins
+    // the ctx.items-first semantics (no OR-with-pane fallback) and prevents a
+    // revert to the old `... || eligibleSelectedCount() > 0` form.
+    const visFetchIneligible = vi.fn();
+    selectedItems = [makeItem(9, true)];
+    fetchShowing({} as Event, { items: [makeItem(2, false)], setVisible: visFetchIneligible });
+    expect(visFetchIneligible).toHaveBeenCalledWith(false);
+
     // Citing is single-item only
     const visCiting2 = vi.fn();
     citingShowing({} as Event, { items: [makeItem(1), makeItem(2)], setVisible: visCiting2 });
