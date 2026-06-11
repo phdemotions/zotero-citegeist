@@ -227,20 +227,12 @@ export function registerCitationPane(pluginID: string): void {
            * filled-button tokens.
            */
           #citegeist-pane-root {
-            /* Sage family → canonical (badges, links, secondary buttons) */
-            --cg-sage-fg: var(--cg-sage-accent);
+            /* Sage compat aliases still referenced by the metric tiles. The
+               filled-button (--cg-primary-*) and amber tokens now come from
+               cgDesignTokens() / cgComponents(), so the pane-local copies the
+               old badges/buttons used are gone. */
             --cg-sage-bg: var(--cg-sage-tint-08);
             --cg-sage-border: var(--cg-sage-tint-35);
-            /* Filled primary button: deliberately dark green in BOTH themes
-               (white text), distinct from the theme-adaptive sage accent so it
-               never resolves to pale-sage-on-white in dark. Pane-local. */
-            --cg-primary-bg: #2F6B5A;
-            --cg-primary-bg-hover: #245546;
-            --cg-primary-fg: #ffffff;
-            /* Amber (evidence weight) → canonical; --cg-amber-border is canonical */
-            --cg-amber-fg: var(--cg-amber);
-            --cg-amber-fg-strong: var(--cg-amber-strong);
-            --cg-amber-bg: var(--cg-amber-tint);
 
             font-family: var(--cg-font);
             font-feature-settings: 'kern' 1, 'liga' 1;
@@ -317,22 +309,9 @@ export function registerCitationPane(pluginID: string): void {
             font-weight: 600;
           }
 
-          .cg-badge {
-            font-size: 9px;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-weight: 700;
-            margin-left: 4px;
-            vertical-align: middle;
-          }
-          .cg-badge-top1 {
-            background: var(--cg-amber-bg);
-            color: var(--cg-amber-fg);
-          }
-          .cg-badge-top10 {
-            background: var(--cg-sage-bg);
-            color: var(--cg-sage-fg);
-          }
+          /* Percentile badges use the shared .cg-chip primitive
+             (.cg-chip--amber for Top 1%) — see src/modules/ui/components.ts.
+             The .cg-metric-badge wrapper below owns placement. */
 
           .cg-metric-grid {
             display: grid;
@@ -387,27 +366,10 @@ export function registerCitationPane(pluginID: string): void {
           }
 
           /* ── Title-match suggestion UI ── */
-          .cg-match-banner {
-            background: var(--cg-amber-bg);
-            border: 1px solid var(--cg-amber-border);
-            border-radius: 6px;
-            padding: 8px 10px;
-            margin-bottom: 10px;
-            font-size: 11px;
-            color: var(--cg-amber-fg);
-            line-height: 1.45;
-          }
-          .cg-match-banner strong {
-            display: block;
-            font-size: 11px;
-            font-weight: 700;
-            margin-bottom: 3px;
-            color: var(--cg-amber-fg-strong);
-          }
+          /* Suggestion-card chrome (border / radius / surface / padding) comes
+             from the shared .cg-card primitive; this keeps only the card's own
+             outer spacing + base type. (.cg-match-banner was dead — removed.) */
           .cg-match-card {
-            border: 1px solid var(--cg-sage-tint-25);
-            border-radius: var(--cg-radius-lg);
-            padding: var(--cg-space-4);
             margin-bottom: var(--cg-space-3);
             font-size: 11px;
             line-height: 1.5;
@@ -430,26 +392,8 @@ export function registerCitationPane(pluginID: string): void {
             gap: var(--cg-space-2);
             margin-bottom: var(--cg-space-3);
           }
-          .cg-match-eyebrow {
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 0.05em;
-            text-transform: uppercase;
-            color: var(--cg-text-secondary);
-          }
-          .cg-match-chip {
-            font-size: 10px;
-            font-weight: 700;
-            padding: 2px 8px;
-            border-radius: 999px;
-            white-space: nowrap;
-            background: var(--cg-sage-bg);
-            color: var(--cg-text-secondary);
-          }
-          .cg-match-chip-strong {
-            background: var(--cg-amber-bg);
-            color: var(--cg-amber-fg-strong);
-          }
+          /* Eyebrow → shared .cg-eyebrow; confidence chip → shared .cg-chip
+             (--amber when strong, --quiet otherwise). See ui/components.ts. */
           .cg-match-prompt {
             font-size: 11px;
             line-height: 1.45;
@@ -471,7 +415,7 @@ export function registerCitationPane(pluginID: string): void {
             display: inline-block;
             margin-top: 8px;
             font-size: 11px;
-            color: var(--cg-sage-fg, #8FAD9F);
+            color: var(--cg-sage-accent);
             text-decoration: none;
           }
           #citegeist-pane-root .cg-match-verify:hover {
@@ -481,20 +425,10 @@ export function registerCitationPane(pluginID: string): void {
              .cg-btn--tinted primitives (assigned in renderSuggestion) so they
              match the data view's buttons exactly. Only the :disabled hook above
              is local to the suggestion card. */
+          /* DOI-prompt chrome comes from the shared .cg-banner primitive (incl.
+             its <strong> block heading); this keeps only the outer spacing. */
           .cg-doi-prompt {
-            border: 1px solid var(--cg-sage-tint-25);
-            border-radius: 6px;
-            padding: 8px 10px;
-            margin-top: 10px;
-            font-size: 11px;
-            color: var(--cg-text-secondary);
-            line-height: 1.45;
-          }
-          .cg-doi-prompt strong {
-            display: block;
-            color: var(--cg-text-primary);
-            font-size: 11px;
-            margin-bottom: 4px;
+            margin-top: var(--cg-space-3);
           }
           .cg-doi-prompt-actions {
             display: flex;
@@ -664,7 +598,7 @@ function renderDoiPrompt(container: HTMLElement, item: _ZoteroTypes.Item, doi: s
   const doc = container.ownerDocument;
 
   const prompt = doc.createElement("div");
-  prompt.className = "cg-doi-prompt";
+  prompt.className = "cg-banner cg-doi-prompt";
 
   const label = doc.createElement("strong");
   label.textContent = "Also add DOI to this item?";
@@ -824,17 +758,17 @@ function renderSuggestion(
   const confidencePct = Math.max(0, Math.min(100, Math.round((suggestion.confidence ?? 0) * 100)));
 
   const card = doc.createElement("div");
-  card.className = "cg-match-card";
+  card.className = "cg-card cg-match-card";
 
   // Header: "POSSIBLE MATCH" eyebrow + a confidence chip.
   const headerRow = doc.createElement("div");
   headerRow.className = "cg-match-header";
   const eyebrow = doc.createElement("span");
-  eyebrow.className = "cg-match-eyebrow";
+  eyebrow.className = "cg-eyebrow";
   eyebrow.textContent = "Possible match";
   headerRow.appendChild(eyebrow);
   const chip = doc.createElement("span");
-  chip.className = isStrong ? "cg-match-chip cg-match-chip-strong" : "cg-match-chip";
+  chip.className = isStrong ? "cg-chip cg-chip--amber" : "cg-chip cg-chip--quiet";
   chip.textContent = `${isStrong ? "Strong" : "Possible"} \u00B7 ${confidencePct}%`;
   headerRow.appendChild(chip);
   card.appendChild(headerRow);
@@ -971,9 +905,9 @@ function renderPane(
     const pctVal =
       data.percentile !== null ? escapeHTML(toOrdinal(Math.round(data.percentile))) : "—";
     const pctBadge = data.isTop1Percent
-      ? `<span class="cg-metric-badge"><span class="cg-badge cg-badge-top1">Top 1%</span></span>`
+      ? `<span class="cg-metric-badge"><span class="cg-chip cg-chip--amber">Top 1%</span></span>`
       : data.isTop10Percent
-        ? `<span class="cg-metric-badge"><span class="cg-badge cg-badge-top10">Top 10%</span></span>`
+        ? `<span class="cg-metric-badge"><span class="cg-chip">Top 10%</span></span>`
         : "";
     grid.appendChild(makeTile("PERCENTILE", pctVal, pctBadge));
 

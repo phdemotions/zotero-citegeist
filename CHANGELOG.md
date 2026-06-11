@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.4] — 2026-06-10
+
+### Changed
+
+- **Consistent badges and cards across Citegeist.** The status labels — Open
+  Access, Top 1%, Top 10%, No DOI, Retracted, In Library, and the
+  match-confidence chip — now render as one uppercase pill style everywhere, the
+  same in the item pane and the citation-network browser. The title-match
+  suggestion card is now a proper raised card. These come from a single shared
+  component layer, so the look stays consistent as the plugin grows.
+
+### Fixed
+
+- **Two low-contrast spots in light mode.** The "View candidate on OpenAlex"
+  link on a suggested match, and the checkmark on a selected collection in the
+  add-to-library picker, used fixed colors that were hard to read against a
+  light background. Both now follow the theme.
+
+### Internal
+
+- The button, chip/badge, card, banner, and eyebrow styles are unified into a
+  single shared primitive layer (`src/modules/ui/components.ts`), replacing the
+  per-surface bespoke CSS. Two tests guard it: primitives must compose from
+  design tokens (no hardcoded colors, so they always follow the host theme), and
+  every shipped primitive must be documented in the design-system gallery so the
+  reference can't drift from the code.
+
 ## [2.0.3] — 2026-06-10
 
 ### Added
@@ -442,6 +469,7 @@ network browser got a thorough pass alongside it:
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[2.0.4]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.0...v2.0.1

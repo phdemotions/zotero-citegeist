@@ -275,7 +275,7 @@ export function renderItemPickerContent(
 
   const actionLabel = inLibrary ? "Done" : "+ Add to Zotero";
   html += `<div class="cg-picker-actions">
-    <button class="cg-picker-done" data-work-id="${escapeHTML(workId)}"
+    <button class="cg-btn cg-btn--sm cg-btn--filled cg-picker-done" data-work-id="${escapeHTML(workId)}"
             data-in-library="${inLibrary}">${actionLabel}</button>
   </div>`;
 

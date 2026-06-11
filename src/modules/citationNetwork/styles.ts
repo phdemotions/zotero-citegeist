@@ -78,11 +78,8 @@ export function getDialogCSS(): string {
       flex-shrink: 0;
     }
     .cg-header-text { min-width: 0; }
-    .cg-dialog-eyebrow {
-      font-size: 11px; font-weight: 600; color: var(--cg-text-tertiary);
-      text-transform: uppercase; letter-spacing: 0.06em;
-      font-family: var(--cg-font);
-    }
+    /* The dialog eyebrow uses the shared .cg-eyebrow primitive — see
+       src/modules/ui/components.ts. */
     .cg-dialog-title {
       font-size: 13px; font-weight: 650; color: var(--cg-text-primary);
       margin-top: 2px;
@@ -239,15 +236,8 @@ export function getDialogCSS(): string {
     .cg-result-badges {
       display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap; align-items: center;
     }
-    .cg-result-badge {
-      font-size: 10px; padding: 1px 7px; border-radius: 4px;
-      font-weight: 600; letter-spacing: 0.1px;
-      font-family: var(--cg-font);
-    }
-    .cg-badge-oa { background: var(--cg-sage-accent-tint-12); color: var(--cg-sage-accent); }
-    .cg-badge-retracted { background: var(--cg-red-bg); color: var(--cg-red-fg); }
-    .cg-badge-in-library { background: var(--cg-sage-accent-tint-12); color: var(--cg-sage-accent); }
-    .cg-badge-no-doi { background: var(--cg-sage-tint-06); color: var(--cg-text-tertiary); }
+    /* Result badges use the shared .cg-chip primitive (default sage / --quiet /
+       --danger) — see src/modules/ui/components.ts. The row above owns layout. */
 
     /* ── Right column: count + action ── */
     .cg-result-right {
@@ -462,7 +452,7 @@ export function getDialogCSS(): string {
       font-size: 10px; color: transparent;
     }
     .cg-picker-option.checked .cg-picker-check {
-      background: var(--cg-sage-accent); border-color: var(--cg-sage-accent); color: #1A241E;
+      background: var(--cg-sage-accent); border-color: var(--cg-sage-accent); color: var(--cg-on-accent);
     }
     .cg-picker-chevron {
       width: 14px; height: 14px; flex-shrink: 0;
@@ -486,14 +476,8 @@ export function getDialogCSS(): string {
       background: var(--cg-surface-elevated);
       border-radius: 0 0 10px 10px;
     }
-    .cg-picker-done {
-      padding: 5px 16px; border-radius: 6px; font-size: 11px; font-weight: 600;
-      background: #2F6B5A; color: #FFFFFF; border: none; cursor: pointer;
-      transition: background 0.12s;
-      font-family: var(--cg-font);
-    }
-    .cg-picker-done:hover { background: #245546; }
-    .cg-picker-done:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: 2px; }
+    /* The picker's Done button uses the shared .cg-btn--sm .cg-btn--filled
+       primitive (assigned in collectionPicker.ts) — see ui/components.ts. */
 
     /* ── Footer ── */
     .cg-dialog-footer {

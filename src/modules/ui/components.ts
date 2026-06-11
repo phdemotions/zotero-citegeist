@@ -59,6 +59,60 @@ export function cgComponents(scope: string): string {
     ${scope} .cg-actions { display: flex; gap: var(--cg-space-2); margin-bottom: var(--cg-space-3); }
     ${scope} .cg-actions > .cg-btn { flex: 1; }
 
+    /* ── Chip / badge primitive (canonical uppercase pill — mirrors the
+       gallery). One pill for percentile, Open Access, retracted, in-library,
+       etc.; semantic colour comes from the modifier. Layout-free: the row
+       container (.cg-result-badges / .cg-metric-badge) owns placement. ── */
+    ${scope} .cg-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--cg-space-1);
+      font-size: var(--cg-size-caption);
+      font-weight: var(--cg-weight-bold);
+      letter-spacing: var(--cg-track-caps);
+      text-transform: uppercase;
+      padding: 2px var(--cg-space-2);
+      border-radius: var(--cg-radius-pill);
+      background: var(--cg-sage-tint-12);
+      color: var(--cg-sage-accent);
+      white-space: nowrap;
+    }
+    ${scope} .cg-chip--amber { background: var(--cg-amber-tint); color: var(--cg-amber-strong); }
+    ${scope} .cg-chip--quiet { background: var(--cg-sage-tint-12); color: var(--cg-text-secondary); }
+    ${scope} .cg-chip--danger { background: var(--cg-danger-tint); color: var(--cg-danger); }
+
+    /* ── Card surface (bordered, elevated) — mirrors the gallery. Container
+       only; the card's inner content keeps its surface-specific layout. ── */
+    ${scope} .cg-card {
+      border: 1px solid var(--cg-hairline);
+      border-radius: var(--cg-radius-lg);
+      background: var(--cg-surface-elevated);
+      padding: var(--cg-space-3);
+    }
+
+    /* ── Banner (inline note / prompt) — sage by default, amber variant. A
+       <strong> child becomes the banner's block heading. ── */
+    ${scope} .cg-banner {
+      border: 1px solid var(--cg-hairline);
+      border-radius: var(--cg-radius-md);
+      background: var(--cg-sage-tint-06);
+      color: var(--cg-text-secondary);
+      padding: 8px 10px;
+      font-size: var(--cg-size-caption);
+      line-height: 1.45;
+    }
+    ${scope} .cg-banner--amber { background: var(--cg-amber-tint); color: var(--cg-amber-strong); border-color: transparent; }
+    ${scope} .cg-banner strong { display: block; color: var(--cg-text-primary); font-weight: var(--cg-weight-semibold); margin-bottom: 2px; }
+
+    /* ── Eyebrow (small uppercase section label). ── */
+    ${scope} .cg-eyebrow {
+      font-size: var(--cg-size-caption2);
+      font-weight: var(--cg-weight-bold);
+      letter-spacing: var(--cg-track-caps);
+      text-transform: uppercase;
+      color: var(--cg-text-tertiary);
+    }
+
     @media (prefers-reduced-motion: reduce) {
       ${scope} .cg-btn { transition: none; }
       ${scope} .cg-btn:active { transform: none; }

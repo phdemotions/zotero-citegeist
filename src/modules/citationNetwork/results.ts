@@ -347,13 +347,10 @@ export function renderResults(state: NetworkState, filter = ""): void {
 
     // Badges
     let badges = "";
-    if (!cleanDOI) badges += `<span class="cg-result-badge cg-badge-no-doi">No DOI</span>`;
-    if (work.open_access?.is_oa)
-      badges += `<span class="cg-result-badge cg-badge-oa">Open Access</span>`;
-    if (work.is_retracted)
-      badges += `<span class="cg-result-badge cg-badge-retracted">Retracted</span>`;
-    if (showAsInLibrary)
-      badges += `<span class="cg-result-badge cg-badge-in-library">In Library</span>`;
+    if (!cleanDOI) badges += `<span class="cg-chip cg-chip--quiet">No DOI</span>`;
+    if (work.open_access?.is_oa) badges += `<span class="cg-chip">Open Access</span>`;
+    if (work.is_retracted) badges += `<span class="cg-chip cg-chip--danger">Retracted</span>`;
+    if (showAsInLibrary) badges += `<span class="cg-chip cg-in-library">In Library</span>`;
 
     const expandLabel = isExpanded ? "Hide abstract" : "Abstract";
     const expandChevron = isExpanded ? "\u25BE" : "\u25B8";
