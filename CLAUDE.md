@@ -53,6 +53,10 @@ src/
       types.ts                  # Shared types, constants, DialogPhase enum
       styles.ts                 # CSS-in-JS for the dialog
       index.ts                  # Public API
+    ui/                         # Canonical design system (CSS-in-JS, both surfaces)
+      tokens.ts                 # cgDesignTokens — single source for --cg-* colour/space/type tokens
+      components.ts             # cgComponents — shared primitives (.cg-btn/.cg-chip/.cg-card/.cg-banner/.cg-eyebrow)
+      theme.ts                  # resolveHostScheme — forces color-scheme to Zotero's actual theme
   data/
     journalRankings.ts          # Static ISSN → ranking lookup (UTD24, FT50, ABDC, AJG)
 
@@ -77,6 +81,8 @@ typings/                        # Zotero type declarations
 **Rate limiting:** All OpenAlex calls go through a single `rateLimitedFetch` (8 req/s, 125ms interval, exponential backoff on 429/5xx). Never call the API directly.
 
 **HTML safety:** Use `escapeHTML()` for interpolating user data into HTML strings. Use the `safeHTML` tagged template for new code. Never set `.innerHTML` directly — use `safeInnerHTML()` from `utils.ts` which uses DOMParser to handle Zotero's XUL document context correctly.
+
+**Design system (UI colour + theming):** All UI colours come from the canonical `--cg-*` tokens in `src/modules/ui/tokens.ts` (`cgDesignTokens`), consumed by the shared primitives in `ui/components.ts` (`cgComponents`: `.cg-btn` / `.cg-chip` / `.cg-card` / `.cg-banner` / `.cg-eyebrow`). Never hardcode hex or rely on Zotero `--accent-*`/`--fill-*` fallbacks in component CSS — `test/ui-primitives.test.ts` fails on raw hex in a primitive and requires every primitive to be documented in the `docs/design-system/citegeist-primitives.html` gallery (the gallery mirrors the code, which is canonical). Both surfaces force `color-scheme` to Zotero's real theme via `ui/theme.ts` (`resolveHostScheme`) so `light-dark()` follows the host, not the OS; any UI portaled onto `doc.body` must do the same.
 
 ---
 
