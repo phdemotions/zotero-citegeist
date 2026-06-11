@@ -1,7 +1,7 @@
 # Citegeist — Status
 
 > **Last Updated:** 2026-06-10
-> **Phase:** v2.0.2 released; v2.0.3 staged on `main` (any-identifier browser #50/#52; settings shortcut + section-icon fix + light/dark theme fix + shared button primitives #56) — awaiting visual confirm + tag
+> **Phase:** v2.0.4 released 2026-06-10 — design-primitive unification (DEBT-008: shared chip/card/banner/eyebrow + purity & gallery-parity tests, #57). v2.0.3 (light/dark theme fix + settings shortcut + section-icon fix, #56) released the same day. Working tree clean.
 > **Build:** Clean
 
 ---
@@ -10,9 +10,9 @@
 
 | Attribute        | Value                                                                                   |
 | ---------------- | --------------------------------------------------------------------------------------- |
-| **Version**      | 2.0.2 (released 2026-06-08 — Zenodo concept DOI 10.5281/zenodo.19433716)                |
-| **Build Status** | Clean (354 tests passing, typecheck clean, lint clean, XPI ~92 KB)                      |
-| **Open Issues**  | P0: 0, P1: 0, P2: 1, P3: 3 (see ISSUES.md)                                              |
+| **Version**      | 2.0.4 (released 2026-06-10 — Zenodo concept DOI 10.5281/zenodo.19433716)                |
+| **Build Status** | Clean (361 tests passing, typecheck clean, lint clean, XPI ~96 KB)                      |
+| **Open Issues**  | P0: 0, P1: 0, P2: 1, P3: 2 (see ISSUES.md)                                              |
 | **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, Zotero 7.0.10–9, SQLite, Node 22          |
 | **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                                   |
 | **Distribution** | GitHub Releases → auto-update via `release` Release (self-maintaining); Zenodo-archived |
@@ -21,9 +21,9 @@
 
 ## In Progress
 
-**Next (follow-up PR to #56) — finish the shared-primitive unification:** migrate the remaining bespoke components (badges, chips, cards/banners, the dialog's `.cg-picker-done`) onto `src/modules/ui/components.ts`; make `docs/design-system/citegeist-primitives.html` generated from the emitters so spec and code can't drift; add a token-purity test (primitives reference `var(--cg-*)`, no raw hex); codify the "portaled UI must force `color-scheme`" rule (only the dialog portals to `doc.body` today — pickers nest inside it). Tracked as DEBT-008. Base/variant split: shared chrome in `components.ts`, surface-specific semantic modifiers stay where their meaning lives.
+**Released v2.0.4 — 2026-06-10 (#57, DEBT-008 done):** finished the shared-primitive unification. Badges/chips → one canonical `.cg-chip` uppercase pill (pane + dialog); the title-match suggestion card → `.cg-card`; banners/eyebrows → shared `.cg-banner`/`.cg-eyebrow`; the dialog "Done" button → `.cg-btn`. All in `src/modules/ui/components.ts`. Two guard tests: token-purity (primitives use `var(--cg-*)`, no raw hex, so they always follow the forced `color-scheme`) and gallery-parity (every shipped primitive class is documented in `docs/design-system/citegeist-primitives.html`, reconciled to the code as the canonical source). Also fixed two light-mode contrast bugs (the match-verify OpenAlex link, the picker checkmark) and removed dead `.cg-match-banner` + unused pane token aliases.
 
-**Staged for v2.0.3 — merged to `main` 2026-06-10 (#56):** (1) a settings shortcut (gear) in the pane header opens Zotero → Settings → Citegeist directly; (2) the section header/sidenav icon now renders (self-colored SVG — Zotero 7 supplies no `context-fill` paint for full-color section icons); (3) **light/dark theme fix** — the network dialog rendered in the wrong theme when the OS appearance and Zotero's theme disagreed (it mounts on the main window and inherited the OS `color-scheme`); both surfaces now force `color-scheme` to Zotero's resolved theme via the new `src/modules/ui/theme.ts` (`resolveHostScheme`: sample `--fill-primary` luminance → window bg → OS fallback); (4) the pane's buttons now compose from a shared `.cg-btn` primitive in the new `src/modules/ui/components.ts`. Awaiting Josh's visual confirm (dialog renders light in light mode) before tagging.
+**Released v2.0.3 — merged to `main` 2026-06-10 (#56):** (1) a settings shortcut (gear) in the pane header opens Zotero → Settings → Citegeist directly; (2) the section header/sidenav icon now renders (self-colored SVG — Zotero 7 supplies no `context-fill` paint for full-color section icons); (3) **light/dark theme fix** — the network dialog rendered in the wrong theme when the OS appearance and Zotero's theme disagreed (it mounts on the main window and inherited the OS `color-scheme`); both surfaces now force `color-scheme` to Zotero's resolved theme via the new `src/modules/ui/theme.ts` (`resolveHostScheme`: sample `--fill-primary` luminance → window bg → OS fallback); (4) the pane's buttons now compose from a shared `.cg-btn` primitive in the new `src/modules/ui/components.ts`. Visually confirmed; released as v2.0.3.
 
 **Merged to `main` 2026-06-10 (in [Unreleased], not yet tagged):** the citation-network browser now opens for **any** resolved identifier — DOI → PMID → arXiv → ISBN → confirmed title match — not just DOI, so "View Citing Works"/"View References" no longer dead-end on a "requires a DOI" alert (#50). The browser always queried OpenAlex by work id, so the DOI gate was an unnecessary limitation (an old audit's "genuinely needs a DOI" assumption was wrong). Resolution centralized in `canResolveWork`/`resolveWorkForItem`/`fetchWorkByIdentifier`; menu gating unified on `canResolveWork`. Hardened across four `ce-review` passes (correctness · adversarial · maintainability/perf/standards · security/api-contract) — zero P0–P2; added book-aware empty-state copy, menu/`getRow` hot-path perf, item-scoped resolve-error logging. Earlier the same session: static license badge + full README claim audit (#49 — fixed the stale device-sync FAQ, default-collection picker location, migration-backup path/retention).
 
