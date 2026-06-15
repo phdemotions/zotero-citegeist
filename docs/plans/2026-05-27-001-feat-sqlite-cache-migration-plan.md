@@ -1,3 +1,12 @@
+---
+type: plan
+title: "SQLite cache migration (Extra → plugin-owned DB) — v2"
+description: Approved implementation plan for moving cached metrics from Zotero Extra fields to a plugin-owned SQLite database.
+timestamp: 2026-05-27
+status: approved
+tags: [citegeist, plan, cache, sqlite, migration]
+---
+
 # Plan — SQLite Cache Migration (Extra → Plugin-Owned DB) — v2
 
 > **Date:** 2026-05-27

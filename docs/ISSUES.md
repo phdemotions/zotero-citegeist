@@ -1,3 +1,11 @@
+---
+type: issues
+title: Citegeist — open issues
+description: Open bugs and feature requests, tracked by priority.
+timestamp: 2026-06-10
+tags: [citegeist, issues]
+---
+
 # Citegeist — Open Issues
 
 > **Last Updated:** 2026-06-10 (v2.0.4 released #57: DEBT-008 closed — design-primitive unification done: shared chip/card/banner/eyebrow + token-purity & gallery-parity tests + two light-mode contrast fixes. v2.0.3 released #56: theme fix + settings + icon. Earlier: any-identifier browser #50; DEBT-006/007 closed. Closed issues archived to `docs/archive/issues-closed.jsonl`)

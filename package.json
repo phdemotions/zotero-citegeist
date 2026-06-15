@@ -17,7 +17,9 @@
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"*.{json,md,mjs}\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"*.mjs\""
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"*.mjs\"",
+    "okf:check": "bash tools/okf-check.sh",
+    "okf:drift": "bash tools/okf-drift-check.sh"
   },
   "config": {
     "addonName": "Citegeist",

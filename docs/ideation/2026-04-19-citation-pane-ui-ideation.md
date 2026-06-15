@@ -1,4 +1,9 @@
 ---
+type: ideation
+title: "Citation-pane UI — ideation"
+description: Repo-grounded ideation toward an award-winning analytics-dashboard citation pane.
+timestamp: 2026-04-19
+tags: [citegeist, ideation, citation-pane, ui]
 date: 2026-04-19
 topic: citation-pane-ui
 focus: redesign citation pane to award-winning analytics dashboard quality

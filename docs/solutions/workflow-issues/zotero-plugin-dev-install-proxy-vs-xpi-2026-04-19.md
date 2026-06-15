@@ -1,4 +1,5 @@
 ---
+type: solution
 title: "Zotero plugin dev install: proxy file vs XPI"
 date: 2026-04-19
 category: docs/solutions/workflow-issues

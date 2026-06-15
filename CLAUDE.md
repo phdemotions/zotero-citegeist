@@ -17,10 +17,12 @@ npm run lint               # ESLint
 npm run lint:fix           # ESLint --fix
 npm run format             # Prettier write
 npm run format:check       # Prettier check (no write)
+npm run okf:check          # OKF docs-conformance (every docs/ file has a `type`)
+npm run okf:drift          # Compare OKF spec upstream HEAD vs the pinned commit
 npm run release            # Bump version, tag, push (triggers GitHub Actions release)
 ```
 
-**Pre-commit checklist:** `npm run typecheck && npm test && npm run lint && npm run format:check && npm run build`
+**Pre-commit checklist:** `npm run typecheck && npm test && npm run lint && npm run format:check && npm run okf:check && npm run build`
 
 ---
 
@@ -63,6 +65,7 @@ src/
 test/                           # vitest unit tests
 addon/                          # Static addon files (manifest.json, prefs.xhtml, icons)
 scripts/                        # build.mjs, release helpers
+tools/                          # okf-check.sh, okf-drift-check.sh (docs OKF standard)
 typings/                        # Zotero type declarations
 ```
 
@@ -83,6 +86,8 @@ typings/                        # Zotero type declarations
 **HTML safety:** Use `escapeHTML()` for interpolating user data into HTML strings. Use the `safeHTML` tagged template for new code. Never set `.innerHTML` directly — use `safeInnerHTML()` from `utils.ts` which uses DOMParser to handle Zotero's XUL document context correctly.
 
 **Design system (UI colour + theming):** All UI colours come from the canonical `--cg-*` tokens in `src/modules/ui/tokens.ts` (`cgDesignTokens`), consumed by the shared primitives in `ui/components.ts` (`cgComponents`: `.cg-btn` / `.cg-chip` / `.cg-card` / `.cg-banner` / `.cg-eyebrow`). Never hardcode hex or rely on Zotero `--accent-*`/`--fill-*` fallbacks in component CSS — `test/ui-primitives.test.ts` fails on raw hex in a primitive and requires every primitive to be documented in the `docs/design-system/citegeist-primitives.html` gallery (the gallery mirrors the code, which is canonical). Both surfaces force `color-scheme` to Zotero's real theme via `ui/theme.ts` (`resolveHostScheme`) so `light-dark()` follows the host, not the OS; any UI portaled onto `doc.body` must do the same.
+
+**Documentation standard (OKF — docs only, NOT code):** Every file under `docs/` conforms to the Open Knowledge Format (OKF v0.1), **pinned** to spec commit `ee67a5c` — markdown with YAML frontmatter carrying a required `type`. OKF is a knowledge/metadata format for docs; it is **not a coding standard** — code style stays with `tsc` strict + ESLint + Prettier + `src/constants.ts`. "OKF for our coding" means the code's _knowledge_ (architecture in `docs/DESIGN.md`, the principles here) is captured as OKF docs, not that OKF governs `.ts` syntax. Validate with `npm run okf:check`; compare the upstream spec to the pin with `npm run okf:drift` (monthly review — **never auto-follow `main`**, bump the pin deliberately). Scope, `type` vocabulary, and cadence live in `docs/STANDARDS.md`; the canonical org pin is `~/developer/docs/standards/okf-adoption.md`.
 
 ---
 
@@ -128,6 +133,8 @@ Locally, always verify with `rm -rf node_modules && npm install` before releasin
 | `docs/STATUS.md`      | Current project state, what was done last session, upcoming work |
 | `docs/ISSUES.md`      | Open bugs and feature requests with priorities                   |
 | `docs/BACKLOG.md`     | Curated longer-term enhancement ideas                            |
+| `docs/STANDARDS.md`   | OKF documentation standard — pin, scope (docs-only), cadence     |
+| `docs/index.md`       | OKF bundle catalog (reserved index of every docs/ file)          |
 | `CHANGELOG.md`        | Keep-a-Changelog format, one entry per release                   |
 | `docs/DESIGN.md`      | Architecture decisions and trade-offs                            |
 | `CONTRIBUTING.md`     | Dev setup, commands, PR guidelines                               |

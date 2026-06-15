@@ -1,4 +1,9 @@
 ---
+type: brainstorm
+title: "Citation-pane metric grid — requirements"
+description: Requirements brainstorm for the equal-weight 3-tile citation-pane metric grid.
+timestamp: 2026-04-19
+tags: [citegeist, brainstorm, citation-pane, ui]
 date: 2026-04-19
 topic: citation-pane-metric-grid
 ---

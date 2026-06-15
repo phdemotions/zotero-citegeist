@@ -1,0 +1,75 @@
+# OKF upstream watch — "track continuously, adopt deliberately".
+#
+# POLICY NOTE: Citegeist is a Zotero plugin (not a Vercel app) and already uses GitHub Actions
+# for releases. This is non-deploy, cross-repo automation (it watches another repo on a
+# schedule), runs NO build, and burns ~seconds/day. Approved by Josh for citegeist in the
+# 2026-06-15 session; mirrors ME2's okf-watch pattern.
+#
+# It diffs the upstream OKF spec (GoogleCloudPlatform/knowledge-catalog okf/SPEC.md) against
+# our pinned commit and opens/updates ONE tracking issue when they diverge. It NEVER re-pins —
+# a human reads the diff and bumps the pin deliberately (chasing an unstable v0.1 draft live is
+# the opposite of future-proofing). See docs/STANDARDS.md -> "Tracking upstream".
+name: OKF upstream watch
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # daily, 09:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: okf-watch
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check OKF upstream drift
+        id: drift
+        run: |
+          set +e
+          out=$(bash tools/okf-drift-check.sh 2>&1); code=$?
+          echo "$out"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          {
+            echo 'report<<OKF_EOF'
+            echo "$out"
+            echo OKF_EOF
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Open or update tracking issue on drift
+        if: steps.drift.outputs.code == '3'
+        env:
+          REPORT: ${{ steps.drift.outputs.report }}
+        run: |
+          title="OKF upstream drift — review + bump pin"
+          {
+            echo "The pinned OKF spec has moved upstream. **Review the diff and bump the pin deliberately — do not auto-follow.**"
+            echo
+            echo '```'
+            printf '%s\n' "$REPORT"
+            echo '```'
+            echo
+            echo "Process: \`docs/STANDARDS.md\` -> \"Tracking upstream\". Bump the pin in \`docs/STANDARDS.md\` + the canonical \`~/developer/docs/standards/okf-adoption.md\` once reviewed."
+          } > /tmp/okf-issue.md
+          existing=$(gh issue list --state open --json number,title \
+            --jq ".[] | select(.title==\"$title\") | .number" | head -1)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --body-file /tmp/okf-issue.md
+          else
+            gh issue create --title "$title" --body-file /tmp/okf-issue.md
+          fi
+
+      - name: Fail on drift-check error
+        if: steps.drift.outputs.code == '2'
+        run: |
+          echo "okf-drift-check.sh errored (gh auth / network / missing pin)"; exit 1

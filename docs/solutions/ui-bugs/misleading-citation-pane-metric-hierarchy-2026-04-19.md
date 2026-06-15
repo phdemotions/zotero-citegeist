@@ -1,4 +1,5 @@
 ---
+type: solution
 title: "Equal-weight metric tile grid for Zotero citation pane"
 date: 2026-04-19
 category: docs/solutions/ui-bugs

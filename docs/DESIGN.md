@@ -1,3 +1,11 @@
+---
+type: architecture
+title: Citegeist — design rationale
+description: Key architectural decisions behind Citegeist and the trade-offs involved.
+timestamp: 2026-04-09
+tags: [citegeist, architecture, design, openalex, zotero]
+---
+
 # Design Rationale
 
 This document explains the key architectural decisions behind Citegeist and the trade-offs involved. It is intended for reviewers, contributors, and anyone interested in why the plugin works the way it does.

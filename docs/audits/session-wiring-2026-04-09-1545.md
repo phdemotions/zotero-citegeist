@@ -1,3 +1,11 @@
+---
+type: audit
+title: "/wiring audit — Citegeist v1.1.0"
+description: Data-flow / wiring lens over the v1.1.0 change set.
+timestamp: 2026-04-09
+tags: [citegeist, audit, wiring, v1.1.0]
+---
+
 # /wiring — Citegeist
 **Scope:** 19 files changed this session (v1.1.0 release): src/modules/openalex.ts, src/modules/citationService.ts, src/modules/citationPane.ts, src/modules/citationColumn.ts, src/data/journalRankings.ts, typings/zotero.d.ts, test/openalex.test.ts, test/citationService.test.ts, test/journalRankings.test.ts, DESIGN.md
 **Date:** 2026-04-09
