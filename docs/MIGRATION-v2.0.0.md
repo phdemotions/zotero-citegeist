@@ -1,3 +1,11 @@
+---
+type: migration
+title: Migrating from v1.3.x to v2.0.0
+description: v2.0.0 moves cached citation data from Zotero Extra fields to a plugin-owned SQLite database.
+timestamp: 2026-06-07
+tags: [citegeist, migration, cache, sqlite]
+---
+
 # Migrating from v1.3.x to v2.0.0
 
 > v2.0.0 moves cached citation data out of Zotero item `Extra` fields into a plugin-owned SQLite database. Storage format changed; UI and feature set didn't.

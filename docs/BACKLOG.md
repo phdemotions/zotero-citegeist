@@ -1,3 +1,11 @@
+---
+type: backlog
+title: Citegeist — backlog
+description: Curated longer-term enhancement ideas, each a candidate GitHub issue.
+timestamp: 2026-06-08
+tags: [citegeist, backlog, enhancements]
+---
+
 # Citegeist Backlog
 
 A curated list of planned enhancements and ideas for Citegeist. Each item is a candidate for a GitHub issue — contributions are welcome on any of them. If you'd like to pick one up, open an issue (or comment on an existing one) to coordinate.

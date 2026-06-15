@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Internal
+
+- Project documentation adopts the Open Knowledge Format (OKF v0.1, pinned): every
+  file under `docs/` carries structured YAML frontmatter with a `type`, validated by
+  `npm run okf:check`, with upstream-spec drift tracked by `npm run okf:drift`.
+  Docs-only — no change to the plugin or build. See `docs/STANDARDS.md`.
+
 ## [2.0.4] — 2026-06-10
 
 ### Changed

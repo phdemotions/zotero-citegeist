@@ -1,3 +1,11 @@
+---
+type: status
+title: Citegeist — project status
+description: Current project state, last session's work, and upcoming priorities.
+timestamp: 2026-06-15
+tags: [citegeist, status]
+---
+
 # Citegeist — Status
 
 > **Last Updated:** 2026-06-10

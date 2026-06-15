@@ -1,3 +1,11 @@
+---
+type: audit
+title: "/zeitgeist audit — Citegeist v1.1.0"
+description: Holistic zeitgeist lens over the v1.1.0 release.
+timestamp: 2026-04-09
+tags: [citegeist, audit, zeitgeist, v1.1.0]
+---
+
 # /zeitgeist — Citegeist v1.1.0
 
 **Scope:** 19 files — v1.1.0 release: openalex.ts (normalizers + ISBN/PMID/arXiv lookups), citationService.ts (extractIdentifier, FetchResult, ItemIdentifier), citationPane.ts (book zero-suppression, citationSummary), citationColumn.ts (isBookType, book zero-suppression), journalRankings.ts (3177 journals, ISSN_ALIASES), typings/zotero.d.ts, test/openalex.test.ts, test/citationService.test.ts, test/journalRankings.test.ts, DESIGN.md (metadata-matching spec), package.json / package-lock.json

@@ -1,3 +1,11 @@
+---
+type: audit
+title: "/freshen audit — Citegeist"
+description: devDependency freshness audit (vitest, esbuild, typescript, eslint, prettier, bumpp).
+timestamp: 2026-04-09
+tags: [citegeist, audit, freshen, dependencies]
+---
+
 # /freshen — Citegeist
 **Scope:** devDependencies audit — vitest, esbuild, typescript, @typescript-eslint packages, prettier, bumpp
 **Date:** 2026-04-09
