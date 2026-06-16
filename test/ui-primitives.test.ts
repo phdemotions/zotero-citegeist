@@ -64,6 +64,25 @@ describe("cgDesignTokens", () => {
 });
 
 /**
+ * XML-safety for XHTML `<style>` embedding. The item pane injects these emitters
+ * inside `bodyXHTML`, which Zotero parses as XML — so a raw `<` or `&` anywhere in
+ * the emitted CSS (famously a `<strong>` mentioned in a comment) aborts the XML
+ * parse and the WHOLE pane section silently fails to render: the pane vanishes.
+ * The pane now also CDATA-wraps its `<style>` as defense-in-depth, but the
+ * primitives must stay free of raw `<` / `&` so they are safe to embed in any
+ * XHTML context.
+ */
+describe("primitives are XML-safe for XHTML <style> embedding", () => {
+  it("cgComponents emits no raw < or &", () => {
+    expect(cgComponents(SCOPE)).not.toMatch(/[<&]/);
+  });
+  it("cgDesignTokens emits no raw < or & in embedded or modal mode", () => {
+    expect(cgDesignTokens(SCOPE, { embedded: true })).not.toMatch(/[<&]/);
+    expect(cgDesignTokens(SCOPE)).not.toMatch(/[<&]/);
+  });
+});
+
+/**
  * Gallery ↔ code parity. `src/modules/ui/components.ts` is the CANONICAL source
  * for the component primitives; `docs/design-system/citegeist-primitives.html`
  * is the illustrative reference. This guards against the reference silently

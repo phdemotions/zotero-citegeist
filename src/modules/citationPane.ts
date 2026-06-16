@@ -214,7 +214,13 @@ export function registerCitationPane(pluginID: string): void {
       },
       bodyXHTML: `
       <div id="citegeist-pane-root" xmlns="http://www.w3.org/1999/xhtml">
-        <style>
+        <style>/*<![CDATA[*/
+          /* CDATA wrap (keep it): bodyXHTML is parsed as XML, so a raw less-than
+             or ampersand anywhere in this stylesheet, even inside a comment,
+             aborts the XML parse and the entire section silently fails to render
+             (the pane just disappears). The CDATA section makes the stylesheet
+             opaque to the XML parser, and the surrounding CSS-comment markers stop
+             the CDATA delimiters from reaching the CSS parser. */
           ${cgDesignTokens("#citegeist-pane-root", { embedded: true })}
           ${cgComponents("#citegeist-pane-root")}
           /*
@@ -437,7 +443,7 @@ export function registerCitationPane(pluginID: string): void {
           }
           /* DOI-prompt buttons use the shared .cg-btn--sm primitive
              (assigned in renderDoiPrompt) — see ui/components.ts. */
-        </style>
+        /*]]>*/</style>
         <div id="citegeist-content"></div>
       </div>
     `,

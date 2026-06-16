@@ -92,7 +92,7 @@ export function cgComponents(scope: string): string {
     }
 
     /* ── Banner (inline note / prompt) — sage by default, amber variant. A
-       <strong> child becomes the banner's block heading. ── */
+       strong child element becomes the banner's block heading. ── */
     ${scope} .cg-banner {
       border: 1px solid var(--cg-hairline);
       border-radius: var(--cg-radius-md);
