@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.5] — 2026-06-15
+
+### Changed
+
+- **Citegeist now looks native to Zotero.** The Citation Intelligence pane and the
+  citation-network window use Zotero's own interface font and neutral panel colours
+  instead of a separate typeface and green-tinted surfaces, so the plugin blends into
+  Zotero in light, dark, and automatic appearance. Buttons are slightly more compact
+  to match Zotero's controls; the sage accent and the citation metrics stay prominent.
+
 ### Internal
 
 - Project documentation adopts the Open Knowledge Format (OKF v0.1, pinned): every
@@ -476,6 +486,7 @@ network browser got a thorough pass alongside it:
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[2.0.5]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.4...v2.0.5
 [2.0.4]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.1...v2.0.2
