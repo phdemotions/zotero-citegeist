@@ -242,7 +242,7 @@ export function registerCitationPane(pluginID: string): void {
 
             font-family: var(--cg-font);
             font-feature-settings: 'kern' 1, 'liga' 1;
-            padding: var(--cg-space-2) var(--cg-space-3) 10px;
+            padding: var(--cg-space-2) var(--cg-space-3) var(--cg-space-3);
             font-size: var(--cg-size-footnote);
             line-height: 1.5;
             color: var(--cg-text-primary);
@@ -275,19 +275,19 @@ export function registerCitationPane(pluginID: string): void {
             background: var(--cg-danger-tint);
             border: 1px solid var(--cg-danger-tint-strong);
             border-radius: 4px;
-            padding: 5px 8px;
+            padding: var(--cg-space-1) var(--cg-space-2);
             color: var(--cg-danger);
             font-weight: 600;
             font-size: 11px;
-            margin-bottom: 8px;
+            margin-bottom: var(--cg-space-2);
           }
 
           .cg-headline {
             display: flex;
             align-items: baseline;
-            gap: 4px;
+            gap: var(--cg-space-1);
             flex-wrap: wrap;
-            margin-bottom: 10px;
+            margin-bottom: var(--cg-space-3);
           }
           .cg-headline-count {
             font-size: 24px;
@@ -323,8 +323,8 @@ export function registerCitationPane(pluginID: string): void {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             align-items: stretch;
-            gap: 6px;
-            margin-bottom: 10px;
+            gap: var(--cg-space-2);
+            margin-bottom: var(--cg-space-3);
           }
           .cg-metric-tile {
             display: flex;
@@ -333,7 +333,7 @@ export function registerCitationPane(pluginID: string): void {
             background: var(--cg-sage-bg);
             border: 1px solid var(--cg-sage-border);
             border-radius: 6px;
-            padding: 10px;
+            padding: var(--cg-space-2);
             overflow: hidden;
           }
           .cg-metric-label {
@@ -365,7 +365,7 @@ export function registerCitationPane(pluginID: string): void {
              cgComponents() — see src/modules/ui/components.ts. */
           .cg-trend {
             border-top: 1px solid var(--cg-sage-tint-08);
-            padding-top: 7px;
+            padding-top: var(--cg-space-2);
             font-size: 11px;
             color: var(--cg-text-secondary);
             line-height: 1.4;
@@ -432,14 +432,14 @@ export function registerCitationPane(pluginID: string): void {
              match the data view's buttons exactly. Only the :disabled hook above
              is local to the suggestion card. */
           /* DOI-prompt chrome comes from the shared .cg-banner primitive (incl.
-             its <strong> block heading); this keeps only the outer spacing. */
+             its strong block heading); this keeps only the outer spacing. */
           .cg-doi-prompt {
             margin-top: var(--cg-space-3);
           }
           .cg-doi-prompt-actions {
             display: flex;
-            gap: 6px;
-            margin-top: 6px;
+            gap: var(--cg-space-2);
+            margin-top: var(--cg-space-2);
           }
           /* DOI-prompt buttons use the shared .cg-btn--sm primitive
              (assigned in renderDoiPrompt) — see ui/components.ts. */
