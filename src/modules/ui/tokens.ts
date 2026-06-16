@@ -38,23 +38,31 @@ export function cgDesignTokens(scope: string, opts: CgTokenOptions = {}): string
   // Text + surface ramp. Embedded inherits Zotero's theme; modal owns slate.
   const textAndSurface = opts.embedded
     ? `
+      /* Font inherits Zotero's actual UI font so the pane is typographically
+         native to the host rather than declaring its own family. */
+      --cg-font: inherit;
       /* Text inherits Zotero's theme so the pane tracks the host light/dark
-         theme automatically. Tertiary falls back to a slate value on the rare
+         theme automatically. Tertiary falls back to a neutral grey on the rare
          build without --fill-tertiary. */
       --cg-text-primary: var(--fill-primary);
       --cg-text-secondary: var(--fill-secondary);
-      --cg-text-tertiary: var(--fill-tertiary, light-dark(#63726A, #8A9A92));
+      --cg-text-tertiary: var(--fill-tertiary, light-dark(#6A6A6E, #8C8C90));
+      /* Neutral surfaces (no green undertone) so cards sit flush on Zotero's own
+         neutral panels; the pane surface stays transparent to show Zotero's
+         background directly. */
       --cg-surface: transparent;
-      --cg-surface-elevated: light-dark(#FFFFFF, #222E28);
-      --cg-surface-sunken: light-dark(#F1F5F3, #1B2520);`
+      --cg-surface-elevated: light-dark(#FFFFFF, #2A2A2D);
+      --cg-surface-sunken: light-dark(#F2F2F3, #202023);`
     : `
-      /* Modal owns the slate palette regardless of host theme. */
-      --cg-text-primary: light-dark(#1A2820, #E7EEE9);
-      --cg-text-secondary: light-dark(#46554C, #9CAAA3);
-      --cg-text-tertiary: light-dark(#63726A, #8A9A92);
-      --cg-surface: light-dark(#F8FAF9, #141D18);
-      --cg-surface-elevated: light-dark(#FFFFFF, #1E2A24);
-      --cg-surface-sunken: light-dark(#EFF3F1, #1A2520);`;
+      /* Modal owns a neutral ink/surface ramp regardless of host theme — neutral
+         greys with no green undertone, so the dialog reads as native Zotero
+         chrome. The sage accent + tints stay the single brand signal. */
+      --cg-text-primary: light-dark(#1C1C1E, #E8E8EA);
+      --cg-text-secondary: light-dark(#4A4A4D, #A0A0A4);
+      --cg-text-tertiary: light-dark(#6A6A6E, #8C8C90);
+      --cg-surface: light-dark(#F7F7F8, #1C1C1E);
+      --cg-surface-elevated: light-dark(#FFFFFF, #262628);
+      --cg-surface-sunken: light-dark(#EFEFF0, #181819);`;
 
   return `
     ${scope} {
@@ -73,8 +81,13 @@ export function cgDesignTokens(scope: string, opts: CgTokenOptions = {}): string
       --cg-radius-xl: 12px;
       --cg-radius-pill: 999px;
 
-      /* ── Type ramp (SF / HIG sizes; tabular for metrics) ── */
-      --cg-font: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+      /* ── Type ramp (Zotero-native density; tabular for metrics) ── */
+      /* Font: the modal dialog owns a native system stack (it is portaled and
+         cannot inherit Zotero's font); the embedded pane overrides this to
+         "inherit" below so it uses Zotero's actual UI font. No bundled webfont —
+         the old Inter first choice never loaded (no font file ships) and only
+         risked diverging from Zotero on machines that happened to have Inter. */
+      --cg-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
       --cg-size-caption2: 10px;
       --cg-size-caption: 11px;
       --cg-size-footnote: 12px;
@@ -97,12 +110,12 @@ export function cgDesignTokens(scope: string, opts: CgTokenOptions = {}): string
       --cg-press: 0.97;
 
       /* ── Elevation ── */
-      --cg-shadow-modal: 0 16px 40px rgba(20, 29, 24, 0.28), 0 0 1px rgba(20, 29, 24, 0.2);
+      --cg-shadow-modal: 0 16px 40px rgba(0, 0, 0, 0.28), 0 0 1px rgba(0, 0, 0, 0.2);
       /* Raised pill (segmented selection). Scheme-agnostic: light-dark() is not
          valid inside box-shadow, so one neutral value — a soft dark drop (depth
          on light, invisible on dark) plus a faint top highlight (edge on dark,
          invisible on light). */
-      --cg-lift: 0 1px 2px rgba(15, 28, 22, 0.16), inset 0 0.5px 0 rgba(255, 255, 255, 0.07);
+      --cg-lift: 0 1px 2px rgba(0, 0, 0, 0.16), inset 0 0.5px 0 rgba(255, 255, 255, 0.07);
 
       /* ── Accent: sage (one accent; amber = evidence weight only) ── */
       --cg-sage-accent: light-dark(#2F6B5A, #8FAD9F);

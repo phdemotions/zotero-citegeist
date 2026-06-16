@@ -2,11 +2,11 @@
  * CSS styles for the Citation Network dialog.
  *
  * Design language: Opus Vita family — Citegeist · Sententia · Marginalia.
- * Slate (dark) palette variant:
- *   Ink ramp  — green-undertoned near-black neutrals
- *   Sage ramp — primary accent (#8FAD9F on dark, #2F6B5A on light, replaces blue throughout)
+ * Native-Zotero variant:
+ *   Ink ramp  — neutral greys (no green undertone) that read as Zotero chrome
+ *   Sage ramp — the single brand accent (#8FAD9F on dark, #2F6B5A on light)
  *   Amber     — evidence weight only (not used in this dialog)
- * Typography: Inter for UI labels; system serif fallback for editorial elements.
+ * Typography: native system stack, no bundled webfont — see `src/modules/ui/tokens.ts`.
  *
  * Design tokens come from the canonical layer in `src/modules/ui/tokens.ts`
  * (mirrors `docs/design-system/citegeist-primitives.html`). This file emits
@@ -23,7 +23,7 @@ export function getDialogCSS(): string {
     ${cgDesignTokens("#citegeist-network-dialog")}
     ${cgComponents("#citegeist-network-dialog")}
 
-    /* ── Dialog root: Slate palette — green-undertoned ── */
+    /* ── Dialog root: neutral ink/surface ramp (Zotero-native) ── */
     /* Legacy dialog token names mapped onto the canonical layer. Quaternary
        text + hover text are dialog-only extra ramp steps, kept local. The
        sage-tint scale, accent, red/danger, focus ring, and base surfaces all
@@ -34,8 +34,8 @@ export function getDialogCSS(): string {
       --cg-bg-primary: var(--cg-surface);
       --cg-bg-secondary: var(--cg-surface-sunken);
       --cg-bg-elevated: var(--cg-surface-elevated);
-      --cg-text-quaternary: light-dark(#8A998F, #586860);
-      --cg-text-hover: light-dark(#28362E, #BFCBC5);
+      --cg-text-quaternary: light-dark(#8A8A8E, #5E5E62);
+      --cg-text-hover: light-dark(#141416, #F2F2F4);
       --cg-sage-accent-tint-12: var(--cg-sage-tint-12);
       --cg-sage-accent-tint-25: var(--cg-sage-tint-25);
       --cg-red-fg: var(--cg-danger);

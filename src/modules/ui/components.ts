@@ -20,7 +20,8 @@ export function cgComponents(scope: string): string {
       font-family: inherit;
       font-size: var(--cg-size-subhead);
       font-weight: var(--cg-weight-semibold);
-      padding: 14px var(--cg-space-3);
+      /* Desktop control height (Zotero-native), not an iOS 44pt tap target. */
+      padding: 10px var(--cg-space-3);
       border: 1px solid transparent;
       border-radius: var(--cg-radius-lg);
       cursor: pointer;
