@@ -47,17 +47,17 @@
         --cg-radius-xl: 12px;
         --cg-radius-pill: 999px;
 
-        /* ── Type ramp (SF / HIG sizes; tabular for metrics) ── */
-        --cg-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
-          "Segoe UI", sans-serif;
+        /* ── Type ramp (Zotero-native density; tabular for metrics) ── */
+        --cg-font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+          sans-serif;
         --cg-size-caption2: 10px;
         --cg-size-caption: 11px;
         --cg-size-footnote: 12px;
         --cg-size-subhead: 13px;
         --cg-size-body: 14px;
         --cg-size-title3: 18px;
-        --cg-size-stat: 22px;
-        --cg-size-display: 28px;
+        --cg-size-stat: 21px;
+        --cg-size-display: 24px;
         --cg-weight-regular: 400;
         --cg-weight-medium: 510;
         --cg-weight-semibold: 590;
@@ -66,15 +66,15 @@
         --cg-track-caps: 0.06em;
 
         /* ── Elevation (modal only; embedded stays flat) ── */
-        --cg-shadow-modal: 0 16px 40px rgba(20, 29, 24, 0.28),
-          0 0 1px rgba(20, 29, 24, 0.2);
+        --cg-shadow-modal: 0 16px 40px rgba(0, 0, 0, 0.28),
+          0 0 1px rgba(0, 0, 0, 0.2);
 
         /* Lift for a raised pill (segmented selection). Scheme-agnostic on
            purpose: light-dark() is NOT valid inside box-shadow, so this uses one
            neutral value — a soft dark drop (depth on light, invisible on dark)
            plus a faint top highlight (edge on dark, invisible on light). The
            elevated background carries the rest of the contrast on dark. */
-        --cg-lift: 0 1px 2px rgba(15, 28, 22, 0.16),
+        --cg-lift: 0 1px 2px rgba(0, 0, 0, 0.16),
           inset 0 0.5px 0 rgba(255, 255, 255, 0.07);
 
         /* ── Motion (HIG standard ease; instant focus) ── */
@@ -495,8 +495,8 @@
         </div>
         <div class="panel panel--light cg cx-embedded ramp">
           <div class="panel__tag">Type</div>
-          <div><span class="lbl">Display 28</span><span style="font-size:28px;font-weight:680;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">1,284</span></div>
-          <div><span class="lbl">Stat 22</span><span style="font-size:22px;font-weight:680;font-variant-numeric:tabular-nums">2.31</span></div>
+          <div><span class="lbl">Display 24</span><span style="font-size:24px;font-weight:680;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">1,284</span></div>
+          <div><span class="lbl">Stat 21</span><span style="font-size:21px;font-weight:680;font-variant-numeric:tabular-nums">2.31</span></div>
           <div><span class="lbl">Title 18</span><span style="font-size:18px;font-weight:680">Citing works</span></div>
           <div><span class="lbl">Body 14</span><span style="font-size:14px">Field-weighted impact</span></div>
           <div><span class="lbl">Subhead 13</span><span style="font-size:13px;font-weight:590">Confirm match</span></div>

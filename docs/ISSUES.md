@@ -8,7 +8,7 @@ tags: [citegeist, issues]
 
 # Citegeist — Open Issues
 
-> **Last Updated:** 2026-06-10 (v2.0.4 released #57: DEBT-008 closed — design-primitive unification done: shared chip/card/banner/eyebrow + token-purity & gallery-parity tests + two light-mode contrast fixes. v2.0.3 released #56: theme fix + settings + icon. Earlier: any-identifier browser #50; DEBT-006/007 closed. Closed issues archived to `docs/archive/issues-closed.jsonl`)
+> **Last Updated:** 2026-06-15 (v2.0.5 staged on `style/zotero-native-ui`, unreleased: native-to-Zotero UI retune + **critical fix** — the Citation Intelligence pane could fail to render because `bodyXHTML` is parsed as XML and a `<strong>` in a `cgComponents` CSS comment aborted the parse; now CDATA-wrapped + guard-tested. This is latent in **released v2.0.4**, so ship 2.0.5 to fix public users on strict-XML Zotero builds. v2.0.4 released #57: DEBT-008 closed — design-primitive unification + token-purity/gallery-parity tests + two light-mode contrast fixes. Closed issues archived to `docs/archive/issues-closed.jsonl`)
 
 ---
 

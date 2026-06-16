@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of a separate typeface and green-tinted surfaces, so the plugin blends into
   Zotero in light, dark, and automatic appearance. Buttons are slightly more compact
   to match Zotero's controls; the sage accent and the citation metrics stay prominent.
+  Spacing and type sizes now follow one consistent scale across the pane and the
+  citation-network window.
+
+### Fixed
+
+- **The Citation Intelligence pane could fail to appear.** On some Zotero builds the
+  pane stopped showing because its stylesheet was parsed as XML and a stray character
+  aborted the parse; the stylesheet is now isolated so this cannot recur. Your saved
+  columns were never affected.
 
 ### Internal
 
