@@ -83,6 +83,22 @@ describe("primitives are XML-safe for XHTML <style> embedding", () => {
 });
 
 /**
+ * Golden-ratio guard for the hero type tier. The metric value sits one golden
+ * step above the body, so every pane shares a single proportion (the "φ-informed
+ * hybrid" — φ for the perceptible type jump, the 4pt grid for spacing). Generous
+ * tolerance: this guards the intent across a retune, not an exact pixel.
+ */
+describe("hero type tier stays φ-informed", () => {
+  const px = (name: string) =>
+    Number(cgDesignTokens(SCOPE).match(new RegExp(`--cg-size-${name}:\\s*(\\d+)px`))![1]);
+  it("metric value (stat) is ~φ above the body (footnote)", () => {
+    const ratio = px("stat") / px("footnote");
+    expect(ratio).toBeGreaterThan(1.5);
+    expect(ratio).toBeLessThan(1.75);
+  });
+});
+
+/**
  * Gallery ↔ code parity. `src/modules/ui/components.ts` is the CANONICAL source
  * for the component primitives; `docs/design-system/citegeist-primitives.html`
  * is the illustrative reference. This guards against the reference silently

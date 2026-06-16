@@ -66,7 +66,12 @@ export function cgDesignTokens(scope: string, opts: CgTokenOptions = {}): string
 
   return `
     ${scope} {
-      /* ── Spacing (4pt rhythm, HIG) ── */
+      /* ── Spacing (4pt rhythm, HIG; φ-informed hierarchy) ── */
+      /* Step ratios approximate the golden ratio on a whole-pixel 4pt grid:
+         section(12):component(8) = 1.5 and component(8):micro(4) = 2 bracket
+         φ (1.618) while staying integer and Zotero-dense. A literal φ scale would
+         be fractional and break pixel-snapping, so the grid is the right tool for
+         spacing and φ is reserved for the perceptible type proportions below. */
       --cg-space-1: 4px;
       --cg-space-2: 8px;
       --cg-space-3: 12px;
@@ -94,8 +99,14 @@ export function cgDesignTokens(scope: string, opts: CgTokenOptions = {}): string
       --cg-size-subhead: 13px;
       --cg-size-body: 14px;
       --cg-size-title3: 18px;
-      --cg-size-stat: 22px;
-      --cg-size-display: 28px;
+      /* Hero metric tier (φ-informed) — the one place the golden ratio is
+         perceptible. Anchored off the compact pane body (12px): the metric value
+         sits one golden step up (12 × φ ≈ 19–20). A second φ step (≈31px)
+         overflows the 3-up metric tiles, so the primary count is capped just
+         below it. Every pane pulls its hero numbers from these tokens, so the
+         proportion is identical across surfaces rather than re-typed as magic px. */
+      --cg-size-stat: 20px; /* metric value — body × φ */
+      --cg-size-display: 24px; /* primary count — capped hero above the stat tier */
       --cg-weight-regular: 400;
       --cg-weight-medium: 510;
       --cg-weight-semibold: 590;

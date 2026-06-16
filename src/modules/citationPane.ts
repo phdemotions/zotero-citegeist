@@ -290,7 +290,7 @@ export function registerCitationPane(pluginID: string): void {
             margin-bottom: var(--cg-space-3);
           }
           .cg-headline-count {
-            font-size: 24px;
+            font-size: var(--cg-size-display);
             font-weight: 800;
             letter-spacing: -0.8px;
             color: var(--cg-text-primary);
@@ -333,7 +333,7 @@ export function registerCitationPane(pluginID: string): void {
             background: var(--cg-sage-bg);
             border: 1px solid var(--cg-sage-border);
             border-radius: 6px;
-            padding: var(--cg-space-2);
+            padding: var(--cg-space-3);
             overflow: hidden;
           }
           .cg-metric-label {
@@ -347,7 +347,7 @@ export function registerCitationPane(pluginID: string): void {
           }
           .cg-metric-value {
             display: block;
-            font-size: 20px;
+            font-size: var(--cg-size-stat);
             font-weight: 600;
             color: var(--cg-text-primary);
             font-variant-numeric: tabular-nums;
