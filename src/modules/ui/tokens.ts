@@ -100,12 +100,13 @@ export function cgDesignTokens(scope: string, opts: CgTokenOptions = {}): string
       --cg-size-body: 14px;
       --cg-size-title3: 18px;
       /* Hero metric tier (φ-informed) — the one place the golden ratio is
-         perceptible. Anchored off the compact pane body (12px): the metric value
-         sits one golden step up (12 × φ ≈ 19–20). A second φ step (≈31px)
-         overflows the 3-up metric tiles, so the primary count is capped just
-         below it. Every pane pulls its hero numbers from these tokens, so the
-         proportion is identical across surfaces rather than re-typed as magic px. */
-      --cg-size-stat: 20px; /* metric value — body × φ */
+         perceptible. Anchored off the shared 13px body (--cg-size-subhead, used
+         by both the pane and the dialog): the metric value sits one golden step
+         up (13 × φ ≈ 21). A second φ step (≈34px) overflows the 3-up metric tiles,
+         so the primary count is capped below it. Every pane pulls its hero numbers
+         from these tokens, so the proportion is identical across surfaces rather
+         than re-typed as magic px. */
+      --cg-size-stat: 21px; /* metric value — body(13) × φ */
       --cg-size-display: 24px; /* primary count — capped hero above the stat tier */
       --cg-weight-regular: 400;
       --cg-weight-medium: 510;

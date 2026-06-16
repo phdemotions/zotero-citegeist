@@ -243,7 +243,9 @@ export function registerCitationPane(pluginID: string): void {
             font-family: var(--cg-font);
             font-feature-settings: 'kern' 1, 'liga' 1;
             padding: var(--cg-space-2) var(--cg-space-3) var(--cg-space-3);
-            font-size: var(--cg-size-footnote);
+            /* Shared 13px body — same base as the dialog, so the two surfaces
+               read at one size and the φ hero tier anchors off a single value. */
+            font-size: var(--cg-size-subhead);
             line-height: 1.5;
             color: var(--cg-text-primary);
           }

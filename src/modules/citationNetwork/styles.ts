@@ -46,6 +46,9 @@ export function getDialogCSS(): string {
       background-color: var(--cg-bg-primary);
       color: var(--cg-text-primary);
       font-family: var(--cg-font);
+      /* Shared 13px body — same base as the item pane (see citationPane.ts), so
+         both surfaces read at one size and the φ hero tier has a single anchor. */
+      font-size: var(--cg-size-subhead);
       font-feature-settings: 'kern' 1, 'liga' 1;
     }
     #citegeist-network-dialog * { box-sizing: border-box; }

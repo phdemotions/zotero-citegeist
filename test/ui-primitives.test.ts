@@ -91,8 +91,8 @@ describe("primitives are XML-safe for XHTML <style> embedding", () => {
 describe("hero type tier stays φ-informed", () => {
   const px = (name: string) =>
     Number(cgDesignTokens(SCOPE).match(new RegExp(`--cg-size-${name}:\\s*(\\d+)px`))![1]);
-  it("metric value (stat) is ~φ above the body (footnote)", () => {
-    const ratio = px("stat") / px("footnote");
+  it("metric value (stat) is ~φ above the body (subhead)", () => {
+    const ratio = px("stat") / px("subhead");
     expect(ratio).toBeGreaterThan(1.5);
     expect(ratio).toBeLessThan(1.75);
   });
