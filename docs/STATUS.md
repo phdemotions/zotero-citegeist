@@ -2,15 +2,15 @@
 type: status
 title: Citegeist — project status
 description: Current project state, last session's work, and upcoming priorities.
-timestamp: 2026-06-15
+timestamp: 2026-07-09
 tags: [citegeist, status]
 ---
 
 # Citegeist — Status
 
-> **Last Updated:** 2026-06-15
-> **Phase:** v2.0.5 staged on `style/zotero-native-ui` (native-to-Zotero UI retune + critical pane-render fix) — not yet tagged. v2.0.4 released 2026-06-10 (DEBT-008 primitive unification, #57).
-> **Build:** Clean (364 tests)
+> **Last Updated:** 2026-07-09
+> **Phase:** v2.0.6 staged on `style/zotero-native-ui` (native-to-Zotero UI retune + critical pane-render fix) — not yet tagged. **v2.0.5 released 2026-07-09** — right-click context-menu hotfix (#67): MenuManager label + registration-lifecycle repair, shipped isolated off `main`. v2.0.4 released 2026-06-10 (DEBT-008 primitive unification, #57).
+> **Build:** Clean (367 tests)
 
 ---
 
@@ -18,8 +18,8 @@ tags: [citegeist, status]
 
 | Attribute        | Value                                                                                   |
 | ---------------- | --------------------------------------------------------------------------------------- |
-| **Version**      | 2.0.5 staged on `style/zotero-native-ui` (unreleased); 2.0.4 released 2026-06-10 (Zenodo 10.5281/zenodo.19433716) |
-| **Build Status** | Clean (364 tests passing, typecheck clean, lint clean, XPI ~95 KB)                      |
+| **Version**      | 2.0.6 staged on `style/zotero-native-ui` (unreleased); 2.0.5 released 2026-07-09 (#67 menu hotfix); 2.0.4 released 2026-06-10 (Zenodo 10.5281/zenodo.19433716) |
+| **Build Status** | Clean (367 tests passing, typecheck clean, lint clean, XPI ~94 KB)                      |
 | **Open Issues**  | P0: 0, P1: 0, P2: 1, P3: 2 (see ISSUES.md)                                              |
 | **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, Zotero 7.0.10–9, SQLite, Node 22          |
 | **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                                   |
@@ -29,12 +29,12 @@ tags: [citegeist, status]
 
 ## In Progress
 
-**Staged v2.0.5 on `style/zotero-native-ui` (not yet tagged):** a native-to-Zotero UI pass plus a critical pane-render fix.
+**Staged v2.0.6 on `style/zotero-native-ui` (not yet tagged):** a native-to-Zotero UI pass plus a critical pane-render fix. (Renumbered from 2.0.5 → 2.0.6 after the #67 right-click-menu hotfix shipped as v2.0.5 off `main`; this branch was rebased/merged onto the new `main` so it carries the fix.)
 
 - **Critical fix — the Citation Intelligence pane could vanish.** `ItemPaneManager.registerSection` parses `bodyXHTML` as XML; a literal `<` in the pane stylesheet (a `<strong>` mentioned in a `cgComponents` CSS comment) aborted the whole parse, so the section silently failed to render — columns use a different manager and were unaffected. Shipped latent in v2.0.4 (entered with DEBT-008); only surfaced on upgrade from ≤2.0.3. Fixed by CDATA-wrapping the pane `<style>` (now immune to any `<`/`&` in CSS), removing the offending comments, and a guard test asserting `cgComponents`/`cgDesignTokens` emit no raw `<`/`&`. Proven with xmllint against the real generated `bodyXHTML`.
 - **Native chrome.** Dropped the declared Inter/SF stack — the pane inherits Zotero's UI font, the modal uses a native system stack. Neutralised the green-undertoned surfaces/text to neutral greys (both surfaces, both schemes); de-tinted shadows. Buttons compacted 14→10px. Sage accent + prominent metrics kept. Verified in Zotero (light/dark/auto).
 - **Spacing + proportion system.** Snapped pane spacing to a 4/8/12 token grid (de-jitter); codified a φ-informed hero type tier (`--cg-size-stat` = body × φ, `display` capped) so every pane shares one proportion; reconciled the pane + dialog onto a single 13px body (`--cg-size-subhead`). Guard test locks the metric:body φ ratio. Gallery (`citegeist-primitives.html`) synced to the retuned tokens.
-- Version bumped to 2.0.5 (package.json, lockfile, CITATION.cff, CHANGELOG). On branch; not pushed/tagged. **Separately:** the broken release/downloads README badges (shields shared-token-pool freeze) are fixed on `ci/self-hosted-badge-endpoints` — self-hosted shields *endpoint* badges served from a `badges` branch ([PR #66](https://github.com/phdemotions/zotero-citegeist/pull/66)).
+- Version bumped to 2.0.6 (package.json, lockfile, CITATION.cff, CHANGELOG). On branch; not pushed/tagged. **Separately:** the broken release/downloads README badges (shields shared-token-pool freeze) are fixed on `ci/self-hosted-badge-endpoints` — self-hosted shields *endpoint* badges served from a `badges` branch ([PR #66](https://github.com/phdemotions/zotero-citegeist/pull/66)).
 
 **Released v2.0.4 — 2026-06-10 (#57, DEBT-008 done):** finished the shared-primitive unification. Badges/chips → one canonical `.cg-chip` uppercase pill (pane + dialog); the title-match suggestion card → `.cg-card`; banners/eyebrows → shared `.cg-banner`/`.cg-eyebrow`; the dialog "Done" button → `.cg-btn`. All in `src/modules/ui/components.ts`. Two guard tests: token-purity (primitives use `var(--cg-*)`, no raw hex, so they always follow the forced `color-scheme`) and gallery-parity (every shipped primitive class is documented in `docs/design-system/citegeist-primitives.html`, reconciled to the code as the canonical source). Also fixed two light-mode contrast bugs (the match-verify OpenAlex link, the picker checkmark) and removed dead `.cg-match-banner` + unused pane token aliases.
 

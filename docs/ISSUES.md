@@ -2,13 +2,13 @@
 type: issues
 title: Citegeist — open issues
 description: Open bugs and feature requests, tracked by priority.
-timestamp: 2026-06-10
+timestamp: 2026-07-09
 tags: [citegeist, issues]
 ---
 
 # Citegeist — Open Issues
 
-> **Last Updated:** 2026-06-15 (v2.0.5 staged on `style/zotero-native-ui`, unreleased: native-to-Zotero UI retune + **critical fix** — the Citation Intelligence pane could fail to render because `bodyXHTML` is parsed as XML and a `<strong>` in a `cgComponents` CSS comment aborted the parse; now CDATA-wrapped + guard-tested. This is latent in **released v2.0.4**, so ship 2.0.5 to fix public users on strict-XML Zotero builds. v2.0.4 released #57: DEBT-008 closed — design-primitive unification + token-purity/gallery-parity tests + two light-mode contrast fixes. Closed issues archived to `docs/archive/issues-closed.jsonl`)
+> **Last Updated:** 2026-07-09 (**v2.0.5 released 2026-07-09** — right-click context-menu hotfix [#67]: MenuManager label + registration-lifecycle repair, shipped isolated off `main`, issue kept open pending reporter confirmation. **v2.0.6 staged on `style/zotero-native-ui`**, unreleased: native-to-Zotero UI retune + **critical fix** — the Citation Intelligence pane could fail to render because `bodyXHTML` is parsed as XML and a `<strong>` in a `cgComponents` CSS comment aborted the parse; now CDATA-wrapped + guard-tested. That pane fix is latent in **released v2.0.4/v2.0.5**, so ship 2.0.6 to fix public users on strict-XML Zotero builds. v2.0.4 released #57: DEBT-008 closed — design-primitive unification + token-purity/gallery-parity tests + two light-mode contrast fixes. Closed issues archived to `docs/archive/issues-closed.jsonl`)
 
 ---
 

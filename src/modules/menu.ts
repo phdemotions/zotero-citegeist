@@ -82,6 +82,23 @@ export function setMenuPluginID(id: string): void {
   menuPluginID = id;
 }
 
+/**
+ * True once the process-global MenuManager registration has fully succeeded.
+ *
+ * The MenuManager registry is keyed per-process, not per-window, so a second
+ * `registerMenus` call — File > New Window fires `onMainWindowLoad` again, and
+ * dev hot-reload can re-enter — must be a NO-OP. Without this guard the repeat
+ * call re-attempts `registerMenu`, Zotero rejects it as a duplicate (a plain
+ * `false`, indistinguishable from a real failure), and the old code misread
+ * that as "MenuManager unavailable" and injected a second, uncoordinated DOM
+ * menu onto the same popup MenuManager still owns — the root cause of the
+ * garbled / dead right-click menu in issue #67.
+ *
+ * Mirrors the `registered` flag in `citationColumn.ts`. Reset only by
+ * `unregisterGlobalMenus()` at plugin shutdown.
+ */
+let menuManagerRegistered = false;
+
 function getMenuManager(): ZoteroMenuManager | null {
   const mm = (Zotero as unknown as { MenuManager?: ZoteroMenuManager }).MenuManager;
   return mm && typeof mm.registerMenu === "function" ? mm : null;
@@ -468,10 +485,20 @@ function registerViaDOM(win: Window): void {
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export function registerMenus(win: Window): void {
+  // Idempotency guard (issue #67): the MenuManager registration is
+  // process-global, so once it is active a repeat call (new window, hot-reload)
+  // must do nothing. Re-attempting would be rejected as a duplicate and misread
+  // as "MenuManager broken", injecting a duplicate DOM menu onto the same popup.
+  if (menuManagerRegistered) {
+    Zotero.debug("[Citegeist] Menus already registered (MenuManager) — skipping");
+    return;
+  }
+
   const mm = getMenuManager();
   if (mm && menuPluginID) {
     try {
       if (registerViaMenuManager(mm, menuPluginID)) {
+        menuManagerRegistered = true;
         Zotero.debug("[Citegeist] Menus registered (MenuManager)");
         return;
       }
@@ -484,9 +511,31 @@ export function registerMenus(win: Window): void {
   registerViaDOM(win);
 }
 
+/**
+ * Per-window teardown. Removes any DOM-injected menu nodes from THIS window
+ * only. Runs on every window unload.
+ *
+ * Deliberately does NOT touch the process-global MenuManager registration:
+ * doing so would remove Citegeist's context menu from every other still-open
+ * window (issue #67, teardown side — a secondary window closing silently killed
+ * the menu everywhere). Global MenuManager teardown lives in
+ * `unregisterGlobalMenus()` and runs once, at plugin shutdown.
+ */
 export function unregisterMenus(win: Window): void {
-  // MenuManager menus auto-clean on plugin shutdown via pluginID, but tear them
-  // down explicitly too so a window-unload or hot-reload leaves nothing behind.
+  const doc = win.document;
+  for (const id of Object.values(MENU_IDS)) {
+    doc.getElementById(id)?.remove();
+  }
+}
+
+/**
+ * Process-global teardown. Unregisters the MenuManager menus and resets the
+ * idempotency flag. Call ONCE, at plugin shutdown — never on a per-window
+ * unload. MenuManager menus also auto-clean on plugin shutdown via `pluginID`,
+ * but tearing them down explicitly keeps a hot-reload from leaking a stale
+ * registration behind the flag.
+ */
+export function unregisterGlobalMenus(): void {
   const mm = getMenuManager();
   if (mm) {
     for (const id of [MM_ITEM_MENU_ID, MM_COLLECTION_MENU_ID]) {
@@ -497,9 +546,5 @@ export function unregisterMenus(win: Window): void {
       }
     }
   }
-  // Always remove any DOM nodes too (covers the fallback path + mixed states).
-  const doc = win.document;
-  for (const id of Object.values(MENU_IDS)) {
-    doc.getElementById(id)?.remove();
-  }
+  menuManagerRegistered = false;
 }
