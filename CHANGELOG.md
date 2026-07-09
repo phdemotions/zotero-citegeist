@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.5] — 2026-07-09
+
+### Fixed
+
+- **The right-click menu could show blank entries and then stop responding.** On
+  Zotero 8 and 9, Citegeist's right-click menu items could appear with no visible
+  label (though they still worked), and after using one, the right-click menu
+  could stop opening on any item until the plugin was disabled and re-enabled.
+  Both problems are fixed: the menu labels now render, and Citegeist registers its
+  menu exactly once per session no matter how many library windows you open or
+  close. Thanks to the people who reported issue #67.
+
 ### Internal
 
 - Project documentation adopts the Open Knowledge Format (OKF v0.1, pinned): every
@@ -476,6 +488,7 @@ network browser got a thorough pass alongside it:
 - CI pipeline with build, typecheck, and test stages
 - JOSS paper, DESIGN.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 
+[2.0.5]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.4...v2.0.5
 [2.0.4]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/phdemotions/zotero-citegeist/compare/v2.0.1...v2.0.2

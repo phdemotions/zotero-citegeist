@@ -5,7 +5,12 @@
 
 import { registerCitationColumn, unregisterCitationColumn } from "./modules/citationColumn";
 import { registerCitationPane, unregisterCitationPane } from "./modules/citationPane";
-import { registerMenus, unregisterMenus, setMenuPluginID } from "./modules/menu";
+import {
+  registerMenus,
+  unregisterMenus,
+  unregisterGlobalMenus,
+  setMenuPluginID,
+} from "./modules/menu";
 import { clearSourceStatsCache } from "./modules/openalex";
 import { initCache, closeCache, migrateFromExtraV1, garbageCollectOrphans } from "./modules/cache";
 import { logError } from "./modules/utils";
@@ -177,6 +182,14 @@ export async function onShutdown(_data: PluginData): Promise<void> {
     if (win) unregisterMenus(win);
   } catch (e) {
     logError("shutdown unregisterMenus", e);
+  }
+  // Global MenuManager teardown is process-scoped, not window-scoped: run it
+  // unconditionally, independent of whether getMainWindow() returned a window.
+  // (unregisterMenus above only clears per-window DOM nodes.)
+  try {
+    unregisterGlobalMenus();
+  } catch (e) {
+    logError("shutdown unregisterGlobalMenus", e);
   }
   try {
     unregisterCitationColumn();
