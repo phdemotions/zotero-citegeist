@@ -29,6 +29,18 @@ declare namespace _ZoteroTypes {
     save(options?: Record<string, unknown>): Promise<number>;
     eraseTx(options?: Record<string, unknown>): Promise<void>;
     deleted: boolean;
+    /** True when the item's library is writable (personal, or an editable group). */
+    isEditable(): boolean;
+    // Semantic-web relations (on Zotero.DataObject, inherited by Item; stable
+    // across Zotero 7–9). Predicates are prefixed names matching /^[a-z]+:[a-z]+$/i;
+    // objects are opaque URI strings (may point at external entities). Synced via
+    // the item JSON. Require an explicit saveTx()/save() afterward.
+    getRelations(): Record<string, string[]>;
+    getRelationsByPredicate(predicate: string): string[];
+    addRelation(predicate: string, object: string): boolean;
+    hasRelation(predicate: string, object: string): boolean;
+    removeRelation(predicate: string, object: string): boolean;
+    setRelations(relations: Record<string, string[]>): boolean;
   }
 
   interface Creator {
@@ -198,10 +210,7 @@ declare const Zotero: {
     get(ids: number[]): _ZoteroTypes.Item[];
     getAsync(id: number): Promise<_ZoteroTypes.Item>;
     getAsync(ids: number[]): Promise<_ZoteroTypes.Item[]>;
-    getAll(
-      libraryID: number,
-      onlyTopLevel?: boolean,
-    ): Promise<_ZoteroTypes.Item[]>;
+    getAll(libraryID: number, onlyTopLevel?: boolean): Promise<_ZoteroTypes.Item[]>;
     getIDFromLibraryAndKey(libraryID: number, key: string): number | false;
   };
   Libraries: {
@@ -245,14 +254,10 @@ declare const Zotero: {
       getResponseHeader(header: string): string | null;
     }>;
   };
-  ProgressWindow: new (options?: {
-    closeOnClick?: boolean;
-  }) => _ZoteroTypes.ProgressWindow;
+  ProgressWindow: new (options?: { closeOnClick?: boolean }) => _ZoteroTypes.ProgressWindow;
   Search: new () => _ZoteroTypes.Search;
   ItemTreeManager: {
-    registerColumn(
-      options: _ZoteroTypes.RegisterColumnOptions,
-    ): Promise<string>;
+    registerColumn(options: _ZoteroTypes.RegisterColumnOptions): Promise<string>;
     unregisterColumn(dataKey: string): Promise<void>;
     /** Force a full column refresh — invalidates internal column caches
      *  AND re-invokes every dataProvider. Use after external data
@@ -300,7 +305,10 @@ declare const IOUtils: {
   move(source: string, dest: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   /** Create a directory if it doesn't exist. */
-  makeDirectory(path: string, options?: { permissions?: number; ignoreExisting?: boolean }): Promise<void>;
+  makeDirectory(
+    path: string,
+    options?: { permissions?: number; ignoreExisting?: boolean },
+  ): Promise<void>;
   /** Optional on builds that don't expose the chmod helper. POSIX-only effect. */
   setPermissions?(path: string, options: { unixMode?: number }): Promise<void>;
 };
