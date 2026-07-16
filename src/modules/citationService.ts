@@ -25,6 +25,7 @@ import {
   type OpenAlexWork,
 } from "./openalex";
 import {
+  cacheItemAuthors,
   cacheWorkData,
   isCacheStale,
   getCachedData,
@@ -210,6 +211,13 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
           ? await getSourceStats(work.primary_location.source.id)
           : null;
         await cacheWorkData(item, work, sourceStats);
+        // Piggyback author identity on the same fetched work (no new API call).
+        // Failure-isolated: an author-write error must not fail the metrics
+        // result that already persisted. No column repaint — authors have no
+        // v1 column (KTD5); the pane reads them async.
+        await cacheItemAuthors(item, work.authorships).catch((e) =>
+          logError("cacheItemAuthors(confirmed)", e),
+        );
         return { status: "ok", work };
       }
     } catch (e) {
@@ -253,6 +261,7 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
   const sourceStats = sourceId ? await getSourceStats(sourceId) : null;
 
   await cacheWorkData(item, work, sourceStats);
+  await cacheItemAuthors(item, work.authorships).catch((e) => logError("cacheItemAuthors", e));
   return { status: "ok", work };
 }
 

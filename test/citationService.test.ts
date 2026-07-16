@@ -121,6 +121,7 @@ import {
   cacheWorkData,
   writePendingSuggestion,
   confirmTitleMatch,
+  getItemAuthors,
 } from "../src/modules/cache";
 import { OpenAlexNetworkError } from "../src/modules/utils";
 
@@ -351,6 +352,30 @@ describe("fetchAndCacheItem", () => {
     expect(mockedGetWorkByDOI).toHaveBeenCalledWith("10.1234/test");
     expect(mockedGetWorkByPMID).not.toHaveBeenCalled();
     expect(mockedGetWorkByArxivId).not.toHaveBeenCalled();
+  });
+
+  it("piggybacks author identity onto a successful fetch (U3)", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    mockedGetWorkByDOI.mockResolvedValue(makeFakeWork());
+    await fetchAndCacheItem(item);
+    const authors = await getItemAuthors(1, "TEST");
+    expect(authors.map((a) => a.author_id)).toEqual(["A1"]);
+  });
+
+  it("does not resolve authors for a trashed item (U3)", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    (item as unknown as { deleted: boolean }).deleted = true;
+    const result = await fetchAndCacheItem(item);
+    expect(result.status).toBe("error");
+    expect(await getItemAuthors(1, "TEST")).toHaveLength(0);
+  });
+
+  it("tolerates a work with no authorships without failing the result (U3)", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    mockedGetWorkByDOI.mockResolvedValue(makeFakeWork({ authorships: [] }));
+    const result = await fetchAndCacheItem(item);
+    expect(result.status).toBe("ok");
+    expect(await getItemAuthors(1, "TEST")).toHaveLength(0);
   });
 
   it("fetches via PMID when no DOI", async () => {

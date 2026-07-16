@@ -3,7 +3,7 @@
  */
 
 import { getSourceStats, type OpenAlexWork } from "../openalex";
-import { cacheWorkData } from "../cache";
+import { cacheItemAuthors, cacheWorkData } from "../cache";
 import { invalidateColumnCache } from "../citationColumn";
 import { escapeHTML, logError, safeInnerHTML } from "../utils";
 import { SURNAME_PREFIXES, UNDO_TIMEOUT_MS, type NetworkState } from "./types";
@@ -60,6 +60,11 @@ export async function addItemToLibrary(
     const srcId = work.primary_location?.source?.id;
     const srcStats = srcId ? await getSourceStats(srcId) : null;
     await cacheWorkData(item, work, srcStats);
+    // Resolve author identity for the newly-added item (third piggyback
+    // callsite; failure-isolated so it can't break the add flow).
+    await cacheItemAuthors(item, work.authorships).catch((e) =>
+      logError("cacheItemAuthors(add)", e),
+    );
     invalidateColumnCache(item.id);
 
     const doi = work.doi?.replace("https://doi.org/", "")?.toLowerCase();
