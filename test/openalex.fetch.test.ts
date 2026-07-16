@@ -31,11 +31,7 @@ vi.stubGlobal("Zotero", mockZotero);
 // Import after the global is stubbed so module-level code sees it.
 import { getWorkById, resolveCanonicalId } from "../src/modules/openalex";
 
-function httpResponse(
-  status: number,
-  body: unknown = {},
-  headers: Record<string, string> = {},
-) {
+function httpResponse(status: number, body: unknown = {}, headers: Record<string, string> = {}) {
   return {
     status,
     responseText: JSON.stringify(body),
@@ -130,7 +126,9 @@ describe("error discrimination", () => {
   });
 
   it("returns the work on 200", async () => {
-    httpRequest.mockResolvedValue(httpResponse(200, { id: "https://openalex.org/W1", authorships: [] }));
+    httpRequest.mockResolvedValue(
+      httpResponse(200, { id: "https://openalex.org/W1", authorships: [] }),
+    );
     const work = await getWorkById("W1");
     expect(work?.id).toBe("https://openalex.org/W1");
   });
