@@ -129,8 +129,12 @@ describe("MenuManager path (Zotero 8+)", () => {
       "citegeist-menu-fetch",
       "citegeist-menu-citing",
       "citegeist-menu-refs",
+      "citegeist-menu-resolve-authors",
     ]);
-    expect(collection.menus[0].l10nID).toBe("citegeist-menu-fetch-collection");
+    expect(collection.menus.map((m) => m.l10nID)).toEqual([
+      "citegeist-menu-fetch-collection",
+      "citegeist-menu-resolve-collection",
+    ]);
     // No DOM nodes were injected — the MenuManager path returned first.
     expect(doc.getElementById("citegeist-menu-fetch")).toBeNull();
   });

@@ -107,6 +107,8 @@ import {
   extractIdentifier,
   canResolveWork,
   resolveWorkForItem,
+  resolveAuthorsForItem,
+  resolveAuthorsForItems,
 } from "../src/modules/citationService";
 import {
   getWorkByDOI,
@@ -123,7 +125,8 @@ import {
   confirmTitleMatch,
   getItemAuthors,
 } from "../src/modules/cache";
-import { OpenAlexNetworkError } from "../src/modules/utils";
+import { OpenAlexNetworkError, OpenAlexBudgetError } from "../src/modules/utils";
+import { cacheItemAuthors } from "../src/modules/cache";
 
 const mockedGetWorkByDOI = vi.mocked(getWorkByDOI);
 const mockedGetWorkByPMID = vi.mocked(getWorkByPMID);
@@ -665,5 +668,60 @@ describe("resolveWorkForItem", () => {
     mockedGetWorkById.mockRejectedValue(new OpenAlexNetworkError("unreachable"));
     await expect(resolveWorkForItem(item)).rejects.toBeInstanceOf(OpenAlexNetworkError);
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveAuthorsForItems (U4)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockZotero.Prefs.get.mockImplementation((pref: string) => {
+      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
+      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
+      return 7;
+    });
+    fakeDb = makeFakeDb();
+    _resetForTesting();
+    await initCache();
+  });
+
+  it("resolves an unfetched item via a full fetch (piggyback)", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    mockedGetWorkByDOI.mockResolvedValue(makeFakeWork());
+    expect(await resolveAuthorsForItem(item)).toBe("resolved");
+    expect((await getItemAuthors(1, "TEST")).map((a) => a.author_id)).toEqual(["A1"]);
+  });
+
+  it("resolves a metrics-cached-but-authorless item via the free singleton path", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    // cacheWorkData writes metrics only (no authors) — the pre-U3 rollout case:
+    // a cached OpenAlex id but no item_authors.
+    await cacheWorkData(item, makeFakeWork());
+    expect(await getItemAuthors(1, "TEST")).toHaveLength(0);
+    mockedGetWorkById.mockResolvedValue(makeFakeWork());
+    expect(await resolveAuthorsForItem(item)).toBe("resolved");
+    expect(mockedGetWorkById).toHaveBeenCalled(); // free singleton lookup, not a metered fetch
+    expect((await getItemAuthors(1, "TEST")).map((a) => a.author_id)).toEqual(["A1"]);
+  });
+
+  it("skips an item that already has resolved authors", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    await cacheItemAuthors({ libraryID: 1, key: "TEST" }, [{ author: { id: "A1" } }]);
+    expect(await resolveAuthorsForItem(item)).toBe("already");
+  });
+
+  it("stops on budget exhaustion and counts the remaining items as not attempted", async () => {
+    const items = [mockItem({ doi: "10.1234/a" }), mockItem({ doi: "10.1234/b" })];
+    await cacheWorkData(items[0], makeFakeWork());
+    mockedGetWorkById.mockRejectedValue(new OpenAlexBudgetError());
+    const result = await resolveAuthorsForItems(items);
+    expect(result.budgetStopped).toBe(2);
+    expect(result.resolved).toBe(0);
+  });
+
+  it("honors a cancel request before any work is done", async () => {
+    const items = [mockItem({ doi: "10.1234/a" }), mockItem({ doi: "10.1234/b" })];
+    const result = await resolveAuthorsForItems(items, undefined, undefined, () => true);
+    expect(result.cancelled).toBe(true);
+    expect(result.resolved + result.already + result.unresolved).toBe(0);
   });
 });
