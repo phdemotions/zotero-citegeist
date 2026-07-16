@@ -159,3 +159,15 @@ The redesigned title-match confirm/discard card (shipped v2.0.1) shows the candi
 
 **Scope:** add `pending_authors TEXT` + a one-shot `ALTER TABLE` migration; thread a formatted author string through `writePendingSuggestion` → `getPendingSuggestion` → `renderSuggestion` (from `match.work.authorships`).
 
+---
+
+## "My Authors" — a deduplicated author index for your library
+
+**Labels:** `enhancement`, `high-impact`, `authors`
+
+v2 follow-up to the author identity layer (see the [author-identity-layer requirements](brainstorms/2026-07-16-author-identity-layer-requirements.md)). Once each library item's authors are resolved to a curated OpenAlex identity, surface a browsable, deduplicated index of every author across the library — each with their Scholar-style profile and a count of how many of your items they wrote. Turns the per-item identity into a first-class way to navigate the library by person.
+
+**Why deferred to v2:** it's a second major surface (its own view plus curation-at-scale) layered on the per-item pane profile and background identity resolution that ship in v1. The identity foundation should prove out before the aggregate view is worth building.
+
+**Depends on:** the `authors` / `item_authors` tables and background identity resolution delivered in v1.
+
