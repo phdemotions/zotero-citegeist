@@ -8,9 +8,9 @@ tags: [citegeist, status]
 
 # Citegeist — Status
 
-> **Last Updated:** 2026-06-10
-> **Phase:** v2.0.4 released 2026-06-10 — design-primitive unification (DEBT-008: shared chip/card/banner/eyebrow + purity & gallery-parity tests, #57). v2.0.3 (light/dark theme fix + settings shortcut + section-icon fix, #56) released the same day. Working tree clean.
-> **Build:** Clean
+> **Last Updated:** 2026-07-16
+> **Phase:** Author identity layer in progress — Phase A (metered-OpenAlex key handling + author cache foundation) merged to `main` 2026-07-16 (#73, untagged); Phase B on `feat/author-identity-phase-b` (U3 done; U4/U5 pending). v2.0.4 released 2026-06-10 (#57).
+> **Build:** Clean (391 tests passing sequentially; typecheck/lint/build green)
 
 ---
 
@@ -28,6 +28,13 @@ tags: [citegeist, status]
 ---
 
 ## In Progress
+
+**Author identity layer — Phase A merged to `main` 2026-07-16 (#73); Phase B in progress.** Resolve/curate/surface OpenAlex author identity so "who is saying what" is reliable across the library and into the user's Obsidian pipeline, plus a Scholar-style author profile in the pane. Origin docs: `docs/brainstorms/2026-07-16-author-identity-layer-requirements.md` + `docs/plans/2026-07-16-001-feat-author-identity-layer-plan.md`.
+
+- **Phase A (shipped to `main`, own release — not yet tagged):** U1 — metered-OpenAlex key handling (OpenAlex went paid + dropped the `mailto` polite pool in 2026): opt-in `api_key` pref, centralized key redaction in `normalizeError`, `OpenAlexBudgetError`/`OpenAlexAuthError` discrimination, `resolveCanonicalId` for 301 merges. U2 — new `src/modules/cache/authors/` sub-module: `authors` + `item_authors` tables (additive `CREATE TABLE IF NOT EXISTS`, composite PKs, replicated compile-time gates), `cacheItemAuthors` curated-wins under the shared exported `withKeyLock`, column-disjoint identity/metric writes, two-level orphan GC.
+- **Phase B (`feat/author-identity-phase-b`, U3 done):** U3 — identity now piggybacks all three `cacheWorkData` callsites (no new API call), failure-isolated. **Pending: U4** (lazy + opt-in "resolve all authors" backfill + menu) and **U5** (Zotero relations handoff: extend `typings/zotero.d.ts` with the 6 relation methods + `library` accessor, `openalex:author` predicate gated on `item.library.editable`; plus a **manual 2-device sync round-trip spike** before the handoff is trusted — `citegeist.sqlite`-direct-read fallback in place). Phase C (Scholar profile + curation UI + key-entry UX) is front-end **mockup-gated**.
+- A project-local PreToolUse hook (`.claude/settings.local.json`) gates edits to visual surfaces (`ui/*.ts`, `citationPane.ts`, `citationNetwork/{styles,results}.ts`, `*.xhtml`, `*.css`) behind explicit mockup approval.
+- "My Authors" library-wide index is the planned v2 follow-up (see BACKLOG).
 
 **Released v2.0.4 — 2026-06-10 (#57, DEBT-008 done):** finished the shared-primitive unification. Badges/chips → one canonical `.cg-chip` uppercase pill (pane + dialog); the title-match suggestion card → `.cg-card`; banners/eyebrows → shared `.cg-banner`/`.cg-eyebrow`; the dialog "Done" button → `.cg-btn`. All in `src/modules/ui/components.ts`. Two guard tests: token-purity (primitives use `var(--cg-*)`, no raw hex, so they always follow the forced `color-scheme`) and gallery-parity (every shipped primitive class is documented in `docs/design-system/citegeist-primitives.html`, reconciled to the code as the canonical source). Also fixed two light-mode contrast bugs (the match-verify OpenAlex link, the picker checkmark) and removed dead `.cg-match-banner` + unused pane token aliases.
 
