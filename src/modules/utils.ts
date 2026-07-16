@@ -73,13 +73,32 @@ export function safeParseFloat(val: string | undefined): number | null {
 }
 
 /**
+ * Redact an OpenAlex `api_key` query-param value from any string.
+ *
+ * OpenAlex is metered (July 2026); the optional key rides the request URL as
+ * `?api_key=…`. Zotero.HTTP errors can carry the full URL in their message, so
+ * every string bound for a log MUST pass through here. This is centralized
+ * inside {@link normalizeError} — the single funnel every `logError` and raw
+ * `Zotero.debug(normalizeError(e))` call already uses — rather than at
+ * individual call sites, so no logging path can bypass it.
+ */
+export function redactApiKey(s: string): string {
+  return s.replace(/(\bapi_key=)[^&\s"')]+/gi, "$1REDACTED");
+}
+
+/**
  * Normalize an unknown caught value into a string suitable for logging.
  *
  * Zotero.debug(msg + e) coerces objects to "[object Object]" and drops
  * stack traces. Use this helper in every catch() so log lines are useful
- * in production.
+ * in production. The result is always run through {@link redactApiKey} so a
+ * URL-bearing error can never leak the user's OpenAlex key into the debug log.
  */
 export function normalizeError(e: unknown): string {
+  return redactApiKey(rawNormalizeError(e));
+}
+
+function rawNormalizeError(e: unknown): string {
   if (e instanceof Error) {
     const first = e.stack?.split("\n")[1]?.trim();
     return first ? `${e.message} (${first})` : e.message;
@@ -120,6 +139,30 @@ export class OpenAlexNetworkError extends Error {
   ) {
     super(message);
     this.name = "OpenAlexNetworkError";
+  }
+}
+
+/**
+ * The caller's OpenAlex daily budget is exhausted (July-2026 metered API).
+ * Distinct from {@link OpenAlexNetworkError} so the UI can prompt the user to
+ * add an API key rather than showing an "unreachable" dead end, and so a
+ * bulk pass can stop cleanly instead of caching a spurious "no data".
+ */
+export class OpenAlexBudgetError extends Error {
+  constructor(message = "OpenAlex daily budget exhausted") {
+    super(message);
+    this.name = "OpenAlexBudgetError";
+  }
+}
+
+/**
+ * OpenAlex rejected the request's API key (HTTP 401/403). Distinct from a
+ * network failure so the UI can prompt the user to re-check their key.
+ */
+export class OpenAlexAuthError extends Error {
+  constructor(message = "OpenAlex rejected the API key") {
+    super(message);
+    this.name = "OpenAlexAuthError";
   }
 }
 

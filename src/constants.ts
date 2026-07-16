@@ -91,8 +91,26 @@ export const PREF_LAST_BACKUP_PATH = "extensions.zotero.citegeist.lastBackupPath
 export const PREF_LAST_ORPHAN_GC_AT = "extensions.zotero.citegeist.lastOrphanGcAt";
 export const PREF_CACHE_LIFETIME_DAYS = "extensions.zotero.citegeist.cacheLifetimeDays";
 export const PREF_AUTO_FETCH = "extensions.zotero.citegeist.autoFetch";
+/**
+ * @deprecated OpenAlex dropped the `mailto` polite pool (July 2026). The client
+ * no longer sends it; use {@link PREF_OPENALEX_API_KEY} instead. The pref key is
+ * retained only so the legacy preferences field has a home until U9 removes it.
+ */
 export const PREF_MAILTO = "extensions.zotero.citegeist.mailto";
+/**
+ * Optional, opt-in OpenAlex API key. OpenAlex is metered as of July 2026
+ * ($0.10/day anonymous, $1/day with a free key). Stored locally; never synced;
+ * never logged (redacted via {@link redactApiKey}). Empty/unset → anonymous.
+ */
+export const PREF_OPENALEX_API_KEY = "extensions.zotero.citegeist.openAlexApiKey";
 export const PREF_NETWORK_PAGE_SIZE = "extensions.zotero.citegeist.networkPageSize";
+
+/**
+ * Response header OpenAlex sets to the caller's remaining daily request quota.
+ * A `429` carrying `0` here is budget exhaustion (persistent — prompt for a
+ * key), distinct from a transient per-second rate-limit `429` (retry).
+ */
+export const OPENALEX_RATE_REMAINING_HEADER = "X-RateLimit-Remaining";
 
 /**
  * Settings pane id — registered via `Zotero.PreferencePanes.register` and
