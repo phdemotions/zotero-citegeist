@@ -27,11 +27,16 @@ const openAlexMocks = vi.hoisted(() => ({
   clearSourceStatsCache: vi.fn(),
 }));
 
+const openAlexAuthorsMocks = vi.hoisted(() => ({
+  clearAuthorProfileCache: vi.fn(),
+}));
+
 vi.mock("../src/modules/cache", () => cacheMocks);
 vi.mock("../src/modules/citationColumn", () => columnMocks);
 vi.mock("../src/modules/citationPane", () => paneMocks);
 vi.mock("../src/modules/menu", () => menuMocks);
 vi.mock("../src/modules/openalex", () => openAlexMocks);
+vi.mock("../src/modules/openalexAuthors", () => openAlexAuthorsMocks);
 
 describe("hooks", () => {
   beforeEach(() => {

@@ -20,6 +20,20 @@ export const OPENALEX_RETRY_DELAYS_MS = [2000, 4000];
  */
 export const OPENALEX_BOOK_WORK_TYPES: readonly string[] = ["book", "book-chapter", "monograph"];
 
+// ── OpenAlex author profile ──
+/**
+ * Per-page size for author works queries. OpenAlex caps `per_page` at 200; 100
+ * balances fewer round-trips against payload size.
+ */
+export const OPENALEX_AUTHOR_WORKS_PAGE_SIZE = 100;
+/**
+ * Max works pages fetched when DERIVING author metrics (h-index / i10) because
+ * the author-object aggregates came back zero — the July-2026 degradation (KTD2).
+ * Bounds metered budget for pathologically prolific authors (5 × 100 = 500
+ * works). Past this, the derived h-index / i10 are reported as lower bounds.
+ */
+export const OPENALEX_AUTHOR_HINDEX_PAGE_CAP = 5;
+
 // ── Cache lifetimes ──
 /** Default cache lifetime in days when the pref is unset or invalid. */
 export const DEFAULT_CACHE_LIFETIME_DAYS = 7;

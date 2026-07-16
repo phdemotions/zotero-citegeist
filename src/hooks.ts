@@ -12,6 +12,7 @@ import {
   setMenuPluginID,
 } from "./modules/menu";
 import { clearSourceStatsCache } from "./modules/openalex";
+import { clearAuthorProfileCache } from "./modules/openalexAuthors";
 import { initCache, closeCache, migrateFromExtraV1, garbageCollectOrphans } from "./modules/cache";
 import { logError } from "./modules/utils";
 import { PREF_LAST_BACKUP_PATH, SETTINGS_PANE_ID } from "./constants";
@@ -205,6 +206,11 @@ export async function onShutdown(_data: PluginData): Promise<void> {
     clearSourceStatsCache();
   } catch (e) {
     logError("shutdown clearSourceStatsCache", e);
+  }
+  try {
+    clearAuthorProfileCache();
+  } catch (e) {
+    logError("shutdown clearAuthorProfileCache", e);
   }
   await closeCache().catch((e) => logError("cache close", e));
 
