@@ -28,6 +28,7 @@ import {
 import { logError, normalizeError, safeParseFloat, safeParseIntOrNull } from "../utils";
 import { deleteMirrorEntries, mirrorSnapshot, requireDb, upsertRow } from "./db";
 import { setExtraConfirmedMatch } from "./write";
+import { garbageCollectOrphanAuthors } from "./authors/db";
 import {
   CONFIRMED_MATCH_EXTRA_PREFIX,
   emptyRow,
@@ -951,6 +952,9 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
     );
     deleteMirrorEntries(slice.map((o) => o.composite));
   }
+  // Two-level author sweep on the same orphan set: drop their item_authors
+  // rows, then any authors left unreferenced.
+  await garbageCollectOrphanAuthors(conn, orphans);
   trySetPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
   Zotero.debug(`[Citegeist] orphan GC removed ${orphans.length} rows`);
 }
