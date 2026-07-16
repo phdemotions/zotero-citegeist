@@ -1,25 +1,37 @@
 /**
  * OpenAlex API client for Citegeist.
  *
- * Uses Zotero.HTTP for requests. Implements polite pool via mailto,
- * field selection for minimal payloads, and cursor-based pagination.
+ * Uses Zotero.HTTP for requests, field selection for minimal payloads, and
+ * cursor-based pagination.
+ *
+ * Auth + budget (July 2026): OpenAlex is metered and has dropped the `mailto`
+ * polite pool. An optional, opt-in API key is attached from the pref when set;
+ * it is never logged (redacted centrally in {@link normalizeError}). Anonymous
+ * requests still work at the lower daily budget.
  *
  * Error semantics: lookup helpers return `null` when a work is not found
- * on OpenAlex, and throw {@link OpenAlexNetworkError} when the API is
- * unreachable or returns a non-200 after retries. This lets callers
- * distinguish "no data" from "service unavailable" to render a helpful
- * message to users.
+ * (404). Otherwise the fetch layer throws one of three distinct errors so UI
+ * can respond appropriately: {@link OpenAlexBudgetError} (daily budget spent —
+ * prompt for a key), {@link OpenAlexAuthError} (key rejected), or
+ * {@link OpenAlexNetworkError} (unreachable / non-200 after retries).
  */
 
 import {
   OPENALEX_RATE_LIMIT_MS,
   OPENALEX_REQUEST_TIMEOUT_MS,
   OPENALEX_RETRY_DELAYS_MS,
+  OPENALEX_RATE_REMAINING_HEADER,
   MAX_ABSTRACT_LENGTH,
   MAX_ABSTRACT_POSITION,
-  PREF_MAILTO,
+  PREF_OPENALEX_API_KEY,
 } from "../constants";
-import { OpenAlexNetworkError, normalizeError, logError } from "./utils";
+import {
+  OpenAlexNetworkError,
+  OpenAlexBudgetError,
+  OpenAlexAuthError,
+  normalizeError,
+  logError,
+} from "./utils";
 
 const OPENALEX_BASE = "https://api.openalex.org";
 
@@ -87,24 +99,44 @@ export interface OpenAlexListResponse {
   results: OpenAlexWork[];
 }
 
-function getMailto(): string {
+/**
+ * Read the optional OpenAlex API key from prefs. Empty string when unset —
+ * anonymous requests remain valid (at the lower daily budget).
+ */
+function getApiKey(): string {
   try {
-    const mailto = Zotero.Prefs.get(PREF_MAILTO) as string;
-    return mailto || "";
+    const key = Zotero.Prefs.get(PREF_OPENALEX_API_KEY) as string;
+    return (key || "").trim();
   } catch {
     return "";
   }
 }
 
 function buildUrl(path: string, params: Record<string, string> = {}): string {
-  const mailto = getMailto();
-  if (mailto) {
-    params.mailto = mailto;
+  // The key rides the query string (OpenAlex's documented mechanism as of
+  // July 2026 — a header form is an open question). It is never logged: the
+  // retry/error paths log `label`, not the URL, and normalizeError() redacts
+  // any URL that reaches it. Prefer a header here if OpenAlex confirms one.
+  const apiKey = getApiKey();
+  if (apiKey) {
+    params.api_key = apiKey;
   }
   const query = Object.entries(params)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join("&");
   return `${OPENALEX_BASE}${path}${query ? "?" + query : ""}`;
+}
+
+/**
+ * OpenAlex churns author/entity IDs and 301-redirects a merged ID to its
+ * survivor. Zotero.HTTP follows the redirect, but the requested ID may no
+ * longer be canonical — persist the `id` the response body actually carries.
+ * Returns the short form (`A123`/`W123`) or null if absent/malformed.
+ */
+export function resolveCanonicalId(body: { id?: string | null } | null | undefined): string | null {
+  const raw = body?.id;
+  if (typeof raw !== "string" || !raw) return null;
+  return raw.replace("https://openalex.org/", "") || null;
 }
 
 // ── Centralized rate limiter ──
@@ -122,12 +154,16 @@ async function rateLimitedFetch<T>(url: string, label: string, attempt = 0): Pro
 }
 
 async function fetchJson<T>(url: string, label: string, attempt: number): Promise<T> {
-  let response: { status: number; responseText: string };
+  let response: {
+    status: number;
+    responseText: string;
+    getResponseHeader?: (name: string) => string | null;
+  };
   try {
     response = await Zotero.HTTP.request("GET", url, {
       headers: {
         Accept: "application/json",
-        "User-Agent": `Citegeist/1.0 (Zotero plugin; ${getMailto() || "no-mailto"})`,
+        "User-Agent": "Citegeist/1.0 (Zotero plugin)",
       },
       responseType: "text",
       timeout: OPENALEX_REQUEST_TIMEOUT_MS,
@@ -145,7 +181,26 @@ async function fetchJson<T>(url: string, label: string, attempt: number): Promis
     throw new OpenAlexNetworkError(`OpenAlex unreachable while fetching ${label}`, e);
   }
 
-  // Retry with backoff on rate limiting / transient 5xx.
+  // Auth failure (bad/revoked key) — distinct so the UI can prompt re-entry.
+  if (response.status === 401 || response.status === 403) {
+    throw new OpenAlexAuthError(
+      `OpenAlex rejected the request for ${label} (HTTP ${response.status})`,
+    );
+  }
+
+  // A 429 is overloaded: daily-budget exhaustion (persistent — prompt for a
+  // key, do NOT retry) vs a transient per-second rate limit (retry). The
+  // remaining-quota header at exactly "0" is the budget-exhaustion signal.
+  // (The precise budget signal is pending live confirmation — see plan Open
+  // Questions; this discriminator is isolated here for easy adjustment.)
+  if (response.status === 429) {
+    const remaining = response.getResponseHeader?.(OPENALEX_RATE_REMAINING_HEADER);
+    if (typeof remaining === "string" && remaining.trim() === "0") {
+      throw new OpenAlexBudgetError(`OpenAlex daily budget exhausted while fetching ${label}`);
+    }
+  }
+
+  // Retry with backoff on transient rate limiting / 5xx.
   if (
     (response.status === 429 || response.status >= 500) &&
     attempt < OPENALEX_RETRY_DELAYS_MS.length
