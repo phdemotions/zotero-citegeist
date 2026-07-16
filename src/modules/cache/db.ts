@@ -18,6 +18,7 @@
 
 import { CLOSE_CACHE_DRAIN_TIMEOUT_MS } from "../../constants";
 import { COLUMNS, type ItemCacheRow, mirrorKey, rowToParams } from "./types";
+import { createAuthorSchema } from "./authors/db";
 
 /** Pre-computed UPSERT statement. `COLUMNS` is frozen, so this stays valid. */
 const UPSERT_SQL = `INSERT OR REPLACE INTO item_cache (${COLUMNS.join(", ")}) VALUES (${COLUMNS.map(
@@ -100,6 +101,9 @@ async function doInit(): Promise<void> {
   const conn = new Zotero.DBConnection("citegeist");
   await conn.queryAsync(SCHEMA);
   await conn.queryAsync(CREATE_PROGRESS_TABLE);
+  // Author identity tables (additive, idempotent — plan KTD4). No mirror is
+  // loaded for them: author reads query SQLite async in the pane.
+  await createAuthorSchema(conn);
 
   const rows = await conn.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
   const nextMirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
@@ -227,7 +231,7 @@ const noop = (): void => {};
  * Map would grow monotonically with the count of distinct keys ever
  * written, leaking memory under sustained workloads.
  */
-async function withKeyLock<T>(
+export async function withKeyLock<T>(
   libraryID: number,
   itemKey: string,
   fn: () => Promise<T>,
@@ -283,6 +287,13 @@ export async function deleteRow(libraryID: number, itemKey: string): Promise<voi
     // by `shouldForceRerun` would skip the now-empty row at checkpoint
     // lookup and the user's intentional clear would not trigger re-migration.
     await conn.queryAsync(`DELETE FROM migration_progress WHERE library_id = ? AND item_key = ?`, [
+      libraryID,
+      itemKey,
+    ]);
+    // Drop the item's resolved-author links too (per-item author GC). The
+    // library-wide sweep for items removed while Zotero was closed rides
+    // garbageCollectOrphans → garbageCollectOrphanAuthors.
+    await conn.queryAsync(`DELETE FROM item_authors WHERE library_id = ? AND item_key = ?`, [
       libraryID,
       itemKey,
     ]);

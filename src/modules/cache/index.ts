@@ -56,3 +56,14 @@ export {
 
 // ── Data hygiene ──
 export { garbageCollectOrphans, migrateFromExtraV1 } from "./migration";
+
+// ── Author identity ──
+export type { AuthorRow, ItemAuthorRow } from "./authors";
+export {
+  cacheItemAuthors,
+  getAuthor,
+  getItemAuthors,
+  parseAuthorId,
+  setCuratedItemAuthor,
+  updateAuthorMetrics,
+} from "./authors";
