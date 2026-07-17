@@ -212,21 +212,29 @@ Per-unit `**Files:**` remain authoritative; the tree is the expected shape, not 
   - Budget error propagates as `OpenAlexBudgetError`.
 - **Verification:** identity + metrics correct under both aggregate states; 301 reconciles; cost bounded.
 
-### U7. Scholar-style author profile in the pane  *(front-end gated)*
+### U7. Author surface — placement (confirmed 2026-07-16, in-context mockups approved)
 
-- **Goal:** Show an author's works + metrics with add-to-library and complete interaction states.
-- **Requirements:** R10, R11, R12, R13.
-- **Dependencies:** U6; reuses U2 reads to enumerate an item's resolved authors.
-- **Files:** `src/modules/citationPane.ts`, `src/modules/ui/components.ts` (only if a new primitive is needed), `docs/design-system/citegeist-primitives.html` (gallery parity if so), `test/citationPane.test.ts`.
-- **Approach:** Profile render mode: metrics header + paginated works list, reusing citation-network rows + `addItemToLibrary` (`results.ts:299-375`, `actions.ts:20-83`). Fetch on demand in `onAsyncRender` under the `paneGeneration` stale-render guard (body is reused). **Explicit states:** in-progress (reuse network loading), `OpenAlexBudgetError` (point at the U9 key banner), `OpenAlexNetworkError` (retry affordance), zero-works author (distinct from error). Guard against `onAsyncRender` running before `initCache()` (cache-not-ready → graceful empty). A resolved author name in U8 opens this profile; a back affordance returns to the curation list. CDATA-wrap `<style>`; buttons via `createElement`+`addEventListener`; `escapeHTML` values; `applyHostScheme` if portaled to `doc.body`.
-- **Patterns to follow:** `renderPane`/`renderSuggestion` (`citationPane.ts:651-1015`), network results, `project_pane_bodyxhtml_xml_safety` memory.
-- **Test scenarios:**
-  - Profile renders metrics + first works page from a fixture author.
-  - Each state renders: loading, budget-exhausted, network-error, zero-works.
-  - Add-to-library adds a listed work via the reused path.
-  - Pagination loads the next page; a stale render (item switched mid-fetch) is discarded.
-  - Emitted pane XHTML is XML-safe.
-- **Verification:** a correct, paginated, actionable profile with all states — verified in Zotero 9 dark after mockup approval.
+> **Placement decided with in-context mockups (Josh approved), superseding the original "profile drills down inside the citation section":** the resolved-author LIST lives in its **own dedicated "Authors" pane section** (not nested in Citation details); the Scholar PROFILE opens as a **new "author works" mode of the citation-network dialog** (not an in-pane drill-down). Rationale: one-concern-per-section matches Zotero's native item-pane IA and gives author identity (+ curation U8 + the Obsidian handoff) a first-class, sidenav-discoverable home; the profile is a filtered works list + add/file/paginate — exactly what the network dialog already does, so reuse it for room, consistency ("View citing works" ≈ "View this author's works"), and far less code. Approved visuals: hero h-index + supporting rail (concept **B**) as the dialog header; author rows = name · h-index hint · chevron (**E2**). **Back = the dialog's existing dismiss** (✕ / Esc / backdrop) → returns to the pane's Authors section, consistent with citing/references; a future author↔work↔author navigation stack is an additive seam, deliberately not built in v1.
+
+> The **pure data + view-model layer** for all of U7 is `src/modules/authorProfile.ts` (placement-agnostic: `loadAuthorProfile`, `buildProfileViewModel`, `buildAuthorRowViewModels`, `formatMetric`, `profileErrorState`, `persistProfileMetrics`) — landed + unit-tested in `test/authorProfile.test.ts` (13 tests). It survives the placement pivot untouched.
+
+#### U7a. Dedicated "Authors" pane section  *(front-end gated — mockup approved E2)*
+
+- **Goal:** A second Citegeist item-pane section listing the item's OpenAlex-resolved authors; each row opens the author profile (U7b).
+- **Dependencies:** U2 (reads), U7b (the profile a row opens).
+- **Files:** `src/modules/citationPane.ts` (or a sibling `authorsSection.ts`) — a second `registerSection` (own header + sidenav icon, namespaced-key teardown symmetry with the existing pane), pane-local CSS for the rows, `test/*`.
+- **Approach:** Section body renders `getItemAuthors` + `getAuthor` → `buildAuthorRowViewModels` → E2 rows (name · h-index hint · chevron), each a `createElement` button (never innerHTML) whose click calls `showAuthorWorks(authorId)` (U7b). Empty state: "Authors not linked yet — right-click → Resolve Author Identities" (ties to U4). Read-only library note reserved for U8. Registration mirrors `registerCitationPane`: process-global guard, `namespacedPaneKey`, split per-window/global teardown.
+- **Test scenarios:** rows built from a fixture join (covered by `authorProfile.test.ts`); section registers once across repeat register; XML-safe body.
+- **Verification:** the Authors section appears below Citation details with its own sidenav icon; rows open the profile — verified in Zotero after mockup approval (done).
+
+#### U7b. "Author works" mode in the citation-network dialog  *(front-end gated — mockup approved B)*
+
+- **Goal:** Open an author's Scholar profile as a dialog: hero-metrics header + that author's works, reusing the browser's add/file/paginate/sort/search.
+- **Dependencies:** U6, the network dialog, U7a (entry).
+- **Files:** `src/modules/citationNetwork/{dialog,types,results,styles}.ts` + `index.ts` (export `showAuthorWorks`), `test/*`.
+- **Approach:** Generalize the dialog subject minimally: `NetworkMode` gains `"author"`; `NetworkState` carries an optional `author: { id; profile }`. A new entry `showAuthorWorks(authorId)` reuses the SAME overlay/skeleton/state/`bindDialogEvents` shell as `showCitationNetwork`, loads identity via `loadAuthorProfile` (header hero from `buildProfileViewModel`, incl. ≥ labels; empty/budget/auth/network states), and `loadResults` branches on `mode === "author"` → `fetchAuthorWorks(id, cursor)`. Header variant: author hero instead of the source-meta line; hide the Cited-By/References tabs in author mode. Everything else (row render, add via `handleAdd`, file, sort, search, infinite scroll, focus-trap, close/back) reuses unchanged.
+- **Test scenarios:** `loadResults` author branch paginates via cursor to null; header renders hero + ≥ labels; add reuses `handleAdd`; tabs hidden in author mode; dismiss returns to pane.
+- **Verification:** an author profile opens roomy + actionable, consistent with the citation browser — verified in Zotero after mockup approval (done).
 
 ### U8. Confirm / override curation UI in the pane  *(front-end gated)*
 

@@ -9,8 +9,8 @@ tags: [citegeist, status]
 # Citegeist — Status
 
 > **Last Updated:** 2026-07-16
-> **Phase:** Author identity layer in progress — Phase A merged to `main` 2026-07-16 (#73, untagged); Phase B (U3–U5) PR'd (#74, CI green) on `feat/author-identity-phase-b`. Phase C started on `feat/author-identity-phase-c`: **U6 (OpenAlex `/authors` client — hybrid metrics + 301 signal) complete** (non-visual); U7 (Scholar profile pane) + U8 (curation UI) + U9 (key-entry UX) remain, all front-end **mockup-gated**. v2.0.4 released 2026-06-10 (#57).
-> **Build:** Clean (414 tests passing sequentially; typecheck/lint/build green)
+> **Phase:** Author identity layer in progress — Phase A merged to `main` 2026-07-16 (#73, untagged); Phase B (U3–U5) PR'd (#74, CI green). Phase C on `feat/author-identity-phase-c`: **U6 complete** (`/authors` client — hybrid metrics + 301); **U7 placement confirmed via in-context mockups** — author list → its own dedicated pane section, profile → an "author works" mode of the citation-network dialog — with the pure data/view-model core landed + tested (`src/modules/authorProfile.ts`). U7a (section) + U7b (dialog mode) + U8/U9 remain, front-end **mockup-approved**. v2.0.4 released 2026-06-10 (#57).
+> **Build:** Clean (427 tests passing sequentially; typecheck/lint/build green)
 
 ---
 
@@ -29,7 +29,7 @@ tags: [citegeist, status]
 
 ## In Progress
 
-**Author identity layer — Phase A merged (#73); Phase B PR'd (#74, CI green); Phase C in progress (U6 landed).** Resolve/curate/surface OpenAlex author identity so "who is saying what" is reliable across the library and into the user's Obsidian pipeline, plus a Scholar-style author profile in the pane. Origin docs: `docs/brainstorms/2026-07-16-author-identity-layer-requirements.md` + `docs/plans/2026-07-16-001-feat-author-identity-layer-plan.md`.
+**Author identity layer — Phase A merged (#73); Phase B PR'd (#74, CI green); Phase C in progress (U6 done; U7 placement confirmed via in-context mockups, pure core landed).** Resolve/curate/surface OpenAlex author identity so "who is saying what" is reliable across the library and into the user's Obsidian pipeline, plus a Scholar-style author profile in the pane. Origin docs: `docs/brainstorms/2026-07-16-author-identity-layer-requirements.md` + `docs/plans/2026-07-16-001-feat-author-identity-layer-plan.md`.
 
 - **Phase A (shipped to `main`, own release — not yet tagged):** U1 — metered-OpenAlex key handling (OpenAlex went paid + dropped the `mailto` polite pool in 2026): opt-in `api_key` pref, centralized key redaction in `normalizeError`, `OpenAlexBudgetError`/`OpenAlexAuthError` discrimination, `resolveCanonicalId` for 301 merges. U2 — new `src/modules/cache/authors/` sub-module: `authors` + `item_authors` tables (additive `CREATE TABLE IF NOT EXISTS`, composite PKs, replicated compile-time gates), `cacheItemAuthors` curated-wins under the shared exported `withKeyLock`, column-disjoint identity/metric writes, two-level orphan GC.
 - **Phase B (`feat/author-identity-phase-b`, PR #74, CI green):** U3 — identity piggybacks all three `cacheWorkData` callsites (no new API call), failure-isolated. U4 — opt-in "Resolve Author Identities" backfill (item + collection menu, MenuManager + DOM fallback): resumable, re-fetch via the free `getWorkById` singleton, budget-aware, cancellable. U5 — Zotero relations handoff: `openalex:author` item relation → OpenAlex author URI, surgical add/remove, `isEditable()`-gated, written on the explicit resolve pass + curation (never passive background, to avoid item-sync churn); `typings/zotero.d.ts` extended with the relation methods + `isEditable`. **Still needs a manual 2-device sync round-trip check** in real Zotero before the handoff is fully trusted (`citegeist.sqlite`-direct-read is the documented fallback).
