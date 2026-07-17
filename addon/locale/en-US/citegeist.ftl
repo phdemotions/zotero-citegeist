@@ -1,5 +1,7 @@
 citegeist-pane-header = Citation Intelligence
 citegeist-pane-sidenav = Citations
+citegeist-authors-header = Authors
+citegeist-authors-sidenav = Authors
 citegeist-pane-refresh =
     .title = Refresh citation data
 citegeist-pane-settings =

@@ -17,6 +17,11 @@ const paneMocks = vi.hoisted(() => ({
   unregisterCitationPane: vi.fn(),
 }));
 
+const authorsSectionMocks = vi.hoisted(() => ({
+  registerAuthorsSection: vi.fn(),
+  unregisterAuthorsSection: vi.fn(),
+}));
+
 const menuMocks = vi.hoisted(() => ({
   registerMenus: vi.fn(),
   unregisterMenus: vi.fn(),
@@ -34,6 +39,7 @@ const openAlexAuthorsMocks = vi.hoisted(() => ({
 vi.mock("../src/modules/cache", () => cacheMocks);
 vi.mock("../src/modules/citationColumn", () => columnMocks);
 vi.mock("../src/modules/citationPane", () => paneMocks);
+vi.mock("../src/modules/authorsSection", () => authorsSectionMocks);
 vi.mock("../src/modules/menu", () => menuMocks);
 vi.mock("../src/modules/openalex", () => openAlexMocks);
 vi.mock("../src/modules/openalexAuthors", () => openAlexAuthorsMocks);

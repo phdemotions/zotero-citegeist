@@ -292,4 +292,14 @@ describe("emptyStateHTML", () => {
     });
     expect(html).toContain("Nothing new here");
   });
+
+  it("uses author copy for an empty author-works list", () => {
+    const html = emptyStateHTML({
+      mode: "author",
+      hasFilter: false,
+      hideInLibraryWithResults: false,
+    });
+    expect(html).toContain("This author has no works in OpenAlex");
+    expect(html).not.toContain("This work has no");
+  });
 });

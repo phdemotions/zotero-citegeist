@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildDialogHTML,
+  buildAuthorDialogHTML,
   getItemSourceMetaLine,
   showCitationNetwork,
 } from "../src/modules/citationNetwork/dialog";
+import type { ProfileViewModel } from "../src/modules/authorProfile";
 
 // The dialog resolves the work through citationService; mock that surface so the
 // identifier gate can be driven without standing up the OpenAlex/cache stack.
@@ -142,6 +144,55 @@ describe("buildDialogHTML", () => {
     ]) {
       expect(html).toContain(`value="${v}"`);
     }
+  });
+});
+
+describe("buildAuthorDialogHTML", () => {
+  const vm: ProfileViewModel = {
+    name: "Baumeister, R. F.",
+    orcid: "0000-0003-1148-2894",
+    orcidUrl: "https://orcid.org/0000-0003-1148-2894",
+    openAlexUrl: "https://openalex.org/A5",
+    hIndex: "164",
+    i10Index: "612",
+    worksCount: "731",
+    citedByCount: "214,853",
+    lowerBound: false,
+  };
+
+  it("renders the author hero (metric stack, h-index prominent) and drops the tabs", () => {
+    const html = buildAuthorDialogHTML(vm);
+    expect(html).toContain("cg-author-metrics");
+    expect(html).toContain("cg-stat--hero");
+    expect(html).toContain("cg-command-bar--notabs");
+    expect(html).toContain("Baumeister, R. F.");
+    expect(html).toContain("ORCID 0000-0003-1148-2894");
+    for (const v of ["164", "612", "731", "214,853"]) expect(html).toContain(v);
+    expect(html).toContain("h-index");
+    // no citing/references direction in author mode
+    expect(html).not.toContain('data-mode="citing"');
+    expect(html).not.toContain('data-mode="references"');
+  });
+
+  it("reuses the browser shell selectors the event wiring depends on", () => {
+    const html = buildAuthorDialogHTML(vm);
+    for (const sel of [
+      'id="cg-btn-close"',
+      'class="cg-search-input"',
+      'class="cg-sort-select"',
+      'id="cg-dialog-body"',
+      'id="cg-total-count"',
+      'id="cg-default-chip"',
+    ]) {
+      expect(html, `missing selector: ${sel}`).toContain(sel);
+    }
+  });
+
+  it("escapes the author name and preserves the ≥ lower-bound label", () => {
+    const html = buildAuthorDialogHTML({ ...vm, name: "A <x> & B", hIndex: "≥ 40" });
+    expect(html).toContain("A &lt;x&gt; &amp; B");
+    expect(html).not.toContain("A <x>");
+    expect(html).toContain("≥ 40");
   });
 });
 
