@@ -288,6 +288,26 @@ export function makeFakeDb() {
         return [];
       }
 
+      // setCuratedItemAuthor override: clear the other author at this position.
+      if (
+        /^DELETE\s+FROM\s+item_authors\s+WHERE\s+library_id\s*=\s*\?\s+AND\s+item_key\s*=\s*\?\s+AND\s+author_position\s*=\s*\?\s+AND\s+author_id\s*!=\s*\?/i.test(
+          s,
+        )
+      ) {
+        const [lib, key, pos, keepId] = p as [number, string, number, string];
+        for (const [k, r] of [...itemAuthors.entries()]) {
+          if (
+            r.library_id === lib &&
+            r.item_key === key &&
+            r.author_position === pos &&
+            r.author_id !== keepId
+          ) {
+            itemAuthors.delete(k);
+          }
+        }
+        return [];
+      }
+
       throw new Error("unhandled SQL in fake DB: " + s);
     }),
     closeDatabase: vi.fn(async () => {}),

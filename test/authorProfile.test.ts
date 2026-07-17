@@ -24,7 +24,7 @@ import { OpenAlexBudgetError, OpenAlexAuthError } from "../src/modules/utils";
 import {
   formatMetric,
   buildProfileViewModel,
-  buildAuthorRowViewModels,
+  buildCurationRowViewModels,
   profileErrorState,
   loadAuthorProfile,
   maybeReconcileMerge,
@@ -98,29 +98,36 @@ describe("buildProfileViewModel", () => {
   });
 });
 
-describe("buildAuthorRowViewModels", () => {
-  it("maps names + h-index hints, falling back to the id when uncached", () => {
+describe("buildCurationRowViewModels", () => {
+  const byId = new Map<string, never>([
+    ["A1", { author_id: "A1", display_name: "Jane", h_index: 20 } as never],
+    ["A2", null as never],
+  ]);
+
+  it("matches creators to resolved authors by position → verified/unverified/no-match", () => {
+    const creators = [
+      { name: "Doe, Jane", position: 0 },
+      { name: "Roe, R.", position: 1 },
+      { name: "Poe, P.", position: 2 },
+    ];
     const itemAuthors = [
       { library_id: 1, item_key: "K", author_id: "A1", author_position: 0, is_curated: 1 as const },
       { library_id: 1, item_key: "K", author_id: "A2", author_position: 1, is_curated: 0 as const },
     ];
-    const byId = new Map<string, never>([
-      ["A1", { author_id: "A1", display_name: "Jane", h_index: 20 } as never],
-      ["A2", null as never],
+    expect(buildCurationRowViewModels(creators, itemAuthors, byId)).toEqual([
+      { position: 0, name: "Jane", state: "verified", authorId: "A1", hIndexLabel: "h 20" },
+      { position: 1, name: "Roe, R.", state: "unverified", authorId: "A2", hIndexLabel: null },
+      { position: 2, name: "Poe, P.", state: "no-match", authorId: null, hIndexLabel: null },
     ]);
-    const rows = buildAuthorRowViewModels(itemAuthors, byId);
-    expect(rows[0]).toEqual({
-      authorId: "A1",
-      name: "Jane",
-      hIndexLabel: "h 20",
-      isCurated: true,
-    });
-    expect(rows[1]).toEqual({
-      authorId: "A2",
-      name: "A2", // falls back to the id
-      hIndexLabel: null,
-      isCurated: false,
-    });
+  });
+
+  it("still shows a resolved author with no matching creator slot", () => {
+    const itemAuthors = [
+      { library_id: 1, item_key: "K", author_id: "A1", author_position: 3, is_curated: 0 as const },
+    ];
+    expect(buildCurationRowViewModels([], itemAuthors, byId)).toEqual([
+      { position: 3, name: "Jane", state: "unverified", authorId: "A1", hIndexLabel: "h 20" },
+    ]);
   });
 });
 

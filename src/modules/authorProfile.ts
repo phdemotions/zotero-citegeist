@@ -85,37 +85,76 @@ export function buildProfileViewModel(p: OpenAlexAuthorProfile): ProfileViewMode
 }
 
 // ────────────────────────────────────────────────────────
-// Authors-section row view-model (drives the dedicated pane section)
+// Authors-section curation rows (drive the dedicated pane section, U8)
 // ────────────────────────────────────────────────────────
 
-export interface AuthorRowViewModel {
-  authorId: string;
+/** Curation state of an author slot: user-confirmed, resolved-but-unconfirmed,
+ *  or a creator OpenAlex couldn't match. */
+export type CurationState = "verified" | "unverified" | "no-match";
+
+export interface AuthorCreator {
   name: string;
-  /** e.g. "h 164", or null when no cached h-index yet. */
+  /** 0-based index among the item's author-type creators (the write key). */
+  position: number;
+}
+
+export interface CurationRowViewModel {
+  /** 0-based author position (creator slot) — the curation write key. */
+  position: number;
+  /** Resolved author's name where known, else the Zotero creator's. */
+  name: string;
+  state: CurationState;
+  /** Resolved OpenAlex id, or null for a no-match creator. */
+  authorId: string | null;
+  /** e.g. "h 164", or null when uncached / no-match. */
   hIndexLabel: string | null;
-  isCurated: boolean;
 }
 
 /**
- * Build the "Authors" section rows for an item from its `item_authors` join and
- * the cached `authors` rows (name + h-index). Falls back to the id when a name
- * hasn't been cached yet; the h-index hint is null until a profile is fetched
- * (populated by {@link loadAuthorProfile}'s metric persistence).
+ * Build the per-creator curation rows: each author creator matched by position
+ * to its resolved `item_authors` row, yielding a verified / unverified /
+ * no-match state. Positions with a resolved row but no creator (OpenAlex listed
+ * more authors than the item's creators) are still shown. Position-matching is
+ * exact for Citegeist-added items and best-effort for hand-entered ones — the
+ * user can always override.
  */
-export function buildAuthorRowViewModels(
+export function buildCurationRowViewModels(
+  authorCreators: ReadonlyArray<AuthorCreator>,
   itemAuthors: ReadonlyArray<ItemAuthorRow>,
   authorsById: ReadonlyMap<string, AuthorRow | null>,
-): AuthorRowViewModel[] {
-  return itemAuthors.map((ia) => {
-    const a = authorsById.get(ia.author_id) ?? null;
-    const h = a?.h_index ?? null;
-    return {
-      authorId: ia.author_id,
-      name: a?.display_name ?? ia.author_id,
-      hIndexLabel: h !== null ? `h ${h.toLocaleString("en-US")}` : null,
-      isCurated: ia.is_curated === 1,
-    };
-  });
+): CurationRowViewModel[] {
+  const byPos = new Map<number, ItemAuthorRow>();
+  for (const r of itemAuthors) if (r.author_position != null) byPos.set(r.author_position, r);
+  const creatorByPos = new Map(authorCreators.map((c) => [c.position, c.name]));
+
+  const positions = new Set<number>();
+  for (const c of authorCreators) positions.add(c.position);
+  for (const r of itemAuthors) if (r.author_position != null) positions.add(r.author_position);
+
+  return [...positions]
+    .sort((a, b) => a - b)
+    .map((position): CurationRowViewModel => {
+      const resolved = byPos.get(position) ?? null;
+      const creatorName = creatorByPos.get(position) ?? null;
+      if (resolved) {
+        const a = authorsById.get(resolved.author_id) ?? null;
+        const h = a?.h_index ?? null;
+        return {
+          position,
+          name: a?.display_name ?? creatorName ?? resolved.author_id,
+          state: resolved.is_curated === 1 ? "verified" : "unverified",
+          authorId: resolved.author_id,
+          hIndexLabel: h !== null ? `h ${h.toLocaleString("en-US")}` : null,
+        };
+      }
+      return {
+        position,
+        name: creatorName ?? "Unknown",
+        state: "no-match",
+        authorId: null,
+        hIndexLabel: null,
+      };
+    });
 }
 
 // ────────────────────────────────────────────────────────

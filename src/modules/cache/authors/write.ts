@@ -132,6 +132,16 @@ export async function setCuratedItemAuthor(
   await withKeyLock(item.libraryID, item.key, async () => {
     const conn = requireDb();
     await conn.queryAsync(`INSERT OR IGNORE INTO authors (author_id) VALUES (?)`, [id]);
+    // Override: clear whatever author previously occupied this creator slot so
+    // the position ends up with exactly the confirmed id. The PK is
+    // `(library, item, author_id)`, so a bare INSERT OR REPLACE of a *different*
+    // id would leave the superseded row behind (two authors at one position).
+    if (position !== null) {
+      await conn.queryAsync(
+        `DELETE FROM item_authors WHERE library_id = ? AND item_key = ? AND author_position = ? AND author_id != ?`,
+        [item.libraryID, item.key, position, id],
+      );
+    }
     await conn.queryAsync(
       `INSERT OR REPLACE INTO item_authors (library_id, item_key, author_id, author_position, is_curated) VALUES (?, ?, ?, ?, ?)`,
       [item.libraryID, item.key, id, position, 1],
