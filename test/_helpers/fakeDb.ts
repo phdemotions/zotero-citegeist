@@ -185,6 +185,13 @@ export function makeFakeDb() {
         return [];
       }
 
+      // reconcileAuthorMerge: drop the merged-away author row.
+      if (/^DELETE\s+FROM\s+authors\s+WHERE\s+author_id\s*=\s*\?\s*$/i.test(s)) {
+        const [id] = p as [string];
+        authors.delete(id);
+        return [];
+      }
+
       // ── item_authors ──
       if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+item_authors/i.test(s)) {
         const colsMatch = /\(([^)]+)\)\s+VALUES/i.exec(s);
@@ -250,6 +257,33 @@ export function makeFakeDb() {
           if (pairs.has(compositeKey(r.library_id as number, r.item_key as string))) {
             itemAuthors.delete(k);
           }
+        }
+        return [];
+      }
+
+      // reconcileAuthorMerge: move refs to the survivor where the item doesn't
+      // already carry it (IGNORE the collision — step-2 delete cleans it up).
+      if (
+        /^UPDATE\s+OR\s+IGNORE\s+item_authors\s+SET\s+author_id\s*=\s*\?\s+WHERE\s+author_id\s*=\s*\?/i.test(
+          s,
+        )
+      ) {
+        const [to, from] = p as [string, string];
+        for (const [k, r] of [...itemAuthors.entries()]) {
+          if (r.author_id !== from) continue;
+          const newKey = itemAuthorKey(r.library_id as number, r.item_key as string, to);
+          if (itemAuthors.has(newKey)) continue; // survivor already present → IGNORE
+          itemAuthors.delete(k);
+          r.author_id = to;
+          itemAuthors.set(newKey, r);
+        }
+        return [];
+      }
+
+      if (/^DELETE\s+FROM\s+item_authors\s+WHERE\s+author_id\s*=\s*\?\s*$/i.test(s)) {
+        const [id] = p as [string];
+        for (const [k, r] of [...itemAuthors.entries()]) {
+          if (r.author_id === id) itemAuthors.delete(k);
         }
         return [];
       }

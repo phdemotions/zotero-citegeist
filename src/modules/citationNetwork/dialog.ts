@@ -35,6 +35,7 @@ import {
   buildProfileViewModel,
   profileErrorState,
   persistProfileMetrics,
+  maybeReconcileMerge,
   type ProfileViewModel,
 } from "../authorProfile";
 
@@ -378,8 +379,10 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
     return;
   }
 
-  // Cache exact metrics so the pane's Authors-section h-index hint fills in.
+  // Cache exact metrics so the pane's Authors-section h-index hint fills in,
+  // and reconcile a 301 author-id merge if this lookup redirected (KTD3).
   persistProfileMetrics(profile);
+  maybeReconcileMerge(profile);
 
   const vm = buildProfileViewModel(profile);
   const { overlay, dialog } = createDialogShell(win, buildAuthorDialogHTML(vm), "Author works");

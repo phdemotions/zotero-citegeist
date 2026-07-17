@@ -26,7 +26,12 @@ import {
   type OpenAlexAuthorProfile,
 } from "./openalexAuthors";
 import type { OpenAlexWork } from "./openalex";
-import { updateAuthorMetrics, type AuthorRow, type ItemAuthorRow } from "./cache/authors";
+import {
+  updateAuthorMetrics,
+  reconcileAuthorMerge,
+  type AuthorRow,
+  type ItemAuthorRow,
+} from "./cache/authors";
 import { OpenAlexBudgetError, OpenAlexAuthError, logError } from "./utils";
 
 // ────────────────────────────────────────────────────────
@@ -149,12 +154,8 @@ export async function loadAuthorProfile(authorId: string): Promise<ProfileState>
   try {
     const profile = await fetchAuthorProfile(authorId);
     if (!profile) return { kind: "not-found" };
-    if (profile.redirectedFrom) {
-      Zotero.debug(
-        `[Citegeist] author ${profile.redirectedFrom} merged → ${profile.id} (reconcile deferred to curation)`,
-      );
-    }
     persistProfileMetrics(profile);
+    maybeReconcileMerge(profile);
     const firstPage = await fetchAuthorWorks(profile.id);
     const works = firstPage.results ?? [];
     if (works.length === 0) return { kind: "empty", profile };
@@ -179,4 +180,16 @@ export function persistProfileMetrics(p: OpenAlexAuthorProfile): void {
     i10Index: p.i10Index,
     lastFetched: new Date().toISOString(),
   }).catch((e) => logError("persistProfileMetrics", e));
+}
+
+/**
+ * On a 301 author-id merge (KTD3), reconcile stored `item_authors` refs to the
+ * canonical survivor. No-ops unless `redirectedFrom` is set; fire-and-forget +
+ * failure-isolated. Called wherever a profile is fetched (the dialog's author
+ * mode, {@link loadAuthorProfile}) so a merge heals at the next fetch.
+ */
+export function maybeReconcileMerge(p: OpenAlexAuthorProfile): void {
+  if (!p.redirectedFrom) return;
+  Zotero.debug(`[Citegeist] author ${p.redirectedFrom} merged → ${p.id}; reconciling`);
+  reconcileAuthorMerge(p.redirectedFrom, p.id).catch((e) => logError("reconcileAuthorMerge", e));
 }

@@ -14,6 +14,7 @@ vi.mock("../src/modules/openalexAuthors", () => oaMocks);
 
 const cacheMocks = vi.hoisted(() => ({
   updateAuthorMetrics: vi.fn(async () => {}),
+  reconcileAuthorMerge: vi.fn(async () => {}),
 }));
 vi.mock("../src/modules/cache/authors", () => cacheMocks);
 
@@ -26,6 +27,7 @@ import {
   buildAuthorRowViewModels,
   profileErrorState,
   loadAuthorProfile,
+  maybeReconcileMerge,
 } from "../src/modules/authorProfile";
 
 type AnyProfile = Parameters<typeof buildProfileViewModel>[0];
@@ -54,6 +56,7 @@ beforeEach(() => {
   oaMocks.fetchAuthorProfile.mockReset();
   oaMocks.fetchAuthorWorks.mockReset();
   cacheMocks.updateAuthorMetrics.mockClear();
+  cacheMocks.reconcileAuthorMerge.mockClear();
 });
 
 describe("formatMetric", () => {
@@ -126,6 +129,16 @@ describe("profileErrorState", () => {
     expect(profileErrorState(new OpenAlexBudgetError("x")).kind).toBe("budget");
     expect(profileErrorState(new OpenAlexAuthError("x")).kind).toBe("auth");
     expect(profileErrorState(new Error("x")).kind).toBe("network");
+  });
+});
+
+describe("maybeReconcileMerge", () => {
+  it("reconciles to the survivor on a 301 redirect, and no-ops otherwise", () => {
+    maybeReconcileMerge(profile({ redirectedFrom: null }));
+    expect(cacheMocks.reconcileAuthorMerge).not.toHaveBeenCalled();
+
+    maybeReconcileMerge(profile({ id: "A2", redirectedFrom: "A1" }));
+    expect(cacheMocks.reconcileAuthorMerge).toHaveBeenCalledWith("A1", "A2");
   });
 });
 

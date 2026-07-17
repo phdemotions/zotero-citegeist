@@ -16,6 +16,7 @@ export {
   cacheItemAuthors,
   setCuratedItemAuthor,
   updateAuthorMetrics,
+  reconcileAuthorMerge,
   type CacheAuthorshipInput,
   type AuthorMetricsInput,
 } from "./write";

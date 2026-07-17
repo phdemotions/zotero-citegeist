@@ -163,3 +163,36 @@ export async function updateAuthorMetrics(
     ],
   );
 }
+
+/**
+ * Reconcile an OpenAlex author-id merge (301, KTD3): rewrite every `item_authors`
+ * reference from the stale id to the canonical survivor, then drop the now-
+ * orphaned `authors` row.
+ *
+ * Cross-item by nature (every item that referenced the stale id), so it does NOT
+ * run under the per-`(library,item)` lock — the statements are bulk and SQLite
+ * serializes them, and the whole op is idempotent, so a rare interleave with a
+ * background write self-heals at the next fetch. Where an item already carries
+ * the survivor, the stale row is dropped rather than merged (its curation, if
+ * any, is not carried over — merges are rare and the user can re-confirm).
+ *
+ * The synced relation URI is intentionally NOT rewritten here: OpenAlex
+ * 301-redirects the stale author URI to the survivor, so an already-synced
+ * relation still resolves; the canonical URI is re-asserted on the next user
+ * confirm (curation).
+ */
+export async function reconcileAuthorMerge(fromId: string, toId: string): Promise<void> {
+  const from = parseAuthorId(fromId);
+  const to = parseAuthorId(toId);
+  if (!from || !to || from === to) return;
+  const conn = requireDb();
+  // Move refs to the survivor where the item doesn't already carry it…
+  await conn.queryAsync(`UPDATE OR IGNORE item_authors SET author_id = ? WHERE author_id = ?`, [
+    to,
+    from,
+  ]);
+  // …drop any leftover stale refs (items that already had the survivor)…
+  await conn.queryAsync(`DELETE FROM item_authors WHERE author_id = ?`, [from]);
+  // …and the now-orphaned author row.
+  await conn.queryAsync(`DELETE FROM authors WHERE author_id = ?`, [from]);
+}
