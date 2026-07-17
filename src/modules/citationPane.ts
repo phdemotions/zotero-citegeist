@@ -426,7 +426,8 @@ export function registerCitationPane(pluginID: string): void {
              match the data view's buttons exactly. Only the :disabled hook above
              is local to the suggestion card. */
           /* DOI-prompt chrome comes from the shared .cg-banner primitive (incl.
-             its <strong> block heading); this keeps only the outer spacing. */
+             its strong block heading); this keeps only the outer spacing. No
+             angle brackets in pane-style comments — see the CDATA note above. */
           .cg-doi-prompt {
             margin-top: var(--cg-space-3);
           }
