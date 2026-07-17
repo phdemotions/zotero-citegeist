@@ -28,6 +28,8 @@ import {
   fetchAuthorProfile,
   fetchAuthorWorks,
   clearAuthorProfileCache,
+  resolveAuthorInput,
+  parseOrcid,
 } from "../src/modules/openalexAuthors";
 
 function httpResponse(status: number, body: unknown = {}, headers: Record<string, string> = {}) {
@@ -234,6 +236,40 @@ describe("fetchAuthorWorks", () => {
     const page = await settle(fetchAuthorWorks("garbage"));
     expect(page.results).toEqual([]);
     expect(page.meta.count).toBe(0);
+    expect(httpRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("parseOrcid", () => {
+  it("accepts bare + URL ORCIDs (incl. the X check digit) and rejects the rest", () => {
+    expect(parseOrcid("0000-0002-1825-0097")).toBe("0000-0002-1825-0097");
+    expect(parseOrcid("https://orcid.org/0000-0002-1825-0097")).toBe("0000-0002-1825-0097");
+    expect(parseOrcid("0000-0002-1825-009X")).toBe("0000-0002-1825-009X");
+    expect(parseOrcid("A123")).toBeNull();
+    expect(parseOrcid("not an orcid")).toBeNull();
+  });
+});
+
+describe("resolveAuthorInput", () => {
+  it("parses an OpenAlex id or URL offline (no request)", async () => {
+    expect(await settle(resolveAuthorInput("A5023888391"))).toBe("A5023888391");
+    expect(await settle(resolveAuthorInput("https://openalex.org/A42"))).toBe("A42");
+    expect(httpRequest).not.toHaveBeenCalled();
+  });
+
+  it("resolves an ORCID (bare or URL) via the singleton lookup", async () => {
+    httpRequest.mockResolvedValue(httpResponse(200, { id: "https://openalex.org/A99" }));
+    expect(await settle(resolveAuthorInput("0000-0002-1825-0097"))).toBe("A99");
+    expect(httpRequest.mock.calls[0][1] as string).toContain("authors/orcid:0000-0002-1825-0097");
+  });
+
+  it("returns null for an ORCID with no OpenAlex record (404)", async () => {
+    httpRequest.mockResolvedValue(httpResponse(404));
+    expect(await settle(resolveAuthorInput("0000-0002-1825-0097"))).toBeNull();
+  });
+
+  it("returns null for a name or garbage (no request)", async () => {
+    expect(await settle(resolveAuthorInput("Jane Q. Researcher"))).toBeNull();
     expect(httpRequest).not.toHaveBeenCalled();
   });
 });
