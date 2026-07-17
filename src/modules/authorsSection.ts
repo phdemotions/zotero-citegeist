@@ -456,11 +456,11 @@ export function registerAuthorsSection(pluginID: string): void {
       },
       bodyXHTML: `
       <div id="citegeist-authors-root" xmlns="http://www.w3.org/1999/xhtml">
-        <style>
+        <style>/*<![CDATA[*/
           ${cgDesignTokens("#citegeist-authors-root", { embedded: true })}
           ${cgComponents("#citegeist-authors-root")}
           ${authorsSectionCss("#citegeist-authors-root")}
-        </style>
+        /*]]>*/</style>
         <div id="citegeist-authors-content"></div>
       </div>
     `,

@@ -91,7 +91,9 @@ export function cgComponents(scope: string): string {
     }
 
     /* ── Banner (inline note / prompt) — sage by default, amber variant. A
-       <strong> child becomes the banner's block heading. ── */
+       strong child becomes the banner's block heading. (Keep angle brackets out
+       of this comment: it is emitted into a pane style block that Zotero parses
+       as XML, where a stray open-angle aborts the parse and the pane vanishes.) ── */
     ${scope} .cg-banner {
       border: 1px solid var(--cg-hairline);
       border-radius: var(--cg-radius-md);
