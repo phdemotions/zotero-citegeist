@@ -8,9 +8,9 @@ tags: [citegeist, status]
 
 # Citegeist — Status
 
-> **Last Updated:** 2026-07-16
-> **Phase:** Author identity layer in progress — Phase A merged to `main` 2026-07-16 (#73, untagged); Phase B (U3–U5) PR'd (#74, CI green). Phase C on `feat/author-identity-phase-c`: **U6 + U7 complete** — U6 `/authors` client (hybrid metrics + 301); **U7** on the mockup-approved placement: a dedicated **"Authors" pane section** (U7a) whose rows open an **"author works" mode of the citation-network dialog** (U7b — concept-B hero header + reused browser shell). **U8 (confirm/override curation — status-pill rows in the Authors section) done**; **the KTD3 301-merge reconcile done**. **U9 (API-key entry UX) + U10 (docs) remain.** v2.0.4 released 2026-06-10 (#57).
-> **Build:** typecheck/lint/format/build clean; ~431 tests green given an adequate test timeout (hooks.test trips the default 5 s timeout only under heavy local machine load — the known vitest flake; CI-green).
+> **Last Updated:** 2026-07-18
+> **Phase:** Author identity Phase C → **v3.0.0**, merging to `main`. The item pane was **rebuilt into one unified section** (citation-impact hero → one supporting-metric line → two explore buttons → author link rows), following the new `docs/design-system/pane-composition-language.md`. The **confirm/override curation UI was cut** (unused + confusing) in favour of author *links* that open the Scholar-style author-works dialog; the dead curation code was removed (`setCuratedItemAuthor` kept, de-exported, as the v2 "My Authors" write primitive). A two-round adversarial code review fixed two real defects — a `showAuthorWorks` re-entrancy race and a per-item batch-isolation gap — and added coverage. Author identity still resolves in the background on the metrics fetch and writes the `openalex:author` relation handoff. Right-click stray-menu-section bug (#72) fixed. v2.0.4 last released 2026-06-10 (#57); 3.0.0 **not yet tagged** (merge-only for a downstream project).
+> **Build:** typecheck · **451 tests** · lint (0 errors) · format · OKF · build → `citegeist-3.0.0.xpi`, all green on **Node ≥22** (required by `.nvmrc`/CI — vitest 4's ESM config can't be `require()`d on Node 20).
 
 ---
 
@@ -18,8 +18,8 @@ tags: [citegeist, status]
 
 | Attribute        | Value                                                                                   |
 | ---------------- | --------------------------------------------------------------------------------------- |
-| **Version**      | 2.0.4 (released 2026-06-10 — Zenodo concept DOI 10.5281/zenodo.19433716)                |
-| **Build Status** | Clean (361 tests passing, typecheck clean, lint clean, XPI ~96 KB)                      |
+| **Version**      | 3.0.0 (merging to `main`, untagged; 2.0.4 last released 2026-06-10 — Zenodo 10.5281/zenodo.19433716) |
+| **Build Status** | Clean — 451 tests, typecheck/lint/format/OKF clean, XPI ~100 KB (Node ≥22)              |
 | **Open Issues**  | P0: 0, P1: 0, P2: 1, P3: 2 (see ISSUES.md)                                              |
 | **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, Zotero 7.0.10–9, SQLite, Node 22          |
 | **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                                   |

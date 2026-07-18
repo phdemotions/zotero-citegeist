@@ -119,8 +119,13 @@ export async function cacheItemAuthors(
 
 /**
  * Record a user-confirmed/overridden author identity for a creator position on
- * an item. Stored as `is_curated = 1` so future background refreshes preserve
- * it. Storage primitive for the U8 curation UI.
+ * an item. Stored as `is_curated = 1` so future background refreshes preserve it
+ * (cacheItemAuthors above honors that flag).
+ *
+ * DEFERRED — no live production caller. The curation UI that drove this was cut
+ * from the v3.0.0 pane rebuild; this is retained as the write primitive for the
+ * roadmapped v2 "My Authors" curation and is intentionally NOT on the public
+ * `cache` surface (see cache/index.ts). Covered by test/authorCache.test.ts.
  */
 export async function setCuratedItemAuthor(
   item: CacheItemKey,

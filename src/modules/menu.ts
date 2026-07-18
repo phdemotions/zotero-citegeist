@@ -547,6 +547,37 @@ function itemsSingleResolvable(items: _ZoteroTypes.Item[] | undefined): boolean 
 
 // ── DOM path (Zotero 7.0.x fallback) ─────────────────────────────────────────
 
+/**
+ * Which DOM item-menu entries are SHOWN for a given selection (caller sets
+ * `.hidden = !shown`). Pure, so the separator-vs-entries rule is unit-tested
+ * rather than buried in the popup handler.
+ *
+ * The separator groups the four entries below it, so it must show only when at
+ * least one of them shows. Fetch / Resolve show when any selected item is
+ * eligible; Citing / References are single-eligible-item actions — which implies
+ * eligibility — so "any entry shows" reduces exactly to `eligibleCount > 0`.
+ * The old handler kept the separator visible for a single *ineligible* item
+ * (`eligibleCount === 0 && items.length !== 1`), stranding a lone empty section
+ * in the right-click menu — issue #72.
+ */
+export function itemMenuVisibility(items: _ZoteroTypes.Item[]): {
+  fetch: boolean;
+  resolveAuthors: boolean;
+  citing: boolean;
+  references: boolean;
+  separator: boolean;
+} {
+  const eligibleCount = items.filter(canResolveWork).length;
+  const singleResolvable = items.length === 1 && eligibleCount === 1;
+  return {
+    fetch: eligibleCount > 0,
+    resolveAuthors: eligibleCount > 0,
+    citing: singleResolvable,
+    references: singleResolvable,
+    separator: eligibleCount > 0,
+  };
+}
+
 function registerViaDOM(win: Window): void {
   const doc = win.document;
   const itemMenu = doc.getElementById("zotero-itemmenu");
@@ -603,22 +634,17 @@ function registerViaDOM(win: Window): void {
     });
     itemMenu.appendChild(resolveItem);
 
-    // Hide citing/refs when multiple items are selected (single-item actions)
-    // and hide Fetch / Resolve when no selected items are eligible — a no-op
-    // click looked like the feature was broken.
+    // Gate every entry — and the separator — on the current selection, so a
+    // no-op click never looks like the feature is broken and no stray empty
+    // section is left behind (issue #72). Visibility rule lives in the pure,
+    // tested itemMenuVisibility().
     itemMenu.addEventListener("popupshowing", () => {
-      // Materialize the selection once and reuse it for every gate — the
-      // getSelectedItems() call and the canResolveWork pass are the only
-      // non-trivial cost here, and "select all → right-click" can make the
-      // selection large.
-      const items = Zotero.getActiveZoteroPane().getSelectedItems();
-      const eligibleCount = items.filter(canResolveWork).length;
-      fetchItem.hidden = eligibleCount === 0;
-      resolveItem.hidden = eligibleCount === 0;
-      sep.hidden = eligibleCount === 0 && items.length !== 1;
-      const singleResolvable = items.length === 1 && eligibleCount === 1;
-      citingItem.hidden = !singleResolvable;
-      refsItem.hidden = !singleResolvable;
+      const v = itemMenuVisibility(Zotero.getActiveZoteroPane().getSelectedItems());
+      fetchItem.hidden = !v.fetch;
+      resolveItem.hidden = !v.resolveAuthors;
+      citingItem.hidden = !v.citing;
+      refsItem.hidden = !v.references;
+      sep.hidden = !v.separator;
     });
   }
 

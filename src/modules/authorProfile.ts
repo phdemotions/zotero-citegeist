@@ -1,30 +1,21 @@
 /**
- * Author profile data + view-model layer (U7 of the author-identity layer).
+ * Author profile data + view-model layer.
  *
- * Placement-agnostic on purpose: this module holds only the PURE logic —
- * fetch orchestration, works-derived metric formatting (the ≥ lower-bound
- * labels from U6/KTD2), the fetch→state mapping, and row/header view-models.
- * The surfaces that consume it are built where they live:
- *   • the dedicated "Authors" pane section (U7a) uses {@link buildAuthorRowViewModels};
- *   • the citation-network dialog's "author works" mode (U7b) uses
- *     {@link loadAuthorProfile} + {@link buildProfileViewModel} for its hero header
- *     and the shared results list for the works.
+ * Pure logic only — no DOM — so it is unit-tested directly (the pane/dialog
+ * rendering is verified visually in Zotero, per the design gate): works-derived
+ * metric formatting (the ≥ lower-bound labels), the profile + author-row
+ * view-models ({@link buildProfileViewModel}, {@link buildAuthorRowViewModels}),
+ * the pane's trend + creator helpers ({@link compactTrend},
+ * {@link getAuthorCreators}), and the fetch-error to render-state mapping.
  *
- * Keeping this layer pure means it is unit-testable without a DOM (the pane/
- * dialog rendering is verified visually in Zotero, per the design gate) and it
- * survives placement changes — the surface can move without touching the logic.
+ * The dialog's "author works" mode calls fetchAuthorProfile + buildProfileViewModel
+ * directly for its hero; this module surfaces the pure pieces it composes.
  *
- * 301 merges (KTD3): a loaded profile can carry `redirectedFrom` when the
- * requested author id merged into a survivor. The cross-item reconciliation
- * (rewrite `item_authors`, GC the orphan, re-assert the relation) lands with the
- * curation writes in U8; here we surface the canonical profile and log it.
+ * 301 merges (KTD3): a fetched profile can carry `redirectedFrom` when the
+ * requested author id merged into a survivor; {@link maybeReconcileMerge}
+ * rewrites the stored refs to the canonical survivor at the next fetch.
  */
-
-import {
-  fetchAuthorProfile,
-  fetchAuthorWorks,
-  type OpenAlexAuthorProfile,
-} from "./openalexAuthors";
+import { type OpenAlexAuthorProfile } from "./openalexAuthors";
 import type { OpenAlexWork } from "./openalex";
 import {
   updateAuthorMetrics,
@@ -84,45 +75,39 @@ export function buildProfileViewModel(p: OpenAlexAuthorProfile): ProfileViewMode
   };
 }
 
-// ────────────────────────────────────────────────────────
-// Authors-section curation rows (drive the dedicated pane section, U8)
-// ────────────────────────────────────────────────────────
-
-/** Curation state of an author slot: user-confirmed, resolved-but-unconfirmed,
- *  or a creator OpenAlex couldn't match. */
-export type CurationState = "verified" | "unverified" | "no-match";
+// Author link rows (drive the pane's Authors section)
 
 export interface AuthorCreator {
   name: string;
-  /** 0-based index among the item's author-type creators (the write key). */
+  /** 0-based index among the item's author-type creators (the match key). */
   position: number;
 }
 
-export interface CurationRowViewModel {
-  /** 0-based author position (creator slot) — the curation write key. */
+export interface AuthorRowViewModel {
+  /** 0-based author position (creator slot) — the match key. */
   position: number;
   /** Resolved author's name where known, else the Zotero creator's. */
   name: string;
-  state: CurationState;
-  /** Resolved OpenAlex id, or null for a no-match creator. */
+  /** Resolved OpenAlex id, or null for a creator OpenAlex couldn't match. The
+   *  pane filters on this: only rows with an id become clickable link rows. */
   authorId: string | null;
-  /** e.g. "h 164", or null when uncached / no-match. */
+  /** e.g. "h 164", or null when uncached / no id. */
   hIndexLabel: string | null;
 }
 
 /**
- * Build the per-creator curation rows: each author creator matched by position
- * to its resolved `item_authors` row, yielding a verified / unverified /
- * no-match state. Positions with a resolved row but no creator (OpenAlex listed
- * more authors than the item's creators) are still shown. Position-matching is
- * exact for Citegeist-added items and best-effort for hand-entered ones — the
- * user can always override.
+ * Build the per-creator author rows: each author creator matched by position to
+ * its resolved `item_authors` row. Positions with a resolved row but no creator
+ * (OpenAlex listed more authors than the item's creators) are still included.
+ * Position-matching is exact for Citegeist-added items and best-effort for
+ * hand-entered ones. `authorId` is null when OpenAlex matched no author for the
+ * slot; the pane drops those, keeping only clickable link rows.
  */
-export function buildCurationRowViewModels(
+export function buildAuthorRowViewModels(
   authorCreators: ReadonlyArray<AuthorCreator>,
   itemAuthors: ReadonlyArray<ItemAuthorRow>,
   authorsById: ReadonlyMap<string, AuthorRow | null>,
-): CurationRowViewModel[] {
+): AuthorRowViewModel[] {
   const byPos = new Map<number, ItemAuthorRow>();
   for (const r of itemAuthors) if (r.author_position != null) byPos.set(r.author_position, r);
   const creatorByPos = new Map(authorCreators.map((c) => [c.position, c.name]));
@@ -133,7 +118,7 @@ export function buildCurationRowViewModels(
 
   return [...positions]
     .sort((a, b) => a - b)
-    .map((position): CurationRowViewModel => {
+    .map((position): AuthorRowViewModel => {
       const resolved = byPos.get(position) ?? null;
       const creatorName = creatorByPos.get(position) ?? null;
       if (resolved) {
@@ -142,7 +127,6 @@ export function buildCurationRowViewModels(
         return {
           position,
           name: a?.display_name ?? creatorName ?? resolved.author_id,
-          state: resolved.is_curated === 1 ? "verified" : "unverified",
           authorId: resolved.author_id,
           hIndexLabel: h !== null ? `h ${h.toLocaleString("en-US")}` : null,
         };
@@ -150,7 +134,6 @@ export function buildCurationRowViewModels(
       return {
         position,
         name: creatorName ?? "Unknown",
-        state: "no-match",
         authorId: null,
         hIndexLabel: null,
       };
@@ -185,27 +168,6 @@ export function profileErrorState(
 }
 
 /**
- * Fetch an author's identity + first works page and resolve to a render state.
- * Persists exact metrics back to the cache (so the entry-row h-index hint fills
- * in) and logs a 301 redirect for later reconciliation (U8).
- */
-export async function loadAuthorProfile(authorId: string): Promise<ProfileState> {
-  try {
-    const profile = await fetchAuthorProfile(authorId);
-    if (!profile) return { kind: "not-found" };
-    persistProfileMetrics(profile);
-    maybeReconcileMerge(profile);
-    const firstPage = await fetchAuthorWorks(profile.id);
-    const works = firstPage.results ?? [];
-    if (works.length === 0) return { kind: "empty", profile };
-    return { kind: "ready", profile, works, nextCursor: firstPage.meta?.next_cursor ?? null };
-  } catch (e) {
-    logError(`loadAuthorProfile(${authorId})`, e);
-    return profileErrorState(e);
-  }
-}
-
-/**
  * Cache exact profile metrics so the Authors-section row hint shows them without
  * a re-fetch. Skips lower-bound (derived + capped) metrics so a ≥ value is never
  * later rendered as an exact number.
@@ -225,10 +187,83 @@ export function persistProfileMetrics(p: OpenAlexAuthorProfile): void {
  * On a 301 author-id merge (KTD3), reconcile stored `item_authors` refs to the
  * canonical survivor. No-ops unless `redirectedFrom` is set; fire-and-forget +
  * failure-isolated. Called wherever a profile is fetched (the dialog's author
- * mode, {@link loadAuthorProfile}) so a merge heals at the next fetch.
+ * mode) so a merge heals at the next fetch.
  */
 export function maybeReconcileMerge(p: OpenAlexAuthorProfile): void {
   if (!p.redirectedFrom) return;
   Zotero.debug(`[Citegeist] author ${p.redirectedFrom} merged → ${p.id}; reconciling`);
   reconcileAuthorMerge(p.redirectedFrom, p.id).catch((e) => logError("reconcileAuthorMerge", e));
+}
+
+// ────────────────────────────────────────────────────────
+// Pane display helpers (pure; the pane imports these so they are unit-tested
+// without the pane's DOM/import graph)
+// ────────────────────────────────────────────────────────
+
+/**
+ * Compact trend token for the pane's supporting-metric line, e.g. "↗ +18% 2024".
+ * Compares the most recent complete year to the one before it. Returns null when
+ * there's no year data (the cached-only render path, where `work` is absent) or
+ * nothing meaningful to say — the line omits the trend rather than pad it. The
+ * `prior.cited_by_count > 0` guard is load-bearing: it prevents a divide-by-zero
+ * that would render "Infinity%" to the user.
+ */
+export function compactTrend(work?: OpenAlexWork): string | null {
+  if (!work?.counts_by_year || work.counts_by_year.length < 2) return null;
+  const sorted = [...work.counts_by_year].sort((a, b) => b.year - a.year);
+  const currentYear = new Date().getFullYear();
+  const recent = sorted.find((y) => y.year === currentYear - 1) || sorted[0];
+  const prior = sorted.find((y) => y.year === recent.year - 1);
+  if (prior && prior.cited_by_count > 0) {
+    const pct = Math.round(
+      ((recent.cited_by_count - prior.cited_by_count) / prior.cited_by_count) * 100,
+    );
+    if (pct > 0) return `↗ +${pct}% ${recent.year}`;
+    if (pct < 0) return `↘ ${pct}% ${recent.year}`;
+    return `→ flat ${recent.year}`;
+  }
+  if (recent.cited_by_count > 0) return `${recent.cited_by_count} in ${recent.year}`;
+  return null;
+}
+
+/**
+ * The item's author-type creators, each carrying its 0-based index AMONG authors
+ * (the position that aligns to OpenAlex `author_position` / the `item_authors`
+ * write key). Non-author creators (editors, translators) are skipped WITHOUT
+ * advancing the index, so an interleaved editor never shifts later authors onto
+ * the wrong resolved row. When `Zotero.CreatorTypes.getID` is unavailable, every
+ * creator is treated as an author (best-effort).
+ */
+export function getAuthorCreators(item: _ZoteroTypes.Item): AuthorCreator[] {
+  let authorTypeID: number | undefined;
+  try {
+    authorTypeID = (
+      Zotero as { CreatorTypes?: { getID?: (n: string) => number } }
+    ).CreatorTypes?.getID?.("author");
+  } catch {
+    authorTypeID = undefined;
+  }
+  const creators = (item.getCreators?.() ?? []) as Array<{
+    creatorTypeID?: number;
+    lastName?: string;
+    firstName?: string;
+    name?: string;
+  }>;
+  const out: AuthorCreator[] = [];
+  let authorIdx = 0;
+  for (const c of creators) {
+    const isAuthor =
+      authorTypeID == null || c.creatorTypeID == null || c.creatorTypeID === authorTypeID;
+    if (!isAuthor) continue;
+    out.push({ name: creatorName(c) || `Author ${authorIdx + 1}`, position: authorIdx });
+    authorIdx++;
+  }
+  return out;
+}
+
+function creatorName(c: { lastName?: string; firstName?: string; name?: string }): string {
+  const last = (c.lastName || "").trim();
+  const first = (c.firstName || "").trim();
+  if (last && first) return `${last}, ${first}`;
+  return last || (c.name || "").trim() || first;
 }

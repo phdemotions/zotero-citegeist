@@ -4,7 +4,7 @@
  * error→state mapping, and the fetch→state orchestration (against mocked
  * openalexAuthors). No DOM — the pane/dialog rendering is verified in Zotero.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const oaMocks = vi.hoisted(() => ({
   fetchAuthorProfile: vi.fn(),
@@ -24,9 +24,10 @@ import { OpenAlexBudgetError, OpenAlexAuthError } from "../src/modules/utils";
 import {
   formatMetric,
   buildProfileViewModel,
-  buildCurationRowViewModels,
+  buildAuthorRowViewModels,
+  compactTrend,
+  getAuthorCreators,
   profileErrorState,
-  loadAuthorProfile,
   maybeReconcileMerge,
 } from "../src/modules/authorProfile";
 
@@ -46,10 +47,6 @@ function profile(over: Partial<AnyProfile> = {}): AnyProfile {
     redirectedFrom: null,
     ...over,
   } as AnyProfile;
-}
-
-function work(citedBy: number, i: number) {
-  return { id: `https://openalex.org/W${i}`, cited_by_count: citedBy } as never;
 }
 
 beforeEach(() => {
@@ -98,13 +95,13 @@ describe("buildProfileViewModel", () => {
   });
 });
 
-describe("buildCurationRowViewModels", () => {
+describe("buildAuthorRowViewModels", () => {
   const byId = new Map<string, never>([
     ["A1", { author_id: "A1", display_name: "Jane", h_index: 20 } as never],
     ["A2", null as never],
   ]);
 
-  it("matches creators to resolved authors by position → verified/unverified/no-match", () => {
+  it("matches creators to resolved authors by position, keeping no-match rows (authorId null)", () => {
     const creators = [
       { name: "Doe, Jane", position: 0 },
       { name: "Roe, R.", position: 1 },
@@ -114,10 +111,10 @@ describe("buildCurationRowViewModels", () => {
       { library_id: 1, item_key: "K", author_id: "A1", author_position: 0, is_curated: 1 as const },
       { library_id: 1, item_key: "K", author_id: "A2", author_position: 1, is_curated: 0 as const },
     ];
-    expect(buildCurationRowViewModels(creators, itemAuthors, byId)).toEqual([
-      { position: 0, name: "Jane", state: "verified", authorId: "A1", hIndexLabel: "h 20" },
-      { position: 1, name: "Roe, R.", state: "unverified", authorId: "A2", hIndexLabel: null },
-      { position: 2, name: "Poe, P.", state: "no-match", authorId: null, hIndexLabel: null },
+    expect(buildAuthorRowViewModels(creators, itemAuthors, byId)).toEqual([
+      { position: 0, name: "Jane", authorId: "A1", hIndexLabel: "h 20" },
+      { position: 1, name: "Roe, R.", authorId: "A2", hIndexLabel: null },
+      { position: 2, name: "Poe, P.", authorId: null, hIndexLabel: null },
     ]);
   });
 
@@ -125,8 +122,8 @@ describe("buildCurationRowViewModels", () => {
     const itemAuthors = [
       { library_id: 1, item_key: "K", author_id: "A1", author_position: 3, is_curated: 0 as const },
     ];
-    expect(buildCurationRowViewModels([], itemAuthors, byId)).toEqual([
-      { position: 3, name: "Jane", state: "unverified", authorId: "A1", hIndexLabel: "h 20" },
+    expect(buildAuthorRowViewModels([], itemAuthors, byId)).toEqual([
+      { position: 3, name: "Jane", authorId: "A1", hIndexLabel: "h 20" },
     ]);
   });
 });
@@ -149,52 +146,152 @@ describe("maybeReconcileMerge", () => {
   });
 });
 
-describe("loadAuthorProfile", () => {
-  it("returns a ready state with works + cursor and persists exact metrics", async () => {
-    oaMocks.fetchAuthorProfile.mockResolvedValue(profile());
-    oaMocks.fetchAuthorWorks.mockResolvedValue({
-      meta: { count: 2, per_page: 100, next_cursor: "c2" },
-      results: [work(30, 0), work(10, 1)],
-    });
-    const state = await loadAuthorProfile("A1");
-    expect(state.kind).toBe("ready");
-    if (state.kind === "ready") {
-      expect(state.works).toHaveLength(2);
-      expect(state.nextCursor).toBe("c2");
-    }
-    expect(cacheMocks.updateAuthorMetrics).toHaveBeenCalledWith(
-      "A1",
-      expect.objectContaining({ hIndex: 20, i10Index: 15, worksCount: 42 }),
+describe("compactTrend", () => {
+  // counts_by_year is the only field compactTrend reads.
+  const trendWork = (cby: Array<{ year: number; cited_by_count: number }>) =>
+    ({ counts_by_year: cby }) as unknown as Parameters<typeof compactTrend>[0];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2025-06-15T00:00:00Z")); // most-recent-complete year = 2024
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("returns null when there is no year data or fewer than two years", () => {
+    expect(compactTrend(undefined)).toBeNull();
+    expect(compactTrend(trendWork([]))).toBeNull();
+    expect(compactTrend(trendWork([{ year: 2024, cited_by_count: 10 }]))).toBeNull();
+  });
+
+  it("reports growth, decline, and flat against the prior year", () => {
+    expect(
+      compactTrend(
+        trendWork([
+          { year: 2024, cited_by_count: 118 },
+          { year: 2023, cited_by_count: 100 },
+        ]),
+      ),
+    ).toBe("↗ +18% 2024");
+    expect(
+      compactTrend(
+        trendWork([
+          { year: 2024, cited_by_count: 80 },
+          { year: 2023, cited_by_count: 100 },
+        ]),
+      ),
+    ).toBe("↘ -20% 2024");
+    expect(
+      compactTrend(
+        trendWork([
+          { year: 2024, cited_by_count: 100 },
+          { year: 2023, cited_by_count: 100 },
+        ]),
+      ),
+    ).toBe("→ flat 2024");
+  });
+
+  it("does NOT divide by zero when the prior year has zero citations (regression: no 'Infinity%')", () => {
+    const out = compactTrend(
+      trendWork([
+        { year: 2024, cited_by_count: 5 },
+        { year: 2023, cited_by_count: 0 },
+      ]),
     );
+    expect(out).toBe("5 in 2024");
+    expect(out).not.toMatch(/Infinity|NaN/);
   });
 
-  it("returns empty when the author has no works", async () => {
-    oaMocks.fetchAuthorProfile.mockResolvedValue(profile());
-    oaMocks.fetchAuthorWorks.mockResolvedValue({
-      meta: { count: 0, per_page: 100, next_cursor: null },
-      results: [],
+  it("falls back to a bare count when the immediately-prior year is absent", () => {
+    expect(
+      compactTrend(
+        trendWork([
+          { year: 2024, cited_by_count: 5 },
+          { year: 2022, cited_by_count: 3 },
+        ]),
+      ),
+    ).toBe("5 in 2024");
+  });
+
+  it("returns null when the most recent year and its prior are both zero", () => {
+    expect(
+      compactTrend(
+        trendWork([
+          { year: 2024, cited_by_count: 0 },
+          { year: 2023, cited_by_count: 0 },
+        ]),
+      ),
+    ).toBeNull();
+  });
+
+  it("uses the newest available year when last-complete-year data is missing", () => {
+    // 2024 absent -> recent = sorted[0] = 2023, prior = 2022.
+    expect(
+      compactTrend(
+        trendWork([
+          { year: 2023, cited_by_count: 50 },
+          { year: 2022, cited_by_count: 40 },
+        ]),
+      ),
+    ).toBe("↗ +25% 2023");
+  });
+});
+
+describe("getAuthorCreators", () => {
+  type Creator = { creatorTypeID?: number; lastName?: string; firstName?: string; name?: string };
+  const mkItem = (creators: Creator[]) =>
+    ({ getCreators: () => creators }) as unknown as _ZoteroTypes.Item;
+  const AUTHOR = 1;
+  const EDITOR = 2;
+
+  beforeEach(() => {
+    vi.stubGlobal("Zotero", {
+      debug: vi.fn(),
+      CreatorTypes: { getID: (n: string) => (n === "author" ? AUTHOR : EDITOR) },
     });
-    expect((await loadAuthorProfile("A1")).kind).toBe("empty");
   });
 
-  it("returns not-found without fetching works when the profile is null", async () => {
-    oaMocks.fetchAuthorProfile.mockResolvedValue(null);
-    expect((await loadAuthorProfile("A1")).kind).toBe("not-found");
-    expect(oaMocks.fetchAuthorWorks).not.toHaveBeenCalled();
+  it("indexes positions among AUTHORS only — an interleaved editor does not shift later authors", () => {
+    const out = getAuthorCreators(
+      mkItem([
+        { creatorTypeID: AUTHOR, lastName: "Smith", firstName: "J" },
+        { creatorTypeID: EDITOR, lastName: "Doe", firstName: "A" },
+        { creatorTypeID: AUTHOR, lastName: "Lee", firstName: "K" },
+      ]),
+    );
+    expect(out).toEqual([
+      { name: "Smith, J", position: 0 },
+      { name: "Lee, K", position: 1 }, // position 1, NOT 2 — the editor was skipped without advancing
+    ]);
   });
 
-  it("maps a budget error to the budget state", async () => {
-    oaMocks.fetchAuthorProfile.mockRejectedValue(new OpenAlexBudgetError("spent"));
-    expect((await loadAuthorProfile("A1")).kind).toBe("budget");
-  });
-
-  it("does not persist lower-bound (derived, capped) metrics", async () => {
-    oaMocks.fetchAuthorProfile.mockResolvedValue(profile({ metricsAreLowerBound: true }));
-    oaMocks.fetchAuthorWorks.mockResolvedValue({
-      meta: { count: 1, per_page: 100, next_cursor: null },
-      results: [work(5, 0)],
+  it("treats every creator as an author when CreatorTypes.getID throws (best-effort fallback)", () => {
+    vi.stubGlobal("Zotero", {
+      debug: vi.fn(),
+      CreatorTypes: {
+        getID: () => {
+          throw new Error("no CreatorTypes");
+        },
+      },
     });
-    await loadAuthorProfile("A1");
-    expect(cacheMocks.updateAuthorMetrics).not.toHaveBeenCalled();
+    const out = getAuthorCreators(
+      mkItem([
+        { creatorTypeID: AUTHOR, lastName: "Smith", firstName: "J" },
+        { creatorTypeID: EDITOR, lastName: "Doe", firstName: "A" },
+      ]),
+    );
+    expect(out.map((c) => c.position)).toEqual([0, 1]);
+    expect(out.map((c) => c.name)).toEqual(["Smith, J", "Doe, A"]);
+  });
+
+  it("falls back to 'Author N' when a creator has no usable name", () => {
+    const out = getAuthorCreators(mkItem([{ creatorTypeID: AUTHOR }]));
+    expect(out).toEqual([{ name: "Author 1", position: 0 }]);
+  });
+
+  it("uses a single-field name when only the institutional/last name is present", () => {
+    const out = getAuthorCreators(
+      mkItem([{ creatorTypeID: AUTHOR, name: "World Health Organization" }]),
+    );
+    expect(out).toEqual([{ name: "World Health Organization", position: 0 }]);
   });
 });

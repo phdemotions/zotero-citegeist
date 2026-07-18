@@ -265,7 +265,7 @@ export function clearAuthorProfileCache(): void {
 }
 
 // ────────────────────────────────────────────────────────
-// Curation input resolution (U8 override / add-id)
+// ORCID parsing (reusable primitive)
 // ────────────────────────────────────────────────────────
 
 /** Parse a bare or URL ORCID to its canonical `0000-0000-0000-000X` form, or null. */
@@ -275,39 +275,4 @@ export function parseOrcid(raw: string): string | null {
     .trim()
     .toUpperCase();
   return /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(s) ? s : null;
-}
-
-/** Look up an author's canonical OpenAlex id by ORCID (free `/authors` singleton). */
-async function fetchAuthorIdByOrcid(orcid: string): Promise<string | null> {
-  try {
-    const url = buildUrl(`/authors/orcid:${encodeURIComponent(orcid)}`, { select: "id" });
-    const body = await rateLimitedFetch<{ id?: string | null }>(url, `author orcid:${orcid}`);
-    return resolveCanonicalId(body);
-  } catch (e) {
-    if (e instanceof OpenAlexNotFoundError) return null;
-    logError(`fetchAuthorIdByOrcid(${orcid})`, e);
-    throw e; // budget / auth / network propagate for the UI to react
-  }
-}
-
-/**
- * Resolve a user-pasted author reference to a canonical OpenAlex author id, for
- * the curation override / add-id flow (U8). Accepts:
- *   • an OpenAlex author URL or bare id → parsed offline (free, no request);
- *   • an ORCID (bare or URL) → the free `/authors/orcid:` singleton.
- *
- * Deliberately NOT a name search — OpenAlex author name-search was degraded (see
- * the metered-API notes), and pasting a precise id/ORCID is exactly how AE2's
- * "the correct author isn't even a co-author" case becomes satisfiable. Returns
- * null for anything unparseable or not found; budget/auth/network errors
- * propagate.
- */
-export async function resolveAuthorInput(input: string): Promise<string | null> {
-  const raw = (input ?? "").trim();
-  if (!raw) return null;
-  const direct = parseAuthorId(raw);
-  if (direct) return direct;
-  const orcid = parseOrcid(raw);
-  if (orcid) return fetchAuthorIdByOrcid(orcid);
-  return null;
 }

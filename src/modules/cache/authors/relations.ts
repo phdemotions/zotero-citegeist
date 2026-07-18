@@ -24,7 +24,6 @@
  */
 
 import { getItemAuthors } from "./read";
-import { parseAuthorId } from "./types";
 
 export const AUTHOR_RELATION_PREDICATE = "openalex:author";
 const OPENALEX_URL_PREFIX = "https://openalex.org/";
@@ -66,23 +65,9 @@ export async function setItemAuthorRelations(
 }
 
 /**
- * Read the item's asserted OpenAlex author ids back from its relations — the
- * read side of the handoff (parity/debugging; the external pipeline reads the
- * relation directly). Malformed objects are dropped.
- */
-export function getItemAuthorRelationIds(item: _ZoteroTypes.Item): string[] {
-  const ids: string[] = [];
-  for (const uri of item.getRelationsByPredicate(AUTHOR_RELATION_PREDICATE)) {
-    const id = parseAuthorId(uri.replace(OPENALEX_URL_PREFIX, ""));
-    if (id) ids.push(id);
-  }
-  return ids;
-}
-
-/**
  * Bring the item's `openalex:author` relations in line with its currently
  * resolved authors in `item_authors`. Called after the explicit resolve pass
- * (U4) and after curation (U8).
+ * (U4) and after a background metrics fetch resolves an item's authors.
  */
 export async function syncItemAuthorRelations(item: _ZoteroTypes.Item): Promise<void> {
   if (!item.isEditable()) return;

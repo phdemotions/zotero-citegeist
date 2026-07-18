@@ -389,13 +389,17 @@ export type AuthorResolveStatus = "resolved" | "already" | "unresolved" | "budge
 export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<AuthorResolveStatus> {
   if (!item.isRegularItem() || item.deleted) return "unresolved";
 
-  const existing = await getItemAuthors(item.libraryID, item.key);
-  if (existing.length > 0) {
-    await syncItemAuthorRelations(item).catch((e) => logError("syncItemAuthorRelations", e));
-    return "already";
-  }
-
   try {
+    // Read inside the try so a cache/DB read rejection returns "error" instead of
+    // throwing out of this function — the batch pass (resolveAuthorsForItems)
+    // relies on the no-throw status contract to stay per-item isolated and
+    // resumable; a bare throw here would abort the entire "Resolve all" pass.
+    const existing = await getItemAuthors(item.libraryID, item.key);
+    if (existing.length > 0) {
+      await syncItemAuthorRelations(item).catch((e) => logError("syncItemAuthorRelations", e));
+      return "already";
+    }
+
     const workId = getCachedOpenAlexId({ libraryID: item.libraryID, key: item.key });
     if (!workId) {
       // Never resolved to a work — do the full fetch (free identifier lookups),

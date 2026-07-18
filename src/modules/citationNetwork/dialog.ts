@@ -52,6 +52,18 @@ export let activeDialog: HTMLElement | null = null;
 let activeState: NetworkState | null = null;
 
 /**
+ * Monotonic open counter, bumped synchronously by BOTH entry points right after
+ * closeActiveDialog(). showAuthorWorks captures it before its pre-shell identity
+ * fetch and bails if a newer open (either entry) supersedes it while that await
+ * is in flight — without it, a double-click on an author row (or a
+ * Citing/References click during the fetch) stacks a second modal and orphans
+ * the first, defeating the ADV-U1 undo-timer cleanup. showCitationNetwork claims
+ * `activeDialog` synchronously, so its own post-await guard already covers it; it
+ * only bumps the counter so it can supersede an in-flight showAuthorWorks.
+ */
+let dialogOpenSeq = 0;
+
+/**
  * Fully tear down whatever dialog is currently open before a stacked open. Runs
  * the SAME cleanup the Close button would (undo timers, picker overlays, search
  * debounce) via `closeDialog` when the state object exists; otherwise the first
@@ -160,6 +172,7 @@ export async function showCitationNetwork(
   // Tear down any currently-open dialog with the full cleanup before opening
   // this one (see closeActiveDialog).
   closeActiveDialog();
+  dialogOpenSeq++;
 
   // Show dialog immediately with skeleton loading state
   const win = Zotero.getMainWindow();
@@ -341,15 +354,20 @@ export async function showCitationNetwork(
  *
  * Identity is fetched first (a free singleton) so the dialog opens fully
  * populated with the hero; a hard failure alerts and never opens an empty
- * dialog. Because state is built synchronously right after the shell exists,
- * there is no pre-state async window — so the elaborate early-close guard the
- * work-mode entry needs (its work fetch precedes state) isn't required here.
+ * dialog. That identity fetch IS a pre-shell async window, so this open is
+ * claimed on `dialogOpenSeq` and bails if a re-entrant open supersedes it
+ * mid-fetch. Once the shell exists, `activeDialog`/`activeState` guard the rest
+ * exactly as the work-mode entry does.
  */
 export async function showAuthorWorks(authorId: string): Promise<void> {
   Zotero.debug(`[Citegeist] showAuthorWorks called: authorId=${authorId}`);
 
-  // Tear down any currently-open dialog before opening this one.
+  // Tear down any currently-open dialog before opening this one, and claim this
+  // open synchronously so a re-entrant open (a double-click on the row, or a
+  // Citing/References click) during the identity fetch below supersedes us
+  // instead of stacking a second modal.
   closeActiveDialog();
+  const myOpen = ++dialogOpenSeq;
 
   const win = Zotero.getMainWindow();
   const doc = win.document;
@@ -360,6 +378,7 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
   try {
     [profile, existingDOIs] = await Promise.all([fetchAuthorProfile(authorId), getExistingDOIs()]);
   } catch (e) {
+    if (myOpen !== dialogOpenSeq) return; // superseded mid-fetch — newer open owns the UI
     logError(`showAuthorWorks(${authorId})`, e);
     const st = profileErrorState(e);
     Services.prompt.alert(
@@ -374,6 +393,9 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
     return;
   }
 
+  // Bail if a newer open superseded us during the identity fetch (re-entrancy).
+  if (myOpen !== dialogOpenSeq) return;
+
   if (!profile) {
     Services.prompt.alert(null, "Citegeist", "This author has no OpenAlex profile to show.");
     return;
@@ -384,6 +406,10 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
   persistProfileMetrics(profile);
   maybeReconcileMerge(profile);
 
+  // INVARIANT: no `await` between the `myOpen !== dialogOpenSeq` check above and
+  // this synchronous shell build + `activeDialog` claim. Inserting one reopens the
+  // stacking race — a later open could bump the seq after we passed the check but
+  // before we claim `activeDialog`. Keep this block await-free.
   const vm = buildProfileViewModel(profile);
   const { overlay, dialog } = createDialogShell(win, buildAuthorDialogHTML(vm), "Author works");
   parent.appendChild(overlay);
@@ -576,7 +602,7 @@ const BODY_FOOTER_HTML = `
           <span>\uD83D\uDCC1</span>
           <span class="cg-default-chip-label" id="cg-default-label">My Library</span>
           <span class="cg-default-chip-extra" id="cg-default-extra"></span>
-          <span style="color:#636366;font-size:9px;">\u25BE</span>
+          <span style="color:var(--cg-text-tertiary);font-size:9px;">\u25BE</span>
         </button>
         <div class="cg-default-dropdown" id="cg-default-dropdown"
              role="listbox" aria-label="Default collection" hidden></div>

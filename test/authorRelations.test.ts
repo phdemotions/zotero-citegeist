@@ -10,7 +10,6 @@ import { cacheItemAuthors } from "../src/modules/cache/authors";
 import {
   AUTHOR_RELATION_PREDICATE,
   setItemAuthorRelations,
-  getItemAuthorRelationIds,
   syncItemAuthorRelations,
 } from "../src/modules/cache/authors/relations";
 
@@ -78,14 +77,6 @@ describe("setItemAuthorRelations", () => {
     await setItemAuthorRelations(item, ["A1"]);
     expect(rels[AUTHOR_RELATION_PREDICATE]).toBeUndefined();
     expect(saveTx).not.toHaveBeenCalled();
-  });
-});
-
-describe("getItemAuthorRelationIds", () => {
-  it("reads back valid author ids, dropping malformed objects", async () => {
-    const { item, rels } = makeRelItem();
-    rels[AUTHOR_RELATION_PREDICATE] = [URI("A1"), URI("A2"), "https://openalex.org/notanid"];
-    expect(getItemAuthorRelationIds(item)).toEqual(["A1", "A2"]);
   });
 });
 

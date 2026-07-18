@@ -22,7 +22,6 @@ export {
 } from "./write";
 export {
   AUTHOR_RELATION_PREDICATE,
-  getItemAuthorRelationIds,
   setItemAuthorRelations,
   syncItemAuthorRelations,
 } from "./relations";

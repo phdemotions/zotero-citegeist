@@ -64,10 +64,8 @@ export {
   getAuthor,
   getItemAuthors,
   parseAuthorId,
-  setCuratedItemAuthor,
   updateAuthorMetrics,
   AUTHOR_RELATION_PREDICATE,
-  getItemAuthorRelationIds,
   setItemAuthorRelations,
   syncItemAuthorRelations,
 } from "./authors";

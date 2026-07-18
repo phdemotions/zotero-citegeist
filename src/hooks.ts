@@ -5,7 +5,6 @@
 
 import { registerCitationColumn, unregisterCitationColumn } from "./modules/citationColumn";
 import { registerCitationPane, unregisterCitationPane } from "./modules/citationPane";
-import { registerAuthorsSection, unregisterAuthorsSection } from "./modules/authorsSection";
 import {
   registerMenus,
   unregisterMenus,
@@ -124,9 +123,8 @@ export async function onStartup(data: PluginData): Promise<void> {
     // Register the citation count column (global, not per-window)
     await registerCitationColumn(pluginID);
 
-    // Register the item pane sections
+    // Register the unified item pane section (impact + authors)
     registerCitationPane(pluginID);
-    registerAuthorsSection(pluginID);
 
     // If the main window is already open, register menus now.
     // onMainWindowLoad may not fire for windows that were open before startup.
@@ -203,11 +201,6 @@ export async function onShutdown(_data: PluginData): Promise<void> {
     unregisterCitationPane();
   } catch (e) {
     logError("shutdown unregisterCitationPane", e);
-  }
-  try {
-    unregisterAuthorsSection();
-  } catch (e) {
-    logError("shutdown unregisterAuthorsSection", e);
   }
   try {
     clearSourceStatsCache();
