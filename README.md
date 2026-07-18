@@ -27,6 +27,7 @@ For each item in your library, Citegeist adds:
 - **Journal-level metrics** (2-year mean citedness, h-index) and membership flags for the UTD24, FT50, ABDC 2025, and AJG 2024 lists (3,177 journals covered)
 - **Year-over-year citation trend** so you can see whether a paper is still being cited
 - A **citation-network browser** for forward (citing works) and backward (references) snowballing, with one-click "Add to Zotero" for any result
+- **Author discovery** &mdash; match a paper's authors to OpenAlex and open a Scholar-style view of everything they've published, right in the pane
 - Automatic **retraction flags** from OpenAlex
 
 No account, API key, or subscription — the only optional setting is your email, which OpenAlex uses to put requests in its polite pool for faster responses.
@@ -108,12 +109,18 @@ Select any item in your library and look at the right-hand detail panel. You'll 
 | **FWCI**             | How this paper compares to the world average for its field and year. **1.0** = average, **2.0** = twice the average.             |
 | **Percentile**       | Where this paper ranks compared to all papers in its field and year. "85th %ile" means cited more than 85% of comparable papers. |
 | **Top 1% / Top 10%** | A badge appears if the paper is among the most-cited in its field                                                                |
-| **Trend**            | Whether citation rates are rising or falling (e.g., "↗ 45 citations in 2025 (+23%)")                                             |
+| **Trend**            | Whether citation rates are rising or falling (e.g., "↗ +18% 2024")                                                               |
 
-Below the stats, two buttons let you explore the paper's citation network:
+Below the metrics, two buttons let you explore the paper's citation network:
 
-- **View N citing works &rarr;** &mdash; papers that cite this one
-- **View references &rarr;** &mdash; papers this one cites
+- **Citing works &rarr;** &mdash; papers that cite this one
+- **References &rarr;** &mdash; papers this one cites
+
+#### Authors
+
+Under the citation-network buttons, Citegeist lists the paper's authors it has matched to [OpenAlex](https://openalex.org), each with their **h-index**. Click an author to open a Scholar-style view of everything they've published &mdash; sortable by citations, field-weighted impact, or year &mdash; and add any of those works to your library, exactly as you would from the citation network browser.
+
+Authors are matched automatically in the background whenever citation data loads &mdash; there's nothing extra to do. Citegeist also records each match as a native Zotero `openalex:author` relation on the item, so other tools in your workflow can read the authorship without touching Citegeist's database.
 
 Click the refresh button (**&#8635;**) in the pane header to force-refresh. Cached data expires after 7 days by default (configurable in settings).
 
@@ -154,19 +161,21 @@ Each result has a button to add it directly to your Zotero library:
 
 Right-click one or more items in your library:
 
-| Menu item                 | What it does                                                                                                                                     |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Fetch Citation Counts** | Fetches (or refreshes) citation data for selected items. Works with multi-select.                                                                |
-| **View Citing Works...**  | Opens the citation network browser. Single-select only; needs a recognized identifier (DOI, PMID, arXiv ID, or ISBN) or a confirmed title match. |
-| **View References...**    | Opens the citation network browser in references mode                                                                                            |
+| Menu item                     | What it does                                                                                                                                                                              |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Fetch Citation Counts**     | Fetches (or refreshes) citation data for selected items. Works with multi-select.                                                                                                         |
+| **View Citing Works...**      | Opens the citation network browser. Single-select only; needs a recognized identifier (DOI, PMID, arXiv ID, or ISBN) or a confirmed title match.                                          |
+| **View References...**        | Opens the citation network browser in references mode                                                                                                                                     |
+| **Resolve Author Identities** | Matches the authors of the selected items to OpenAlex, filling in the pane Authors list. Multi-select; identity is also matched automatically in the background when citation data loads. |
 
 #### On collections (folders)
 
 Right-click any collection in the left sidebar:
 
-| Menu item                                 | What it does                                                          |
-| ----------------------------------------- | --------------------------------------------------------------------- |
-| **Fetch All Citation Counts (Citegeist)** | Fetches data for every item in this collection and all subcollections |
+| Menu item                                     | What it does                                                               |
+| --------------------------------------------- | -------------------------------------------------------------------------- |
+| **Fetch All Citation Counts (Citegeist)**     | Fetches data for every item in this collection and all subcollections      |
+| **Resolve All Author Identities (Citegeist)** | Matches every author in this collection and its subcollections to OpenAlex |
 
 **Tip:** Right-click your top-level collection after importing a batch of papers to populate all citation counts at once.
 
