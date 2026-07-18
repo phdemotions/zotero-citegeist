@@ -8,7 +8,7 @@ tags: [citegeist, issues]
 
 # Citegeist — Open Issues
 
-> **Last Updated:** 2026-06-10 (v2.0.4 released #57: DEBT-008 closed — design-primitive unification done: shared chip/card/banner/eyebrow + token-purity & gallery-parity tests + two light-mode contrast fixes. v2.0.3 released #56: theme fix + settings + icon. Earlier: any-identifier browser #50; DEBT-006/007 closed. Closed issues archived to `docs/archive/issues-closed.jsonl`)
+> **Last Updated:** 2026-07-18 (author-identity layer **v3.0.0 merged to `main`** #75, untagged — see STATUS.md; #72 stray-menu-section fixed in that merge. v2.0.4 released #57; v2.0.3 released #56. Closed issues archived to `docs/archive/issues-closed.jsonl`)
 
 ---
 
@@ -18,8 +18,8 @@ tags: [citegeist, issues]
 | ------------ | ---- |
 | P0 (Blocker) | 0    |
 | P1 (High)    | 0    |
-| P2 (Medium)  | 1    |
-| P3 (Low)     | 2    |
+| P2 (Medium)  | 2    |
+| P3 (Low)     | 4    |
 
 ---
 
@@ -43,6 +43,12 @@ _None currently._
 **Fix:** Confirm target journal, run final checks on `paper/paper.md`, submit
 **Found:** 2026-04-08 — paper.md exists and is complete, submission is the remaining step
 
+### VERIFY-001: v3.0.0 pane needs a real-Zotero visual-verify before release
+
+**Impact:** The v3.0.0 unified pane rebuild + the Zotero 8/9 context-fill sidenav icon are code-verified (451 tests, two review rounds) but not yet eyeballed in a running Zotero. Release gate.
+**Fix:** Install `citegeist-3.0.0.xpi`, confirm the composition (hero → metric line → explore buttons → author link rows), the wide-pane cap, and that the sidenav icon renders in the Zotero 8/9 strip; fix any spacing/contrast issue as a follow-up commit to `main`.
+**Found:** 2026-07-18 — merged to `main` (#75); pending before tagging v3.0.0.
+
 ---
 
 ## P3 — Low Priority
@@ -58,6 +64,18 @@ _None currently._
 **Impact:** No aggregate view of a collection's FWCI/percentile distribution
 **Fix:** Aggregate stats pane for selected collection (median FWCI, percentile distribution, top papers)
 **Effort:** Medium-High
+
+### VERIFY-002: openalex:author relation handoff — 2-device sync round-trip check
+
+**Impact:** The native `openalex:author` item-relation handoff (Phase B, U5) hasn't been confirmed to survive a real Zotero 2-device sync round-trip; `citegeist.sqlite`-direct read is the documented fallback.
+**Fix:** Resolve authors on device A, sync, confirm the relations arrive intact on device B.
+**Effort:** Low (manual check)
+
+### DEBT-009: v3.0.0 review advisory residuals
+
+**Impact:** Minor, non-blocking items surfaced by the v3.0.0 code review (all verified non-defects): a dangling `aria-labelledby="cg-tab-citing"` on the author-mode dialog body, the duplicated 6-row skeleton loop in `dialog.ts`, two inline `ProgressWindow` dwell-timer literals (5000/6000) not in `constants.ts`, and `persistProfileMetrics` able to null-overwrite a cached exact metric.
+**Fix:** Address opportunistically; none affect correctness.
+**Effort:** Low
 
 ---
 
