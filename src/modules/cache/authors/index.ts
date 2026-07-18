@@ -24,4 +24,5 @@ export {
   AUTHOR_RELATION_PREDICATE,
   setItemAuthorRelations,
   syncItemAuthorRelations,
+  purgeAllAuthorRelations,
 } from "./relations";

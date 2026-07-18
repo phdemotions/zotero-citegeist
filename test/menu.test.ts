@@ -51,6 +51,7 @@ interface CapturedMenu {
   target: string;
   menus: Array<{
     l10nID?: string;
+    label?: string;
     onShowing?: (e: Event, ctx: unknown) => void;
     onCommand?: (e: Event, ctx: unknown) => void;
   }>;
@@ -133,13 +134,17 @@ describe("MenuManager path (Zotero 8+)", () => {
     const collection = findMenu("main/library/collection");
     expect(item.pluginID).toBe(PLUGIN_ID);
     expect(collection.pluginID).toBe(PLUGIN_ID);
-    // Labels come from the injected FTL.
+    // MenuManager renders text ONLY from data-l10n-id — a plain `label` is
+    // dropped and the item shows blank. So the menus MUST carry l10nIDs (not
+    // labels); the text itself comes from the FTL, injected per window by
+    // hooks.ensureCitegeistFTL via the bare-filename auto-registered source.
     expect(item.menus.map((m) => m.l10nID)).toEqual([
       "citegeist-menu-fetch",
       "citegeist-menu-citing",
       "citegeist-menu-refs",
       "citegeist-menu-resolve-authors",
     ]);
+    expect(item.menus.every((m) => m.label === undefined)).toBe(true);
     expect(collection.menus.map((m) => m.l10nID)).toEqual([
       "citegeist-menu-fetch-collection",
       "citegeist-menu-resolve-collection",
@@ -451,5 +456,38 @@ describe("context-menu FTL uses attribute syntax (issue #67)", () => {
     expect(block("citegeist-menu-fetch-collection")).toMatch(/\.accesskey\s*=\s*I/);
     expect(block("citegeist-menu-citing")).not.toMatch(/\.accesskey/);
     expect(block("citegeist-menu-refs")).not.toMatch(/\.accesskey/);
+  });
+});
+
+describe("item-pane section FTL uses the right attribute per surface (Z9 blank-header bug)", () => {
+  const ftl = readFileSync(new URL("../addon/locale/en-US/citegeist.ftl", import.meta.url), "utf8");
+
+  function block(id: string): string {
+    const lines = ftl.split("\n");
+    const start = lines.findIndex((l) => l.startsWith(`${id} =`) || l.startsWith(`${id}=`));
+    if (start === -1) return "";
+    let end = start + 1;
+    while (end < lines.length && lines[end].startsWith(" ")) end++;
+    return lines.slice(start, end).join("\n");
+  }
+
+  // Zotero reads the collapsible-section title from the header message's `.label`,
+  // and the sidenav strip + section-button tooltips from `.tooltiptext`. A bare
+  // `id = value` has no attribute to land on and renders BLANK — the confirmed
+  // Z9 empty-header / blank-sidenav failure. Each surface must use its attribute.
+  const CASES: Array<[string, "label" | "tooltiptext"]> = [
+    ["citegeist-pane-header", "label"],
+    ["citegeist-pane-sidenav", "tooltiptext"],
+    ["citegeist-pane-refresh", "tooltiptext"],
+    ["citegeist-pane-settings", "tooltiptext"],
+  ];
+
+  it.each(CASES)("%s defines .%s and no inline value", (id, attr) => {
+    const b = block(id);
+    expect(b, `${id} must be present in the FTL`).not.toBe("");
+    expect(b.split("\n")[0].trim(), `${id} header must have no inline value`).toMatch(/=\s*$/);
+    expect(b, `${id} must define a .${attr} attribute`).toMatch(
+      new RegExp(`^\\s+\\.${attr}\\s*=\\s*\\S`, "m"),
+    );
   });
 });

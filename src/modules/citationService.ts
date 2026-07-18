@@ -32,7 +32,6 @@ import {
   getCachedOpenAlexId,
   getItemAuthors,
   isNoMatchSuppressed,
-  syncItemAuthorRelations,
   writeNoMatch,
   writePendingSuggestion,
   getTitleMatchMeta,
@@ -379,12 +378,12 @@ export async function fetchAndCacheItems(
 export type AuthorResolveStatus = "resolved" | "already" | "unresolved" | "budget" | "error";
 
 /**
- * Ensure a single item's authors are resolved and its `openalex:author`
- * relation reflects them. Idempotent + resumable: an item that already has
- * resolved authors is skipped — but its relation is still synced, to populate
- * the handoff for rows that were background-resolved (which don't write
- * relations). Re-fetch is via `getWorkById` — a free OpenAlex singleton lookup —
- * so a whole-library pass costs no metered budget for identity.
+ * Ensure a single item's authors are resolved into the SQLite item_authors
+ * table. Idempotent + resumable: an item that already has resolved authors is
+ * skipped. Re-fetch is via `getWorkById` — a free OpenAlex singleton lookup — so
+ * a whole-library pass costs no metered budget for identity. Writes no native
+ * Zotero relation (the `openalex:author` predicate breaks Zotero sync — see the
+ * NOTE in the body and relations.ts).
  */
 export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<AuthorResolveStatus> {
   if (!item.isRegularItem() || item.deleted) return "unresolved";
@@ -394,28 +393,28 @@ export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<Au
     // throwing out of this function — the batch pass (resolveAuthorsForItems)
     // relies on the no-throw status contract to stay per-item isolated and
     // resumable; a bare throw here would abort the entire "Resolve all" pass.
+    // NOTE: authors are persisted ONLY to the SQLite item_authors table (the
+    // source of truth + the external/Obsidian handoff via citegeist.sqlite). We
+    // deliberately do NOT write a native Zotero `openalex:author` item relation:
+    // Zotero's sync SERVER rejects that custom predicate ("Error 400 ...
+    // Unsupported predicate 'openalex:author'") and halts the user's entire
+    // library sync ("Made no progress during upload"). The relation handoff is
+    // disabled until a sync-safe mechanism exists — see relations.ts.
     const existing = await getItemAuthors(item.libraryID, item.key);
-    if (existing.length > 0) {
-      await syncItemAuthorRelations(item).catch((e) => logError("syncItemAuthorRelations", e));
-      return "already";
-    }
+    if (existing.length > 0) return "already";
 
     const workId = getCachedOpenAlexId({ libraryID: item.libraryID, key: item.key });
     if (!workId) {
       // Never resolved to a work — do the full fetch (free identifier lookups),
       // which piggybacks author identity via the normal cacheWorkData path.
       const r = await fetchAndCacheItem(item);
-      if (r.status === "ok") {
-        await syncItemAuthorRelations(item).catch((e) => logError("syncItemAuthorRelations", e));
-        return "resolved";
-      }
+      if (r.status === "ok") return "resolved";
       return r.status === "cached" ? "already" : "unresolved";
     }
 
     const work = await getWorkById(workId);
     if (!work) return "unresolved";
     await cacheItemAuthors(item, work.authorships);
-    await syncItemAuthorRelations(item).catch((e) => logError("syncItemAuthorRelations", e));
     const after = await getItemAuthors(item.libraryID, item.key);
     return after.length > 0 ? "resolved" : "unresolved";
   } catch (e) {

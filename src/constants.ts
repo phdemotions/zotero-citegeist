@@ -103,6 +103,9 @@ export const CLOSE_CACHE_DRAIN_TIMEOUT_MS = 5_000;
 export const PREF_MIGRATION_COMPLETE = "extensions.zotero.citegeist.migrationV1Complete";
 export const PREF_LAST_BACKUP_PATH = "extensions.zotero.citegeist.lastBackupPath";
 export const PREF_LAST_ORPHAN_GC_AT = "extensions.zotero.citegeist.lastOrphanGcAt";
+// Set true once the one-time purge of sync-breaking `openalex:author` item
+// relations has completed successfully (v3.0.0). See cache purgeAllAuthorRelations.
+export const PREF_AUTHOR_RELATIONS_PURGED = "extensions.zotero.citegeist.authorRelationsPurgedV1";
 export const PREF_CACHE_LIFETIME_DAYS = "extensions.zotero.citegeist.cacheLifetimeDays";
 export const PREF_AUTO_FETCH = "extensions.zotero.citegeist.autoFetch";
 /**

@@ -10,14 +10,25 @@ import {
   unregisterMenus,
   unregisterGlobalMenus,
   setMenuPluginID,
+  setMenuRootURI,
 } from "./modules/menu";
 import { clearSourceStatsCache } from "./modules/openalex";
 import { clearAuthorProfileCache } from "./modules/openalexAuthors";
-import { initCache, closeCache, migrateFromExtraV1, garbageCollectOrphans } from "./modules/cache";
+import {
+  initCache,
+  closeCache,
+  migrateFromExtraV1,
+  garbageCollectOrphans,
+  purgeAllAuthorRelations,
+} from "./modules/cache";
 import { logError } from "./modules/utils";
-import { PREF_LAST_BACKUP_PATH, SETTINGS_PANE_ID } from "./constants";
+import { PREF_AUTHOR_RELATIONS_PURGED, PREF_LAST_BACKUP_PATH, SETTINGS_PANE_ID } from "./constants";
 
-const FTL_LINK_ID = "citegeist-ftl-link";
+// Bare FTL filename. Zotero auto-registers the plugin's locale/<locale>/*.ftl
+// into its Fluent registry before onStartup, addressable by this bare name —
+// NOT chrome://citegeist/locale/... (which needs the chrome registration and
+// doesn't match the auto-registered source key).
+const FTL_FILE = "citegeist.ftl";
 
 interface PluginData {
   id: string;
@@ -54,6 +65,10 @@ export async function onStartup(data: PluginData): Promise<void> {
     // Best-effort GC of orphan rows from prior installs / library snapshots.
     // Failure here must not block startup.
     await garbageCollectOrphans().catch((e) => logError("orphan GC", e));
+    // One-time purge of the sync-breaking `openalex:author` item relations that
+    // v2.x/early-3.0 wrote (Zotero's sync server rejects the custom predicate and
+    // halts the whole library sync). Best-effort — must not block startup.
+    await purgeAuthorRelationsOnce();
   } catch (e) {
     logError("cache init", e);
     cacheInitFailed = true;
@@ -104,7 +119,9 @@ export async function onStartup(data: PluginData): Promise<void> {
     id: SETTINGS_PANE_ID,
     src: rootURI + "content/preferences.xhtml",
     label: "Citegeist",
-    image: "chrome://citegeist/content/icons/icon-16.svg",
+    // rootURI (jar:), NOT chrome://citegeist/ — the latter is unregistered on
+    // some installs (Zotero 9: "No chrome package registered"), so the icon 404s.
+    image: rootURI + "content/icons/icon-16.svg",
   });
 
   // Fail closed: with no cache, the synchronous column dataProvider and the
@@ -123,14 +140,24 @@ export async function onStartup(data: PluginData): Promise<void> {
     // Register the citation count column (global, not per-window)
     await registerCitationColumn(pluginID);
 
-    // Register the unified item pane section (impact + authors)
-    registerCitationPane(pluginID);
+    // Register the unified item pane section (impact + authors). Pass rootURI so
+    // its icons load via jar: (chrome://citegeist/ is unregistered on some Z9
+    // installs — the blank-sidenav-icon bug).
+    registerCitationPane(pluginID, rootURI);
+
+    // Give the menu module the rootURI too, for its jar:-loaded icons.
+    setMenuRootURI(rootURI);
 
     // If the main window is already open, register menus now.
     // onMainWindowLoad may not fire for windows that were open before startup.
     const mainWin = Zotero.getMainWindow();
     if (mainWin) {
-      Zotero.debug("[Citegeist] Main window already open at startup — registering menus");
+      Zotero.debug("[Citegeist] Main window already open at startup — wiring FTL + menus");
+      // onMainWindowLoad does NOT fire for a window opened before startup, so
+      // inject the FTL here too. Without this the pane's l10nIDs (and the
+      // MenuManager labels) render blank — the confirmed empty-header /
+      // blank-sidenav / "right-click shows nothing" case on Zotero 9.
+      ensureCitegeistFTL(mainWin);
       registerMenus(mainWin);
     }
   } catch (e) {
@@ -154,6 +181,26 @@ export async function onStartup(data: PluginData): Promise<void> {
   // Everything wired: the in-memory mirror is live and the UI is registered.
   cacheReady = true;
   Zotero.debug("[Citegeist] Startup complete");
+}
+
+/**
+ * Run the one-time `openalex:author` relation purge, guarded by a pref so it
+ * runs at most once per profile. The pref is set only AFTER a completed pass, so
+ * a mid-pass failure (locked item, DB hiccup) retries next launch instead of
+ * leaving stray relations that keep Zotero sync stuck. Never throws — a purge
+ * failure must not break startup; the pref simply stays unset and it retries.
+ */
+async function purgeAuthorRelationsOnce(): Promise<void> {
+  try {
+    if (Zotero.Prefs.get(PREF_AUTHOR_RELATIONS_PURGED)) return;
+    const cleaned = await purgeAllAuthorRelations();
+    Zotero.Prefs.set(PREF_AUTHOR_RELATIONS_PURGED, true);
+    if (cleaned > 0) {
+      Zotero.debug(`[Citegeist] Purged openalex:author relations from ${cleaned} item(s)`);
+    }
+  } catch (e) {
+    logError("purgeAuthorRelationsOnce", e);
+  }
 }
 
 /**
@@ -217,6 +264,24 @@ export async function onShutdown(_data: PluginData): Promise<void> {
   Zotero.debug("[Citegeist] Shutdown complete");
 }
 
+/**
+ * Attach Citegeist's FTL to a window so the item-pane section's l10nIDs
+ * (citegeist-pane-*) and the MenuManager menu labels (citegeist-menu-*) resolve
+ * to visible text. Uses the bare filename against Zotero's auto-registered
+ * Fluent source (see FTL_FILE). `insertFTLIfNeeded` is idempotent — the "IfNeeded"
+ * check skips a duplicate link — so calling it on both startup and every window
+ * load is safe. Typings lack MozXULElement, hence the cast.
+ */
+function ensureCitegeistFTL(win: Window): void {
+  try {
+    const mozXUL = (win as unknown as { MozXULElement?: { insertFTLIfNeeded(f: string): void } })
+      .MozXULElement;
+    mozXUL?.insertFTLIfNeeded(FTL_FILE);
+  } catch (e) {
+    logError("ensureCitegeistFTL", e);
+  }
+}
+
 export function onMainWindowLoad(win: Window): void {
   Zotero.debug("[Citegeist] Main window loaded");
 
@@ -228,23 +293,16 @@ export function onMainWindowLoad(win: Window): void {
     return;
   }
 
-  // Register FTL locale file with the document's Fluent system
-  // so l10nIDs (pane header, sidenav, etc.) resolve properly
-  const doc = win.document;
-  const link = doc.createElement("link");
-  link.id = FTL_LINK_ID;
-  link.rel = "localization";
-  link.href = "chrome://citegeist/locale/citegeist.ftl";
-  doc.documentElement.appendChild(link);
-
+  ensureCitegeistFTL(win);
   registerMenus(win);
 }
 
 export function onMainWindowUnload(win: Window): void {
   Zotero.debug("[Citegeist] Main window unloading");
 
-  // Remove FTL link
-  win.document.getElementById(FTL_LINK_ID)?.remove();
+  // Remove the FTL localization link (inserted by insertFTLIfNeeded, keyed by
+  // its bare href).
+  win.document.querySelector(`link[href="${FTL_FILE}"]`)?.remove();
 
   unregisterMenus(win);
 }

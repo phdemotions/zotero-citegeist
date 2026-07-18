@@ -77,3 +77,45 @@ export async function syncItemAuthorRelations(item: _ZoteroTypes.Item): Promise<
     rows.map((r) => r.author_id),
   );
 }
+
+/**
+ * One-time cleanup that strips EVERY `openalex:author` item relation this plugin
+ * ever wrote. Zotero's sync SERVER rejects the custom predicate ("Error 400 ...
+ * Unsupported predicate 'openalex:author'") and halts the user's entire library
+ * sync ("Made no progress during upload"). v3.0.0 stopped writing these
+ * (setItemAuthorRelations/syncItemAuthorRelations are no longer called — the
+ * SQLite item_authors table is the sole author-identity store now) and removes
+ * the ones already written here so sync can resume.
+ *
+ * Iterates EVERY item in EVERY library rather than just item_authors rows: a
+ * single stray relation keeps the whole sync stuck, so completeness beats speed
+ * for a once-per-profile pass. Removes only our predicate; saves only the items
+ * that carried it. Best-effort per item — a read-only/locked item is skipped so
+ * one failure can't abort the pass. Returns the number of items cleaned.
+ */
+export async function purgeAllAuthorRelations(): Promise<number> {
+  let cleaned = 0;
+  for (const lib of Zotero.Libraries.getAll()) {
+    let items: _ZoteroTypes.Item[];
+    try {
+      items = await Zotero.Items.getAll(lib.libraryID);
+    } catch {
+      continue;
+    }
+    for (const item of items) {
+      const uris = item.getRelationsByPredicate(AUTHOR_RELATION_PREDICATE);
+      if (uris.length === 0) continue;
+      // Snapshot before removing: removeRelation splices the item's live relation
+      // array, so iterating `uris` directly would skip every other entry.
+      for (const uri of [...uris]) item.removeRelation(AUTHOR_RELATION_PREDICATE, uri);
+      try {
+        await item.saveTx();
+        cleaned++;
+      } catch {
+        // Read-only library / locked item — skip. The purge pref is only set on a
+        // fully successful pass (see hooks.ts), so a later launch retries.
+      }
+    }
+  }
+  return cleaned;
+}

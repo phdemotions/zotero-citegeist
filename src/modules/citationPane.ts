@@ -190,7 +190,7 @@ function namespacedPaneKey(pluginID: string, paneID: string): string {
   return raw.replace(/[@.]/g, "\\$&");
 }
 
-export function registerCitationPane(pluginID: string): void {
+export function registerCitationPane(pluginID: string, rootURI: string): void {
   if (paneRegistered) return;
   paneRegistered = true;
   paneRegisteredPluginID = pluginID;
@@ -208,22 +208,38 @@ export function registerCitationPane(pluginID: string): void {
       paneID: PANE_ID,
       pluginID,
       header: {
+        // Zotero 9 REQUIRES l10nID here — a plain `label` is rejected with
+        // "Option must have .header[\"l10nID\"]" / "Option [\"header\"] is invalid"
+        // and the section never registers (the pane vanishes entirely). The text
+        // comes from the injected FTL (citegeist-pane-header). hooks.ts loads
+        // citegeist.ftl into the window at startup AND on window load so the ID
+        // resolves even when the main window is already open before onStartup.
         l10nID: "citegeist-pane-header",
-        // Self-colored SVG (explicit sage), NOT the context-fill SVG: Zotero 7
-        // renders item-pane section icons without supplying a paint via
-        // -moz-context-properties, so a context-fill icon paints blank. An
-        // explicit-colored SVG renders regardless of the icon treatment.
-        icon: "chrome://citegeist/content/icons/icon-20-color.svg",
+        // The COLOR icon (explicit #8FAD9F fills), NOT icon-16/20.svg — those use
+        // `fill/stroke="context-fill"`, which only resolves inside a XUL chrome
+        // context that sets -moz-context-properties. Zotero paints the section /
+        // sidenav icon as a plain url() image, where context-fill falls back to
+        // transparent → a blank icon. rootURI (jar:) so the URL itself resolves.
+        icon: `${rootURI}content/icons/icon-20-color.svg`,
+        // darkIcon required too — Zotero does NOT default it to `icon` (see the
+        // sidenav note below); omitting it blanks the icon in dark mode.
+        darkIcon: `${rootURI}content/icons/icon-20-color.svg`,
       },
       sidenav: {
+        // l10nID required, same as header (citegeist-pane-sidenav in the FTL).
         l10nID: "citegeist-pane-sidenav",
-        // Context-fill (symbolic) SVG here, NOT the self-colored one: Zotero 8/9
-        // paint sidenav-strip icons via -moz-context-properties (so the icon
-        // tracks the strip's theme + selected state). A hardcoded-color SVG is
-        // not picked up by that paint path and renders blank in the strip — the
-        // "icon missing from the bottom nav" bug. The header (on the pane surface,
-        // not the themed strip) keeps the self-colored icon, which Zotero 7 needs.
-        icon: "chrome://citegeist/content/icons/icon-20.svg",
+        // Color icon (explicit fills): Zotero renders the sidenav icon as a
+        // background-image, so the SVG's own colours show (a context-fill icon
+        // would be blank here). rootURI so the URL resolves.
+        icon: `${rootURI}content/icons/icon-20-color.svg`,
+        // darkIcon is REQUIRED, not optional. Zotero does NOT default it to
+        // `icon` (despite the JSDoc): itemPaneSidenav.js emits
+        // `--custom-sidenav-icon-dark: url('<darkIcon>')` verbatim, and the
+        // sidenav SCSS applies `background-image: var(--custom-sidenav-icon-dark)`
+        // under `@media (prefers-color-scheme: dark)` with NO fallback. Omit it
+        // and dark-mode users get `url('undefined')` → a BLANK sidenav icon —
+        // the persistent blank-icon bug. The sage art reads on both themes.
+        darkIcon: `${rootURI}content/icons/icon-20-color.svg`,
       },
       bodyXHTML: `
       <div id="citegeist-pane-root" xmlns="http://www.w3.org/1999/xhtml">
@@ -550,6 +566,9 @@ export function registerCitationPane(pluginID: string): void {
         {
           type: "refresh",
           icon: "chrome://zotero/skin/16/universal/sync.svg",
+          // l10nID, not label: the section-button schema has no `label` field, so
+          // a plain string is dropped and the button gets no tooltip. Text comes
+          // from the FTL's `.tooltiptext` (see citegeist-pane-refresh).
           l10nID: "citegeist-pane-refresh",
           onClick: async ({ body, item, setSectionSummary }) => {
             // Per-item gate: spam-click on item A must not silently swallow a
