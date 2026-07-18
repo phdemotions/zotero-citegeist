@@ -25,16 +25,20 @@ import {
   type OpenAlexWork,
 } from "./openalex";
 import {
+  cacheItemAuthors,
   cacheWorkData,
   isCacheStale,
   getCachedData,
+  getCachedOpenAlexId,
+  getItemAuthors,
   isNoMatchSuppressed,
+  syncItemAuthorRelations,
   writeNoMatch,
   writePendingSuggestion,
   getTitleMatchMeta,
 } from "./cache";
 import { searchByMetadata, type TitleMatchResult } from "./titleSearch";
-import { OpenAlexNetworkError, logError } from "./utils";
+import { OpenAlexNetworkError, OpenAlexBudgetError, logError } from "./utils";
 import { BULK_FETCH_DELAY_MS, NO_MATCH_RETRY_DAYS } from "../constants";
 
 /** Reason a fetch didn't produce a work. */
@@ -210,6 +214,13 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
           ? await getSourceStats(work.primary_location.source.id)
           : null;
         await cacheWorkData(item, work, sourceStats);
+        // Piggyback author identity on the same fetched work (no new API call).
+        // Failure-isolated: an author-write error must not fail the metrics
+        // result that already persisted. No column repaint — authors have no
+        // v1 column (KTD5); the pane reads them async.
+        await cacheItemAuthors(item, work.authorships).catch((e) =>
+          logError("cacheItemAuthors(confirmed)", e),
+        );
         return { status: "ok", work };
       }
     } catch (e) {
@@ -253,6 +264,7 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
   const sourceStats = sourceId ? await getSourceStats(sourceId) : null;
 
   await cacheWorkData(item, work, sourceStats);
+  await cacheItemAuthors(item, work.authorships).catch((e) => logError("cacheItemAuthors", e));
   return { status: "ok", work };
 }
 
@@ -349,6 +361,122 @@ export async function fetchAndCacheItems(
       out.errors++;
       logError(`fetchAndCacheItems item ${eligible[i].id}`, e);
     }
+
+    onItemDone?.(eligible[i].id, status);
+    onProgress?.(i + 1, eligible.length);
+
+    if (i < eligible.length - 1) {
+      await new Promise((r) => setTimeout(r, BULK_FETCH_DELAY_MS));
+    }
+  }
+
+  return out;
+}
+
+// ── Author identity backfill (U4) ────────────────────────────────────────────
+
+/** Outcome of resolving one item's author identity in the backfill pass. */
+export type AuthorResolveStatus = "resolved" | "already" | "unresolved" | "budget" | "error";
+
+/**
+ * Ensure a single item's authors are resolved and its `openalex:author`
+ * relation reflects them. Idempotent + resumable: an item that already has
+ * resolved authors is skipped — but its relation is still synced, to populate
+ * the handoff for rows that were background-resolved (which don't write
+ * relations). Re-fetch is via `getWorkById` — a free OpenAlex singleton lookup —
+ * so a whole-library pass costs no metered budget for identity.
+ */
+export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<AuthorResolveStatus> {
+  if (!item.isRegularItem() || item.deleted) return "unresolved";
+
+  try {
+    // Read inside the try so a cache/DB read rejection returns "error" instead of
+    // throwing out of this function — the batch pass (resolveAuthorsForItems)
+    // relies on the no-throw status contract to stay per-item isolated and
+    // resumable; a bare throw here would abort the entire "Resolve all" pass.
+    const existing = await getItemAuthors(item.libraryID, item.key);
+    if (existing.length > 0) {
+      await syncItemAuthorRelations(item).catch((e) => logError("syncItemAuthorRelations", e));
+      return "already";
+    }
+
+    const workId = getCachedOpenAlexId({ libraryID: item.libraryID, key: item.key });
+    if (!workId) {
+      // Never resolved to a work — do the full fetch (free identifier lookups),
+      // which piggybacks author identity via the normal cacheWorkData path.
+      const r = await fetchAndCacheItem(item);
+      if (r.status === "ok") {
+        await syncItemAuthorRelations(item).catch((e) => logError("syncItemAuthorRelations", e));
+        return "resolved";
+      }
+      return r.status === "cached" ? "already" : "unresolved";
+    }
+
+    const work = await getWorkById(workId);
+    if (!work) return "unresolved";
+    await cacheItemAuthors(item, work.authorships);
+    await syncItemAuthorRelations(item).catch((e) => logError("syncItemAuthorRelations", e));
+    const after = await getItemAuthors(item.libraryID, item.key);
+    return after.length > 0 ? "resolved" : "unresolved";
+  } catch (e) {
+    if (e instanceof OpenAlexBudgetError) return "budget";
+    logError(`resolveAuthorsForItem(${item.id})`, e);
+    return "error";
+  }
+}
+
+/**
+ * Breakdown of the explicit "Resolve author identities" pass. A distinct
+ * `budgetStopped` count keeps a daily-budget stop from being reported as a
+ * genuine no-match (the miscount class `summarizeBatch` already had to fix).
+ */
+export interface AuthorBackfillResult {
+  resolved: number;
+  already: number;
+  unresolved: number;
+  budgetStopped: number;
+  errors: number;
+  cancelled: boolean;
+}
+
+/**
+ * Resolve author identity across many items — resumable and rate-limited. Stops
+ * cleanly on budget exhaustion (this item and all remaining are counted as
+ * `budgetStopped`, not attempted) and on a cancel request. Items already
+ * resolved are skipped.
+ */
+export async function resolveAuthorsForItems(
+  items: _ZoteroTypes.Item[],
+  onProgress?: (current: number, total: number) => void,
+  onItemDone?: (itemId: number, status: AuthorResolveStatus) => void,
+  shouldCancel?: () => boolean,
+): Promise<AuthorBackfillResult> {
+  const eligible = items.filter((i) => i.isRegularItem() && !i.deleted);
+  const out: AuthorBackfillResult = {
+    resolved: 0,
+    already: 0,
+    unresolved: 0,
+    budgetStopped: 0,
+    errors: 0,
+    cancelled: false,
+  };
+
+  for (let i = 0; i < eligible.length; i++) {
+    if (shouldCancel?.()) {
+      out.cancelled = true;
+      break;
+    }
+
+    const status = await resolveAuthorsForItem(eligible[i]);
+    if (status === "budget") {
+      out.budgetStopped = eligible.length - i;
+      break;
+    }
+
+    if (status === "resolved") out.resolved++;
+    else if (status === "already") out.already++;
+    else if (status === "error") out.errors++;
+    else out.unresolved++;
 
     onItemDone?.(eligible[i].id, status);
     onProgress?.(i + 1, eligible.length);

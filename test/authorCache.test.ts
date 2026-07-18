@@ -13,6 +13,7 @@ import {
   setCuratedItemAuthor,
   updateAuthorMetrics,
   garbageCollectOrphanAuthors,
+  reconcileAuthorMerge,
   type CacheAuthorshipInput,
 } from "../src/modules/cache/authors";
 
@@ -93,6 +94,18 @@ describe("cacheItemAuthors", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].is_curated).toBe(1);
   });
+
+  it("override replaces the author at a position, clearing the superseded id (AE2)", async () => {
+    await cacheItemAuthors(ITEM, [authorship("A1"), authorship("A2")]); // A1@0, A2@1
+    await setCuratedItemAuthor(ITEM, "A9", 0); // override slot 0: A1 → A9
+
+    const rows = await getItemAuthors(1, "ITEMKEY1");
+    const byId = new Map(rows.map((r) => [r.author_id, r]));
+    expect(byId.has("A1")).toBe(false); // superseded id cleared from the slot
+    expect(byId.get("A9")?.is_curated).toBe(1); // confirmed id now at the slot
+    expect(byId.get("A9")?.author_position).toBe(0);
+    expect(byId.has("A2")).toBe(true); // other position untouched
+  });
 });
 
 describe("author metrics", () => {
@@ -134,5 +147,34 @@ describe("orphan GC", () => {
     expect(await getItemAuthors(1, "STAY")).toHaveLength(1);
     expect(await getAuthor("A1")).toBeNull(); // orphaned author swept
     expect(await getAuthor("A2")).not.toBeNull(); // still referenced
+  });
+});
+
+describe("reconcileAuthorMerge (KTD3 — 301 author-id merge)", () => {
+  it("rewrites item_authors refs to the survivor and GCs the orphaned author row", async () => {
+    await cacheItemAuthors({ libraryID: 1, key: "K1" }, [
+      authorship("A1", "Old"),
+      authorship("A9", "Other"),
+    ]);
+    await cacheItemAuthors({ libraryID: 1, key: "K2" }, [authorship("A1", "Old")]);
+
+    await reconcileAuthorMerge("A1", "A2");
+
+    expect((await getItemAuthors(1, "K1")).map((r) => r.author_id).sort()).toEqual(["A2", "A9"]);
+    expect((await getItemAuthors(1, "K2")).map((r) => r.author_id)).toEqual(["A2"]);
+    expect(await getAuthor("A1")).toBeNull(); // stale author row swept
+  });
+
+  it("drops the stale ref (no duplicate) when the item already carries the survivor", async () => {
+    await cacheItemAuthors({ libraryID: 1, key: "K1" }, [authorship("A1"), authorship("A2")]);
+    await reconcileAuthorMerge("A1", "A2");
+    expect((await getItemAuthors(1, "K1")).map((r) => r.author_id)).toEqual(["A2"]);
+  });
+
+  it("no-ops on identical or malformed ids", async () => {
+    await cacheItemAuthors({ libraryID: 1, key: "K1" }, [authorship("A1")]);
+    await reconcileAuthorMerge("A1", "A1");
+    await reconcileAuthorMerge("not-an-id", "A2");
+    expect((await getItemAuthors(1, "K1")).map((r) => r.author_id)).toEqual(["A1"]);
   });
 });

@@ -112,7 +112,12 @@ function getApiKey(): string {
   }
 }
 
-function buildUrl(path: string, params: Record<string, string> = {}): string {
+/**
+ * Build an OpenAlex URL, attaching the opt-in `api_key` from prefs. Exported so
+ * the sibling authors client (`openalexAuthors.ts`) shares the exact
+ * key-attachment + centralized-redaction contract instead of re-implementing it.
+ */
+export function buildUrl(path: string, params: Record<string, string> = {}): string {
   // The key rides the query string (OpenAlex's documented mechanism as of
   // July 2026 — a header form is an open question). It is never logged: the
   // retry/error paths log `label`, not the URL, and normalizeError() redacts
@@ -143,7 +148,13 @@ export function resolveCanonicalId(body: { id?: string | null } | null | undefin
 // OpenAlex polite pool allows 10 req/s. We target 8 to stay safe.
 let lastRequestTime = 0;
 
-async function rateLimitedFetch<T>(url: string, label: string, attempt = 0): Promise<T> {
+/**
+ * The single global rate limiter for every OpenAlex call (8 req/s). Exported so
+ * the sibling authors client shares this one `lastRequestTime` — a second copy
+ * would silently break the global budget. Never call `Zotero.HTTP` for OpenAlex
+ * directly; route through here.
+ */
+export async function rateLimitedFetch<T>(url: string, label: string, attempt = 0): Promise<T> {
   const now = Date.now();
   const elapsed = now - lastRequestTime;
   if (elapsed < OPENALEX_RATE_LIMIT_MS) {
@@ -227,8 +238,9 @@ async function fetchJson<T>(url: string, label: string, attempt: number): Promis
   }
 }
 
-/** Thrown internally when OpenAlex responds 404. Callers convert to `null`. */
-class OpenAlexNotFoundError extends Error {
+/** Thrown when OpenAlex responds 404. Callers convert to `null`. Exported for
+ *  the sibling authors client's 404→null handling. */
+export class OpenAlexNotFoundError extends Error {
   constructor(label: string) {
     super(`OpenAlex 404: ${label}`);
     this.name = "OpenAlexNotFoundError";
@@ -310,8 +322,9 @@ const FULL_SELECT =
   "open_access,authorships,primary_location,biblio,type,is_retracted," +
   "referenced_works,abstract_inverted_index";
 
-/** Lighter select for list results (no abstract, no full references). */
-const LIST_SELECT =
+/** Lighter select for list results (no abstract, no full references). Exported
+ *  for the authors client's author-filtered works query (same list contract). */
+export const LIST_SELECT =
   "id,doi,title,display_name,publication_year,publication_date,cited_by_count," +
   "fwci,citation_normalized_percentile," +
   "authorships,primary_location,biblio,open_access,type,is_retracted";
@@ -514,9 +527,10 @@ export function reconstructAbstract(invertedIndex: Record<string, number[]> | nu
 
 /**
  * Sanitize an OpenAlex work response so downstream code can assume
- * required array/object fields are present.
+ * required array/object fields are present. Exported for the authors client,
+ * which maps its works-list results through the same normalizer.
  */
-function normalizeWork(work: OpenAlexWork): OpenAlexWork {
+export function normalizeWork(work: OpenAlexWork): OpenAlexWork {
   if (!Array.isArray(work.authorships)) work.authorships = [];
   if (!Array.isArray(work.counts_by_year)) work.counts_by_year = [];
   if (!Array.isArray(work.referenced_works)) work.referenced_works = [];

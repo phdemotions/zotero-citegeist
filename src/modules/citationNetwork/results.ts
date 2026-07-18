@@ -11,6 +11,7 @@ import {
   getSourceName,
   type OpenAlexWork,
 } from "../openalex";
+import { fetchAuthorWorks } from "../openalexAuthors";
 import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../utils";
 import {
   MAX_RENDERED_RESULTS,
@@ -40,7 +41,12 @@ export function emptyStateHTML(opts: {
     return `<div class="cg-empty"><div class="cg-empty-title">No matches</div>Try a different search term</div>`;
   }
   if (opts.hideInLibraryWithResults) {
-    return `<div class="cg-empty"><div class="cg-empty-title">Nothing new here</div>Every ${opts.mode === "citing" ? "citing work" : "reference"} is already in your library. Turn off “Hide in library” to see them.</div>`;
+    const noun =
+      opts.mode === "citing" ? "citing work" : opts.mode === "references" ? "reference" : "work";
+    return `<div class="cg-empty"><div class="cg-empty-title">Nothing new here</div>Every ${noun} is already in your library. Turn off “Hide in library” to see them.</div>`;
+  }
+  if (opts.mode === "author") {
+    return `<div class="cg-empty"><div class="cg-empty-title">No works found</div>This author has no works in OpenAlex.</div>`;
   }
   if (opts.mode === "references" && OPENALEX_BOOK_WORK_TYPES.includes(opts.sourceWorkType ?? "")) {
     // OpenAlex rarely has a machine-readable reference list for books, so an
@@ -78,10 +84,19 @@ export async function loadResults(state: NetworkState, append = false): Promise<
   try {
     const perPage =
       (Zotero.Prefs.get(PREF_NETWORK_PAGE_SIZE) as number) || DEFAULT_NETWORK_PAGE_SIZE;
-    const response =
-      state.mode === "citing"
-        ? await getCitingWorks(state.work.id, state.cursor, perPage)
-        : await getReferencedWorks(state.work.id, state.cursor, perPage);
+    let response;
+    if (state.mode === "author") {
+      response = await fetchAuthorWorks(state.authorId ?? "", state.cursor, perPage);
+    } else {
+      // Guaranteed non-null in citing/references mode (set at dialog open); the
+      // guard keeps TS honest now that `work` is nullable for author mode.
+      const workId = state.work?.id;
+      if (!workId) throw new Error("citation network: missing work for citing/references mode");
+      response =
+        state.mode === "citing"
+          ? await getCitingWorks(workId, state.cursor, perPage)
+          : await getReferencedWorks(workId, state.cursor, perPage);
+    }
 
     if (gen !== state.generation || state.phase === "closed") {
       state.loading = false;
@@ -285,7 +300,7 @@ export function renderResults(state: NetworkState, filter = ""): void {
         mode: state.mode,
         hasFilter: !!filter,
         hideInLibraryWithResults: state.hideInLibrary && state.results.length > 0,
-        sourceWorkType: state.work.type,
+        sourceWorkType: state.work?.type,
       }),
     );
     return;

@@ -16,6 +16,12 @@ export {
   cacheItemAuthors,
   setCuratedItemAuthor,
   updateAuthorMetrics,
+  reconcileAuthorMerge,
   type CacheAuthorshipInput,
   type AuthorMetricsInput,
 } from "./write";
+export {
+  AUTHOR_RELATION_PREDICATE,
+  setItemAuthorRelations,
+  syncItemAuthorRelations,
+} from "./relations";

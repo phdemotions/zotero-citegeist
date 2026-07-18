@@ -19,6 +19,14 @@ const mocks = vi.hoisted(() => ({
     (item: { isRegularItem?: () => boolean; hasIdentifier?: boolean }) =>
       item.isRegularItem?.() !== false && item.hasIdentifier !== false,
   ),
+  resolveAuthorsForItems: vi.fn(async () => ({
+    resolved: 1,
+    already: 0,
+    unresolved: 0,
+    budgetStopped: 0,
+    errors: 0,
+    cancelled: false,
+  })),
   invalidateColumnCache: vi.fn(),
   showCitationNetwork: vi.fn(async () => {}),
 }));
@@ -26,6 +34,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../src/modules/citationService", () => ({
   fetchAndCacheItems: mocks.fetchAndCacheItems,
   canResolveWork: mocks.canResolveWork,
+  resolveAuthorsForItems: mocks.resolveAuthorsForItems,
 }));
 vi.mock("../src/modules/citationColumn", () => ({
   invalidateColumnCache: mocks.invalidateColumnCache,
@@ -129,8 +138,12 @@ describe("MenuManager path (Zotero 8+)", () => {
       "citegeist-menu-fetch",
       "citegeist-menu-citing",
       "citegeist-menu-refs",
+      "citegeist-menu-resolve-authors",
     ]);
-    expect(collection.menus[0].l10nID).toBe("citegeist-menu-fetch-collection");
+    expect(collection.menus.map((m) => m.l10nID)).toEqual([
+      "citegeist-menu-fetch-collection",
+      "citegeist-menu-resolve-collection",
+    ]);
     // No DOM nodes were injected — the MenuManager path returned first.
     expect(doc.getElementById("citegeist-menu-fetch")).toBeNull();
   });
@@ -231,6 +244,44 @@ describe("MenuManager path (Zotero 8+)", () => {
   });
 });
 
+describe("resolve-authors handlers (MenuManager, U4 backfill)", () => {
+  it("gates item resolve-authors visibility on eligibility and runs the backfill from onCommand", async () => {
+    installZotero(true);
+    const { registerMenus } = await loadMenu();
+    registerMenus(win);
+    const item = findMenu("main/library/item");
+    const resolve = item.menus[3]; // [fetch, citing, refs, resolve-authors]
+    expect(resolve.l10nID).toBe("citegeist-menu-resolve-authors");
+
+    const visYes = vi.fn();
+    resolve.onShowing!({} as Event, { items: [makeItem(1, true)], setVisible: visYes });
+    expect(visYes).toHaveBeenCalledWith(true);
+
+    const visNo = vi.fn();
+    resolve.onShowing!({} as Event, { items: [makeItem(2, false)], setVisible: visNo });
+    expect(visNo).toHaveBeenCalledWith(false);
+
+    selectedItems = [makeItem(7)];
+    resolve.onCommand!({} as Event, {});
+    await flushAsync();
+    expect(mocks.resolveAuthorsForItems).toHaveBeenCalled();
+  });
+
+  it("runs the collection resolve-authors backfill from onCommand", async () => {
+    installZotero(true);
+    const { registerMenus } = await loadMenu();
+    registerMenus(win);
+    const collection = findMenu("main/library/collection");
+    const resolve = collection.menus[1]; // [fetch-collection, resolve-collection]
+    expect(resolve.l10nID).toBe("citegeist-menu-resolve-collection");
+
+    selectedItems = [makeItem(1), makeItem(2)];
+    resolve.onCommand!({} as Event, {});
+    await flushAsync();
+    expect(mocks.resolveAuthorsForItems).toHaveBeenCalled();
+  });
+});
+
 describe("registration is idempotent across repeat calls (issue #67)", () => {
   it("a second registerMenus call does not re-register or fall back to DOM", async () => {
     installZotero(true);
@@ -306,6 +357,61 @@ describe("DOM fallback (Zotero 7.0.x, no MenuManager)", () => {
     expect(doc.getElementById("citegeist-menu-fetch")).not.toBeNull();
     expect(doc.getElementById("citegeist-menu-citing")).not.toBeNull();
     expect(doc.getElementById("citegeist-menu-fetch-collection")).not.toBeNull();
+  });
+});
+
+describe("item-menu visibility — no stray separator (issue #72)", () => {
+  it("hides the separator and every entry for a single ineligible item", async () => {
+    const { itemMenuVisibility } = await loadMenu();
+    expect(itemMenuVisibility([makeItem(1, false)])).toEqual({
+      fetch: false,
+      resolveAuthors: false,
+      citing: false,
+      references: false,
+      separator: false,
+    });
+  });
+
+  it("hides the separator and every entry for an empty selection", async () => {
+    const { itemMenuVisibility } = await loadMenu();
+    expect(itemMenuVisibility([])).toEqual({
+      fetch: false,
+      resolveAuthors: false,
+      citing: false,
+      references: false,
+      separator: false,
+    });
+  });
+
+  it("shows the separator, batch actions, and the single-item View actions for one eligible item", async () => {
+    const { itemMenuVisibility } = await loadMenu();
+    expect(itemMenuVisibility([makeItem(1, true)])).toEqual({
+      fetch: true,
+      resolveAuthors: true,
+      citing: true,
+      references: true,
+      separator: true,
+    });
+  });
+
+  it("shows the separator + batch actions but hides the single-item View actions for multiple eligible items", async () => {
+    const { itemMenuVisibility } = await loadMenu();
+    expect(itemMenuVisibility([makeItem(1), makeItem(2)])).toEqual({
+      fetch: true,
+      resolveAuthors: true,
+      citing: false,
+      references: false,
+      separator: true,
+    });
+  });
+
+  it("keeps the separator visible when only some of several items are eligible", async () => {
+    const { itemMenuVisibility } = await loadMenu();
+    expect(itemMenuVisibility([makeItem(1, true), makeItem(2, false)])).toMatchObject({
+      fetch: true,
+      citing: false,
+      separator: true,
+    });
   });
 });
 

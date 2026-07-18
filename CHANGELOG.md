@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Author discovery in the item pane.** The pane now lists a paper's authors,
+  each linking to that author's works — follow a researcher's output forward
+  without leaving Zotero. Authors are matched to OpenAlex automatically when a
+  paper's citation metrics load; no extra step.
+
+### Changed
+
+- **The item pane was rebuilt around a single citation-impact hero.** The citation
+  count leads, with field-weighted impact, percentile, and the recent-year trend
+  on one supporting line beneath it; the two explore actions (citing works,
+  references) and the new author list share the one pane section. The earlier
+  three-tile metric grid is gone.
+- **The pane caps its content width** so a dragged-wide item pane no longer
+  stretches the metrics, buttons, and author rows apart.
+
+### Fixed
+
+- **The right-click menu no longer leaves a stray empty section.** Right-clicking a
+  single item with no DOI or other recognized identifier used to show a lone
+  separator with no Citegeist entries beneath it. (#72)
+
 ## [2.0.5] — 2026-07-09
 
 ### Fixed

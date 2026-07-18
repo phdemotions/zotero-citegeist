@@ -1,18 +1,18 @@
 /**
- * Item pane section showing citation intelligence.
+ * The unified Citegeist item-pane section: citation impact + author discovery.
  *
- * Layout priority (everything must fit above the fold):
- *   1. Headline stat line — "20 citations · FWCI 1.61 · 85th percentile"
- *   2. Action buttons — "View 20 citing works" / "View references"
- *   3. Sparkline — compact trend bar
+ * Composition follows docs/design-system/pane-composition-language.md — one hero
+ * (the citation count), a single supporting-metric line (FWCI, percentile,
+ * trend), two peer "explore" buttons (citing works / references), a full-bleed
+ * hairline, then the author link rows (name, h-index, chevron; each opens that
+ * author's works). Metrics render synchronously from the cache in onRender;
+ * author rows load async in renderAuthorRows under a paneGeneration guard.
  *
- * Uses onRender (sync) for cached data and onAsyncRender for network fetch.
- *
- * IMPORTANT: Interactive elements (buttons) are created via DOM API, not
- * innerHTML, because Zotero's XUL/XHTML pane context can silently swallow
- * <button> elements set via innerHTML.
+ * IMPORTANT: interactive elements + all interpolated data are built via the DOM
+ * API (createElement + textContent), never innerHTML — Zotero's XUL/XHTML pane
+ * context can silently swallow `<button>` set via innerHTML, and textContent
+ * keeps hostile author names / titles inert.
  */
-
 import {
   getCachedData,
   clearCache,
@@ -27,8 +27,15 @@ import { fetchAndCacheItem, extractIdentifier } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import { normalizeDOI } from "./openalex";
 import type { OpenAlexWork } from "./openalex";
-import { showCitationNetwork } from "./citationNetwork";
-import { escapeHTML, logError, isBookType, toOrdinal } from "./utils";
+import { showCitationNetwork, showAuthorWorks } from "./citationNetwork";
+import { getItemAuthors, getAuthor, type AuthorRow } from "./cache/authors";
+import {
+  buildAuthorRowViewModels,
+  compactTrend,
+  getAuthorCreators,
+  type AuthorRowViewModel,
+} from "./authorProfile";
+import { logError, isBookType, toOrdinal } from "./utils";
 import { cgDesignTokens } from "./ui/tokens";
 import { cgComponents } from "./ui/components";
 import { resolveHostScheme } from "./ui/theme";
@@ -210,11 +217,17 @@ export function registerCitationPane(pluginID: string): void {
       },
       sidenav: {
         l10nID: "citegeist-pane-sidenav",
-        icon: "chrome://citegeist/content/icons/icon-20-color.svg",
+        // Context-fill (symbolic) SVG here, NOT the self-colored one: Zotero 8/9
+        // paint sidenav-strip icons via -moz-context-properties (so the icon
+        // tracks the strip's theme + selected state). A hardcoded-color SVG is
+        // not picked up by that paint path and renders blank in the strip — the
+        // "icon missing from the bottom nav" bug. The header (on the pane surface,
+        // not the themed strip) keeps the self-colored icon, which Zotero 7 needs.
+        icon: "chrome://citegeist/content/icons/icon-20.svg",
       },
       bodyXHTML: `
       <div id="citegeist-pane-root" xmlns="http://www.w3.org/1999/xhtml">
-        <style>
+        <style>/*<![CDATA[*/
           ${cgDesignTokens("#citegeist-pane-root", { embedded: true })}
           ${cgComponents("#citegeist-pane-root")}
           /*
@@ -227,16 +240,16 @@ export function registerCitationPane(pluginID: string): void {
            * filled-button tokens.
            */
           #citegeist-pane-root {
-            /* Sage compat aliases still referenced by the metric tiles. The
-               filled-button (--cg-primary-*) and amber tokens now come from
-               cgDesignTokens() / cgComponents(), so the pane-local copies the
-               old badges/buttons used are gone. */
-            --cg-sage-bg: var(--cg-sage-tint-08);
-            --cg-sage-border: var(--cg-sage-tint-35);
-
             font-family: var(--cg-font);
             font-feature-settings: 'kern' 1, 'liga' 1;
-            padding: var(--cg-space-2) var(--cg-space-3) 10px;
+            /* 12px top/side, 16px bottom — content sits on the 4pt grid; the
+               full-bleed hairline negates the 12px side padding (see .cg-hairline). */
+            padding: var(--cg-space-3) var(--cg-space-3) var(--cg-space-4);
+            /* Cap the content so a dragged-wide item pane doesn't stretch the hero
+               chip, the buttons, and the author rows apart (name→chevron gap grows
+               unbounded otherwise). Left-aligned; extra pane width becomes right
+               margin. Composition is tuned for ~320px; 26rem is a comfortable ceiling. */
+            max-width: 26rem;
             font-size: var(--cg-size-footnote);
             line-height: 1.5;
             color: var(--cg-text-primary);
@@ -276,93 +289,106 @@ export function registerCitationPane(pluginID: string): void {
             margin-bottom: 8px;
           }
 
-          .cg-headline {
+          /* ── Hero: the citation count is the single largest element on the
+             surface (composition rule 2). Number + label share a baseline; the
+             top-percentile chip is the only evidence accent, optically centered
+             at the right. See docs/design-system/pane-composition-language.md. ── */
+          .cg-hero {
             display: flex;
             align-items: baseline;
-            gap: 4px;
-            flex-wrap: wrap;
-            margin-bottom: 10px;
+            justify-content: space-between;
+            gap: var(--cg-space-2);
           }
-          .cg-headline-count {
-            font-size: 24px;
-            font-weight: 800;
-            letter-spacing: -0.8px;
-            color: var(--cg-text-primary);
-            font-variant-numeric: tabular-nums;
-          }
-          .cg-headline-label {
-            font-size: 12px;
-            color: var(--cg-text-secondary);
-            margin-right: 6px;
-          }
-          .cg-headline-sep {
-            color: var(--cg-text-tertiary);
-            margin: 0 2px;
-            font-size: 10px;
-          }
-          .cg-headline-detail {
-            font-size: 11px;
-            color: var(--cg-text-secondary);
-          }
-          .cg-headline-detail strong {
-            color: var(--cg-text-primary);
-            font-weight: 600;
-          }
-
-          /* Percentile badges use the shared .cg-chip primitive
-             (.cg-chip--amber for Top 1%) — see src/modules/ui/components.ts.
-             The .cg-metric-badge wrapper below owns placement. */
-
-          .cg-metric-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            align-items: stretch;
-            gap: 6px;
-            margin-bottom: 10px;
-          }
-          .cg-metric-tile {
+          .cg-hero-main {
             display: flex;
-            flex-direction: column;
-            justify-content: flex-start;
-            background: var(--cg-sage-bg);
-            border: 1px solid var(--cg-sage-border);
-            border-radius: 6px;
-            padding: 10px;
-            overflow: hidden;
+            align-items: baseline;
+            gap: var(--cg-space-2);
+            min-width: 0;
           }
-          .cg-metric-label {
-            display: block;
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: var(--cg-text-secondary);
-            margin-bottom: 4px;
-          }
-          .cg-metric-value {
-            display: block;
-            font-size: 20px;
-            font-weight: 600;
+          .cg-hero-stat {
+            font-size: var(--cg-size-display);
+            font-weight: var(--cg-weight-bold);
+            letter-spacing: -0.025em;
             color: var(--cg-text-primary);
             font-variant-numeric: tabular-nums;
-            overflow: hidden;
+            line-height: 1.05;
+          }
+          .cg-hero-label {
+            font-size: var(--cg-size-subhead);
+            color: var(--cg-text-secondary);
+          }
+          .cg-hero-chip { flex-shrink: 0; align-self: center; }
+
+          /* ── Supporting-metric line: FWCI · percentile · trend on one row, 8px
+             under the hero, tabular, ' · ' separators with equal space. ── */
+          .cg-metricline {
+            margin-top: var(--cg-space-2);
+            font-size: var(--cg-size-subhead);
+            color: var(--cg-text-secondary);
+            font-variant-numeric: tabular-nums;
+            line-height: 1.4;
+          }
+          .cg-metricline-sep { color: var(--cg-text-tertiary); margin: 0 var(--cg-space-2); }
+          .cg-metricline strong { color: var(--cg-text-primary); font-weight: var(--cg-weight-semibold); }
+
+          /* Book-with-no-citations note replaces the hero (OpenAlex book coverage
+             is sparse; a bare "0" would misread as genuinely uncited). */
+          .cg-booknote { color: var(--cg-text-secondary); padding: 2px 0; }
+
+          /* ── Action row: two peer explore buttons (tinted, equal width). The
+             hero number is the one hero, so neither action is a filled primary.
+             .cg-actions / .cg-btn come from cgComponents(); the row's own top
+             margin (16, off the metric line) is the only local override. ── */
+          #citegeist-pane-root .cg-actions { margin: var(--cg-space-4) 0 0; }
+
+          /* ── Full-bleed hairline separating impact from authors (rule 6). Negates
+             the 12px side padding so it spans the pane edge-to-edge. ── */
+          .cg-hairline {
+            height: 0;
+            border: none;
+            border-top: 1px solid var(--cg-hairline);
+            margin: var(--cg-space-4) calc(-1 * var(--cg-space-3)) 0;
+          }
+
+          /* ── Authors: eyebrow + link rows (name · h-index · chevron). Each row
+             is a clickable unit → the author-works dialog, so a hover tint is
+             earned; a border is not (rule 1). ── */
+          .cg-authors-eyebrow { display: block; margin: var(--cg-space-4) 0 var(--cg-space-1); }
+          .cg-authorrow {
+            display: flex;
+            align-items: center;
+            gap: var(--cg-space-2);
+            width: 100%;
+            padding: var(--cg-space-1);
+            background: transparent;
+            border: none;
+            border-radius: var(--cg-radius-md);
+            cursor: pointer;
+            font-family: inherit;
+            text-align: left;
+          }
+          .cg-authorrow:hover { background: var(--cg-sage-tint-06); }
+          .cg-authorrow:focus-visible { outline: 2px solid var(--cg-sage-accent); outline-offset: -2px; }
+          .cg-authorrow-name {
+            flex: 1;
+            min-width: 0;
+            font-size: var(--cg-size-subhead);
+            color: var(--cg-text-primary);
             white-space: nowrap;
+            overflow: hidden;
             text-overflow: ellipsis;
           }
-          .cg-metric-badge {
-            display: block;
-            margin-top: 4px;
-            margin-left: 0;
+          .cg-authorrow:hover .cg-authorrow-name { color: var(--cg-sage-accent); }
+          .cg-authorrow-h {
+            font-size: var(--cg-size-caption);
+            color: var(--cg-text-tertiary);
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
           }
-
-          /* .cg-actions + .cg-btn (filled / tinted / plain / sm) now come from
-             cgComponents() — see src/modules/ui/components.ts. */
-          .cg-trend {
-            border-top: 1px solid var(--cg-sage-tint-08);
-            padding-top: 7px;
-            font-size: 11px;
-            color: var(--cg-text-secondary);
-            line-height: 1.4;
+          .cg-authorrow-chev {
+            font-size: var(--cg-size-subhead);
+            color: var(--cg-text-tertiary);
+            line-height: 1;
           }
 
           /* ── Title-match suggestion UI ── */
@@ -426,7 +452,8 @@ export function registerCitationPane(pluginID: string): void {
              match the data view's buttons exactly. Only the :disabled hook above
              is local to the suggestion card. */
           /* DOI-prompt chrome comes from the shared .cg-banner primitive (incl.
-             its <strong> block heading); this keeps only the outer spacing. */
+             its strong block heading); this keeps only the outer spacing. No
+             angle brackets in pane-style comments — see the CDATA note above. */
           .cg-doi-prompt {
             margin-top: var(--cg-space-3);
           }
@@ -437,7 +464,7 @@ export function registerCitationPane(pluginID: string): void {
           }
           /* DOI-prompt buttons use the shared .cg-btn--sm primitive
              (assigned in renderDoiPrompt) — see ui/components.ts. */
-        </style>
+        /*]]>*/</style>
         <div id="citegeist-content"></div>
       </div>
     `,
@@ -877,61 +904,89 @@ function renderPane(
     container.appendChild(banner);
   }
 
-  // ── Metric grid ──
   const isBook = isBookType(item);
   const suppressCount = isBook && data.citedByCount === 0;
 
   if (!suppressCount) {
-    const grid = doc.createElement("div");
-    grid.className = "cg-metric-grid";
+    // ── Hero: the citation count is the single largest element ──
+    const hero = doc.createElement("div");
+    hero.className = "cg-hero";
 
-    // All values are escapeHTML'd or static; safe to set via innerHTML.
-    const makeTile = (label: string, value: string, extraHTML = ""): HTMLElement => {
-      const tile = doc.createElement("div");
-      tile.className = "cg-metric-tile";
-      tile.innerHTML =
-        `<span class="cg-metric-label">${label}</span>` +
-        `<span class="cg-metric-value" title="${value}">${value}</span>` +
-        extraHTML;
-      return tile;
+    const main = doc.createElement("div");
+    main.className = "cg-hero-main";
+    const stat = doc.createElement("span");
+    stat.className = "cg-hero-stat";
+    stat.textContent = data.citedByCount.toLocaleString();
+    main.appendChild(stat);
+    const label = doc.createElement("span");
+    label.className = "cg-hero-label";
+    label.textContent = data.citedByCount === 1 ? "citation" : "citations";
+    main.appendChild(label);
+    hero.appendChild(main);
+
+    // Top-percentile chip — the one evidence accent (amber at Top 1%). The exact
+    // percentile lives in the metric line below; the chip is the at-a-glance flag.
+    if (data.isTop1Percent || data.isTop10Percent) {
+      const chipWrap = doc.createElement("span");
+      chipWrap.className = "cg-hero-chip";
+      const chip = doc.createElement("span");
+      chip.className = data.isTop1Percent ? "cg-chip cg-chip--amber" : "cg-chip";
+      chip.textContent = data.isTop1Percent ? "Top 1%" : "Top 10%";
+      chipWrap.appendChild(chip);
+      hero.appendChild(chipWrap);
+    }
+    container.appendChild(hero);
+
+    // ── Supporting-metric line: FWCI · percentile · trend ──
+    const line = doc.createElement("div");
+    line.className = "cg-metricline";
+    let first = true;
+    const addSep = (): void => {
+      if (first) {
+        first = false;
+        return;
+      }
+      const sep = doc.createElement("span");
+      sep.className = "cg-metricline-sep";
+      sep.textContent = "·";
+      line.appendChild(sep);
     };
-
-    const citCount = escapeHTML(data.citedByCount.toLocaleString());
-    grid.appendChild(makeTile("CITATIONS", citCount));
-
-    const fwciVal = data.fwci !== null ? escapeHTML(data.fwci.toFixed(2)) : "—";
-    grid.appendChild(makeTile("FWCI", fwciVal));
-
-    const pctVal =
-      data.percentile !== null ? escapeHTML(toOrdinal(Math.round(data.percentile))) : "—";
-    const pctBadge = data.isTop1Percent
-      ? `<span class="cg-metric-badge"><span class="cg-chip cg-chip--amber">Top 1%</span></span>`
-      : data.isTop10Percent
-        ? `<span class="cg-metric-badge"><span class="cg-chip">Top 10%</span></span>`
-        : "";
-    grid.appendChild(makeTile("PERCENTILE", pctVal, pctBadge));
-
-    container.appendChild(grid);
+    if (data.fwci !== null) {
+      addSep();
+      const strong = doc.createElement("strong");
+      strong.textContent = "FWCI ";
+      line.appendChild(strong);
+      line.appendChild(doc.createTextNode(data.fwci.toFixed(2)));
+    }
+    if (data.percentile !== null) {
+      addSep();
+      line.appendChild(doc.createTextNode(`${toOrdinal(Math.round(data.percentile))} percentile`));
+    }
+    const trend = compactTrend(work);
+    if (trend) {
+      addSep();
+      line.appendChild(doc.createTextNode(trend));
+    }
+    if (!first) container.appendChild(line);
   } else {
     const note = doc.createElement("div");
-    note.className = "cg-no-identifier";
+    note.className = "cg-booknote";
     note.textContent = "Citation tracking for books is limited in OpenAlex.";
     container.appendChild(note);
   }
 
-  // ── Action buttons — real <button> elements for keyboard + screen reader support ──
+  // ── Action row: two peer explore buttons (tinted, equal width) ──
   const actions = doc.createElement("div");
   actions.className = "cg-actions";
 
   const makeActionButton = (
     label: string,
     ariaLabel: string,
-    variant: "primary" | "secondary",
     mode: "citing" | "references",
   ): HTMLButtonElement => {
     const btn = doc.createElement("button");
     btn.type = "button";
-    btn.className = "cg-btn " + (variant === "primary" ? "cg-btn--filled" : "cg-btn--tinted");
+    btn.className = "cg-btn cg-btn--tinted";
     btn.textContent = label;
     btn.setAttribute("aria-label", ariaLabel);
     btn.addEventListener("click", () => {
@@ -943,69 +998,103 @@ function renderPane(
     return btn;
   };
 
-  const citingBtn = makeActionButton(
-    `View ${data.citedByCount.toLocaleString()} citing works \u2192`,
-    `View ${data.citedByCount.toLocaleString()} works that cite this paper`,
-    "primary",
-    "citing",
+  actions.appendChild(
+    makeActionButton(
+      "Citing works \u2192",
+      `View ${data.citedByCount.toLocaleString()} works that cite this paper`,
+      "citing",
+    ),
   );
-  actions.appendChild(citingBtn);
-
-  const refsBtn = makeActionButton(
-    "View references \u2192",
-    "View works cited by this paper",
-    "secondary",
-    "references",
+  actions.appendChild(
+    makeActionButton("References \u2192", "View works cited by this paper", "references"),
   );
-  actions.appendChild(refsBtn);
-
   container.appendChild(actions);
 
-  Zotero.debug(
-    `[Citegeist] Pane rendered: ${data.citedByCount} citations, 2 action buttons appended`,
-  );
+  // \u2500\u2500 Authors: async link rows (name, h-index, chevron; tap opens author works) \u2500\u2500
+  const authorsRegion = doc.createElement("div");
+  authorsRegion.className = "cg-authors";
+  container.appendChild(authorsRegion);
+  const gen = paneGeneration;
+  renderAuthorRows(authorsRegion, item, gen).catch((e) => logError("renderAuthorRows", e));
 
-  // ── Trend insight — actionable text, not a tiny chart ──
-  if (work?.counts_by_year && work.counts_by_year.length >= 2) {
-    const sorted = [...work.counts_by_year].sort((a, b) => b.year - a.year);
-    const currentYear = new Date().getFullYear();
+  Zotero.debug(`[Citegeist] Pane rendered: ${data.citedByCount} citations`);
+}
 
-    // Most recent complete year and the one before it
-    const recent = sorted.find((y) => y.year === currentYear - 1) || sorted[0];
-    const prior = sorted.find((y) => y.year === recent.year - 1);
+/**
+ * Load and render the author link rows into `region`. Author reads are async
+ * (no sync mirror, pane-only), so this runs after the synchronous metric render
+ * and appends when ready. The eyebrow + hairline live INSIDE the populated
+ * region so a resolved-author-less item shows no dangling separator. Guarded by
+ * `paneGeneration`: an item switch mid-load drops the write.
+ */
+async function renderAuthorRows(
+  region: HTMLElement,
+  item: _ZoteroTypes.Item,
+  gen: number,
+): Promise<void> {
+  const doc = region.ownerDocument;
+  try {
+    const creators = getAuthorCreators(item);
+    const itemAuthors = await getItemAuthors(item.libraryID, item.key);
+    if (gen !== paneGeneration) return;
 
-    const trend = doc.createElement("div");
-    trend.className = "cg-trend";
+    const resolvedIds = [...new Set(itemAuthors.map((r) => r.author_id))];
+    const authorRowsData = await Promise.all(resolvedIds.map((id) => getAuthor(id)));
+    if (gen !== paneGeneration) return;
+    const byId = new Map<string, AuthorRow | null>();
+    resolvedIds.forEach((id, i) => byId.set(id, authorRowsData[i]));
 
-    let trendText = "";
-    const recentCount = recent.cited_by_count;
+    // Link rows only — resolved authors are the ones with a profile to open.
+    // Unresolved creators stay in Zotero's own creator list; no dead rows here.
+    const vms = buildAuthorRowViewModels(creators, itemAuthors, byId).filter((vm) => vm.authorId);
+    if (vms.length === 0) return;
 
-    if (prior && prior.cited_by_count > 0) {
-      const change = recentCount - prior.cited_by_count;
-      const pctChange = Math.round((change / prior.cited_by_count) * 100);
-
-      if (change > 0) {
-        trendText = `\u2197 ${recentCount} citations in ${recent.year} (+${pctChange}%)`;
-      } else if (change < 0) {
-        trendText = `\u2198 ${recentCount} citations in ${recent.year} (${pctChange}%)`;
-      } else {
-        trendText = `\u2192 ${recentCount} citations in ${recent.year} (steady)`;
-      }
-    } else if (recentCount > 0) {
-      trendText = `${recentCount} citations in ${recent.year}`;
-    } else {
-      trendText = `No citations in ${recent.year}`;
-    }
-
-    // Peak year insight (if different from most recent)
-    const peak = sorted.reduce((a, b) => (b.cited_by_count > a.cited_by_count ? b : a));
-    if (peak.year !== recent.year && peak.cited_by_count > recentCount) {
-      trendText += ` \u00B7 peak: ${peak.cited_by_count} in ${peak.year}`;
-    }
-
-    trend.textContent = trendText;
-    container.appendChild(trend);
+    region.textContent = "";
+    const hr = doc.createElement("div");
+    hr.className = "cg-hairline";
+    region.appendChild(hr);
+    const eyebrow = doc.createElement("span");
+    eyebrow.className = "cg-eyebrow cg-authors-eyebrow";
+    eyebrow.textContent = "Authors";
+    region.appendChild(eyebrow);
+    for (const vm of vms) region.appendChild(authorRow(doc, vm));
+  } catch (e) {
+    if (gen !== paneGeneration) return;
+    logError("renderAuthorRows", e);
+    region.textContent = "";
   }
+}
+
+/** One author link row: name (flex), h-index, chevron; tap opens the author-works dialog. */
+function authorRow(doc: Document, vm: AuthorRowViewModel): HTMLElement {
+  const btn = doc.createElement("button");
+  btn.type = "button";
+  btn.className = "cg-authorrow";
+  btn.setAttribute("aria-label", `View ${vm.name}’s works`);
+
+  const name = doc.createElement("span");
+  name.className = "cg-authorrow-name";
+  name.textContent = vm.name;
+  btn.appendChild(name);
+
+  if (vm.hIndexLabel) {
+    const h = doc.createElement("span");
+    h.className = "cg-authorrow-h";
+    h.textContent = vm.hIndexLabel;
+    btn.appendChild(h);
+  }
+
+  const chev = doc.createElement("span");
+  chev.className = "cg-authorrow-chev";
+  chev.textContent = "›";
+  chev.setAttribute("aria-hidden", "true");
+  btn.appendChild(chev);
+
+  const authorId = vm.authorId as string;
+  btn.addEventListener("click", () =>
+    showAuthorWorks(authorId).catch((e) => logError("showAuthorWorks", e)),
+  );
+  return btn;
 }
 
 export function unregisterCitationPane(): void {

@@ -103,6 +103,13 @@ export function getDialogCSS(): string {
       font-variant-numeric: tabular-nums;
     }
     .cg-stat-label { font-size: 10px; color: var(--cg-text-tertiary); }
+    /* Author-mode header (U7b): hero h-index (concept B) sits larger than the
+       i10/works/cited stats beside it; the command bar drops the citing/
+       references tabs, so its grid loses the leading tabs column. */
+    .cg-author-metrics { gap: 6px; }
+    .cg-stat--hero { min-width: 84px; }
+    .cg-stat--hero .cg-stat-value { font-size: 24px; }
+    .cg-command-bar--notabs { grid-template-columns: minmax(160px, 1fr) auto; }
 
     /* ── Command bar: mode + search + filter + sort ── */
     .cg-command-bar {

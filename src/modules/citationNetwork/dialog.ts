@@ -30,6 +30,14 @@ import {
   buildCollectionTree,
 } from "./collectionPicker";
 import { resolveHostScheme } from "../ui/theme";
+import { fetchAuthorProfile, type OpenAlexAuthorProfile } from "../openalexAuthors";
+import {
+  buildProfileViewModel,
+  profileErrorState,
+  persistProfileMetrics,
+  maybeReconcileMerge,
+  type ProfileViewModel,
+} from "../authorProfile";
 
 export let activeDialog: HTMLElement | null = null;
 /**
@@ -42,6 +50,105 @@ export let activeDialog: HTMLElement | null = null;
  * silently committed. (ADV-U1)
  */
 let activeState: NetworkState | null = null;
+
+/**
+ * Monotonic open counter, bumped synchronously by BOTH entry points right after
+ * closeActiveDialog(). showAuthorWorks captures it before its pre-shell identity
+ * fetch and bails if a newer open (either entry) supersedes it while that await
+ * is in flight — without it, a double-click on an author row (or a
+ * Citing/References click during the fetch) stacks a second modal and orphans
+ * the first, defeating the ADV-U1 undo-timer cleanup. showCitationNetwork claims
+ * `activeDialog` synchronously, so its own post-await guard already covers it; it
+ * only bumps the counter so it can supersede an in-flight showAuthorWorks.
+ */
+let dialogOpenSeq = 0;
+
+/**
+ * Fully tear down whatever dialog is currently open before a stacked open. Runs
+ * the SAME cleanup the Close button would (undo timers, picker overlays, search
+ * debounce) via `closeDialog` when the state object exists; otherwise the first
+ * dialog is still in its early-skeleton phase, so we dispatch the close event
+ * (for the `markClosed` listener) and drop the overlay. (ADV-U1) Shared by both
+ * entry points so the two can never diverge on this teardown.
+ */
+function closeActiveDialog(): void {
+  if (!activeDialog) return;
+  if (activeState) {
+    try {
+      closeDialog(activeState);
+    } catch {
+      // Defensive — closeDialog only does DOM remove + Map.clear + Set.clear.
+    }
+    activeState = null;
+  } else {
+    try {
+      activeDialog.dispatchEvent(new Event("citegeist:dialog-closed"));
+    } catch {
+      /* event dispatch can throw in rare XUL contexts */
+    }
+    try {
+      activeDialog.remove();
+    } catch {
+      /* already gone */
+    }
+  }
+  activeDialog = null;
+}
+
+/**
+ * Create the modal overlay + dialog element with the host-forced theme and the
+ * initial inner HTML, and prepend the stylesheet. Returns them un-attached (the
+ * caller appends to the parent + sets `activeDialog`). Shared by both entries so
+ * the surface chrome, theme forcing, and stylesheet wiring stay identical.
+ */
+function createDialogShell(
+  win: Window,
+  initialHTML: string,
+  ariaLabel: string,
+): { overlay: HTMLDivElement; dialog: HTMLDivElement } {
+  const doc = win.document;
+  // Force the host (Zotero) theme so light-dark() tokens don't follow the OS.
+  const scheme = resolveHostScheme(win);
+  const isDark = scheme === "dark";
+
+  const overlay = doc.createElementNS("http://www.w3.org/1999/xhtml", "div") as HTMLDivElement;
+  overlay.id = "citegeist-network-overlay";
+  overlay.style.cssText = `
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.45);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10000;
+  `;
+
+  const dialog = doc.createElementNS("http://www.w3.org/1999/xhtml", "div") as HTMLDivElement;
+  dialog.id = "citegeist-network-dialog";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-label", ariaLabel);
+  dialog.style.cssText = `
+    width: 780px; max-width: 90vw; max-height: 82vh;
+    padding: 0; border: 1px solid rgba(128,128,128,0.1);
+    border-radius: 12px;
+    /* Force the host theme so light-dark() tokens resolve to Zotero's theme,
+       not the OS appearance, regardless of the main window's color-scheme. */
+    color-scheme: ${scheme};
+    /* Pre-stylesheet placeholder (matches the --cg-surface/--cg-text arms for
+       this theme); getDialogCSS() immediately takes over with the tokens. */
+    background: ${isDark ? "#141D18" : "#F8FAF9"}; color: ${isDark ? "#E7EEE9" : "#1A2820"};
+    box-shadow: 0 20px 40px rgba(0,0,0,0.5), 0 0 1px rgba(128,128,128,0.1);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px; line-height: 1.4;
+    display: flex; flex-direction: column; overflow: hidden;
+  `;
+
+  safeInnerHTML(dialog, initialHTML);
+
+  const styleEl = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
+  styleEl.textContent = getDialogCSS();
+  dialog.insertBefore(styleEl, dialog.firstChild);
+
+  overlay.appendChild(dialog);
+  return { overlay, dialog };
+}
 
 // ────────────────────────────────────────────────────────
 // Entry point
@@ -62,89 +169,21 @@ export async function showCitationNetwork(
     return;
   }
 
-  if (activeDialog) {
-    // Run the FULL cleanup — undo timers, picker overlays, search debounce
-    // — same as the explicit Close button would trigger. Previously we
-    // dispatched a `citegeist:dialog-closed` event into the void, which
-    // only flipped `phase = "closed"` via the `markClosed` listener and
-    // left every other piece of state intact. The result: stacked-open
-    // would orphan undo timers firing against detached DOM, items added
-    // with pending undo were silently committed without the user ever
-    // seeing the Undo affordance again. (ADV-U1 / P2.1 real fix)
-    if (activeState) {
-      try {
-        closeDialog(activeState);
-      } catch {
-        // Defensive — closeDialog only does DOM remove + Map.clear + Set.clear.
-      }
-      activeState = null;
-    } else {
-      // No state yet (first dialog still in early-skeleton phase, lost
-      // the race). Mark the in-flight invocation as closed via the same
-      // event the `markClosed` listener watches for — without it, the
-      // first dialog's `Promise.all([resolveWorkForItem, ...])` resume path
-      // would rely solely on the `activeDialog !== overlay` identity
-      // check (held today, latent footgun if a future refactor reads
-      // `phase` directly). Then drop the overlay. (Iter W note)
-      try {
-        activeDialog.dispatchEvent(new Event("citegeist:dialog-closed"));
-      } catch {
-        /* event dispatch can throw in rare XUL contexts */
-      }
-      try {
-        activeDialog.remove();
-      } catch {
-        /* already gone */
-      }
-    }
-    activeDialog = null;
-  }
+  // Tear down any currently-open dialog with the full cleanup before opening
+  // this one (see closeActiveDialog).
+  closeActiveDialog();
+  dialogOpenSeq++;
 
   // Show dialog immediately with skeleton loading state
   const win = Zotero.getMainWindow();
   const doc = win.document;
   const parent = doc.body || doc.documentElement;
-  // Force the host (Zotero) theme so light-dark() tokens don't follow the OS.
-  const scheme = resolveHostScheme(win);
-  const isDark = scheme === "dark";
-
-  const overlay = doc.createElementNS("http://www.w3.org/1999/xhtml", "div") as HTMLDivElement;
-  overlay.id = "citegeist-network-overlay";
-  overlay.style.cssText = `
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.45);
-    display: flex; align-items: center; justify-content: center;
-    z-index: 10000;
-  `;
-
-  const dialog = doc.createElementNS("http://www.w3.org/1999/xhtml", "div") as HTMLDivElement;
-  dialog.id = "citegeist-network-dialog";
-  dialog.setAttribute("role", "dialog");
-  dialog.setAttribute("aria-label", "Citation network browser");
-  dialog.style.cssText = `
-    width: 780px; max-width: 90vw; max-height: 82vh;
-    padding: 0; border: 1px solid rgba(128,128,128,0.1);
-    border-radius: 12px;
-    /* Force the host theme so light-dark() tokens resolve to Zotero's theme,
-       not the OS appearance, regardless of the main window's color-scheme. */
-    color-scheme: ${scheme};
-    /* Pre-stylesheet placeholder (matches the --cg-surface/--cg-text arms for
-       this theme); getDialogCSS() immediately takes over with the tokens. */
-    background: ${isDark ? "#141D18" : "#F8FAF9"}; color: ${isDark ? "#E7EEE9" : "#1A2820"};
-    box-shadow: 0 20px 40px rgba(0,0,0,0.5), 0 0 1px rgba(128,128,128,0.1);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-size: 13px; line-height: 1.4;
-    display: flex; flex-direction: column; overflow: hidden;
-  `;
-
   const title = item.getField("title");
-  safeInnerHTML(dialog, buildDialogHTML(title, getItemSourceMetaLine(item)));
-
-  const styleEl = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
-  styleEl.textContent = getDialogCSS();
-  dialog.insertBefore(styleEl, dialog.firstChild);
-
-  overlay.appendChild(dialog);
+  const { overlay, dialog } = createDialogShell(
+    win,
+    buildDialogHTML(title, getItemSourceMetaLine(item)),
+    "Citation network browser",
+  );
   parent.appendChild(overlay);
   activeDialog = overlay;
 
@@ -305,6 +344,145 @@ export async function showCitationNetwork(
   searchInput?.focus();
 }
 
+/**
+ * Open an author's works as a dialog — the "author works" mode of the citation
+ * browser (U7b). Reached from the item pane's Authors section (U7a). Reuses the
+ * whole browser shell (results rendering, add/file, sort, search, infinite
+ * scroll, focus trap); only the header (an author hero instead of source
+ * metadata + tabs) and the fetch source (`authorships.author.id`) differ. Back
+ * is the dialog's existing dismiss (× / Esc / backdrop) → returns to the pane.
+ *
+ * Identity is fetched first (a free singleton) so the dialog opens fully
+ * populated with the hero; a hard failure alerts and never opens an empty
+ * dialog. That identity fetch IS a pre-shell async window, so this open is
+ * claimed on `dialogOpenSeq` and bails if a re-entrant open supersedes it
+ * mid-fetch. Once the shell exists, `activeDialog`/`activeState` guard the rest
+ * exactly as the work-mode entry does.
+ */
+export async function showAuthorWorks(authorId: string): Promise<void> {
+  Zotero.debug(`[Citegeist] showAuthorWorks called: authorId=${authorId}`);
+
+  // Tear down any currently-open dialog before opening this one, and claim this
+  // open synchronously so a re-entrant open (a double-click on the row, or a
+  // Citing/References click) during the identity fetch below supersedes us
+  // instead of stacking a second modal.
+  closeActiveDialog();
+  const myOpen = ++dialogOpenSeq;
+
+  const win = Zotero.getMainWindow();
+  const doc = win.document;
+  const parent = doc.body || doc.documentElement;
+
+  let profile: OpenAlexAuthorProfile | null = null;
+  let existingDOIs: Set<string> = new Set();
+  try {
+    [profile, existingDOIs] = await Promise.all([fetchAuthorProfile(authorId), getExistingDOIs()]);
+  } catch (e) {
+    if (myOpen !== dialogOpenSeq) return; // superseded mid-fetch — newer open owns the UI
+    logError(`showAuthorWorks(${authorId})`, e);
+    const st = profileErrorState(e);
+    Services.prompt.alert(
+      null,
+      "Citegeist",
+      st.kind === "budget"
+        ? "Today's OpenAlex budget is used up. It resets tomorrow — add a free API key in Settings → Citegeist to raise it."
+        : st.kind === "auth"
+          ? "OpenAlex rejected the API key. Check it in Settings → Citegeist."
+          : "Couldn't reach OpenAlex. Try again in a few minutes.",
+    );
+    return;
+  }
+
+  // Bail if a newer open superseded us during the identity fetch (re-entrancy).
+  if (myOpen !== dialogOpenSeq) return;
+
+  if (!profile) {
+    Services.prompt.alert(null, "Citegeist", "This author has no OpenAlex profile to show.");
+    return;
+  }
+
+  // Cache exact metrics so the pane's Authors-section h-index hint fills in,
+  // and reconcile a 301 author-id merge if this lookup redirected (KTD3).
+  persistProfileMetrics(profile);
+  maybeReconcileMerge(profile);
+
+  // INVARIANT: no `await` between the `myOpen !== dialogOpenSeq` check above and
+  // this synchronous shell build + `activeDialog` claim. Inserting one reopens the
+  // stacking race — a later open could bump the seq after we passed the check but
+  // before we claim `activeDialog`. Keep this block await-free.
+  const vm = buildProfileViewModel(profile);
+  const { overlay, dialog } = createDialogShell(win, buildAuthorDialogHTML(vm), "Author works");
+  parent.appendChild(overlay);
+  activeDialog = overlay;
+
+  // Skeleton while the first works page loads.
+  const body = dialog.querySelector(".cg-dialog-body") as HTMLElement;
+  if (body) {
+    let skeleton = "";
+    for (let i = 0; i < 6; i++) {
+      skeleton += `<div class="cg-skeleton-row">
+        <div class="cg-skeleton-content">
+          <div class="cg-skeleton-bar cg-skeleton-title"></div>
+          <div class="cg-skeleton-bar cg-skeleton-meta"></div>
+          <div class="cg-skeleton-bar cg-skeleton-meta2"></div>
+        </div>
+        <div class="cg-skeleton-bar cg-skeleton-right"></div>
+      </div>`;
+    }
+    safeInnerHTML(body, skeleton);
+  }
+
+  const defaultCollectionIds = new Set<number>();
+  try {
+    const zp = Zotero.getActiveZoteroPane();
+    const currentCol = zp?.getSelectedCollection?.();
+    if (currentCol) defaultCollectionIds.add(currentCol.id);
+  } catch {
+    /* library root */
+  }
+
+  const state: NetworkState = {
+    phase: "ready",
+    overlay,
+    dialog,
+    win,
+    work: null,
+    mode: "author",
+    authorId: profile.id,
+    authorProfile: profile,
+    results: [],
+    cursor: "*",
+    hasMore: true,
+    loading: false,
+    sortBy: "citations",
+    hideInLibrary: false,
+    existingDOIs,
+    existingWorkIds: getAllCachedOpenAlexIds(),
+    generation: 0,
+    searchTimeout: null,
+    defaultCollectionIds,
+    allCollections: buildCollectionTree(),
+    expandedIds: new Set(),
+    abstractCache: new Map(),
+    undoTimers: new Map(),
+    addedThisSession: new Set(),
+    itemCollections: new Map(),
+    createdItemIds: new Map(),
+    defaultPickerExpanded: new Set(),
+    pendingAdds: new Set(),
+  };
+
+  // Publish so a stacked open runs the full closeDialog cleanup on this state.
+  activeState = state;
+
+  bindDialogEvents(state);
+  updateDefaultCollectionLabel(state);
+  await loadResults(state);
+
+  const searchInput = dialog.querySelector(".cg-search-input") as HTMLInputElement;
+  searchInput?.focus();
+}
+
 // ────────────────────────────────────────────────────────
 // Dialog HTML shell
 // ────────────────────────────────────────────────────────
@@ -359,35 +537,26 @@ export function getItemSourceMetaLine(item: _ZoteroTypes.Item): string {
   return parts.join(" \u00B7 ");
 }
 
-export function buildDialogHTML(title: string, sourceMetaLine: string): string {
-  const sourceMeta = sourceMetaLine
-    ? `<div class="cg-source-authors" id="cg-source-meta">${escapeHTML(sourceMetaLine)}</div>`
-    : "";
-  return `
+const DIALOG_CHROME_HTML = `
     <div class="cg-dialog-chrome">
       <button class="cg-close-btn" id="cg-btn-close" title="Close"
               aria-label="Close citation network browser">\u00D7</button>
-    </div>
-    <div class="cg-dialog-top">
-      <div class="cg-header-text">
-        <div class="cg-eyebrow">Citation Network</div>
-        <div class="cg-dialog-title" title="${escapeHTML(title)}">${escapeHTML(title)}</div>
-        ${sourceMeta}
-      </div>
-      <div class="cg-count-stack">
-        <div class="cg-stat" id="cg-source-cited-count">
-          <strong class="cg-stat-value">\u2026</strong>
-          <span class="cg-stat-label">Cited by</span>
-        </div>
-      </div>
-    </div>
-    <div class="cg-command-bar">
+    </div>`;
+
+const MODE_TABS_HTML = `
       <div class="cg-tabs-inner" role="tablist" aria-label="Citation direction">
         <button class="cg-tab" data-mode="citing" role="tab" id="cg-tab-citing"
                 aria-selected="false" aria-controls="cg-dialog-body" tabindex="-1">Cited By</button>
         <button class="cg-tab" data-mode="references" role="tab" id="cg-tab-references"
                 aria-selected="false" aria-controls="cg-dialog-body" tabindex="-1">References</button>
-      </div>
+      </div>`;
+
+/** Command bar (search + hide-in-library + sort). `tabsHTML` is the mode tabs in
+ *  work modes, empty in author mode (which has no citing/references direction). */
+function commandBarHTML(tabsHTML: string): string {
+  return `
+    <div class="cg-command-bar${tabsHTML ? "" : " cg-command-bar--notabs"}">
+      ${tabsHTML}
       <div class="cg-search-wrap">
         <span class="cg-search-icon" aria-hidden="true">\uD83D\uDD0D</span>
         <input type="text" class="cg-search-input"
@@ -412,7 +581,11 @@ export function buildDialogHTML(title: string, sourceMetaLine: string): string {
           </select>
         </label>
       </div>
-    </div>
+    </div>`;
+}
+
+/** Results panel + footer (default-collection chip). Identical for both modes. */
+const BODY_FOOTER_HTML = `
     <div class="cg-dialog-body" id="cg-dialog-body" role="tabpanel"
          aria-labelledby="cg-tab-citing" aria-live="polite" aria-busy="true">
       <div class="cg-loading-more">Loading\u2026</div>
@@ -429,13 +602,61 @@ export function buildDialogHTML(title: string, sourceMetaLine: string): string {
           <span>\uD83D\uDCC1</span>
           <span class="cg-default-chip-label" id="cg-default-label">My Library</span>
           <span class="cg-default-chip-extra" id="cg-default-extra"></span>
-          <span style="color:#636366;font-size:9px;">\u25BE</span>
+          <span style="color:var(--cg-text-tertiary);font-size:9px;">\u25BE</span>
         </button>
         <div class="cg-default-dropdown" id="cg-default-dropdown"
              role="listbox" aria-label="Default collection" hidden></div>
       </div>
-    </div>
-  `;
+    </div>`;
+
+export function buildDialogHTML(title: string, sourceMetaLine: string): string {
+  const sourceMeta = sourceMetaLine
+    ? `<div class="cg-source-authors" id="cg-source-meta">${escapeHTML(sourceMetaLine)}</div>`
+    : "";
+  const header = `
+    <div class="cg-dialog-top">
+      <div class="cg-header-text">
+        <div class="cg-eyebrow">Citation Network</div>
+        <div class="cg-dialog-title" title="${escapeHTML(title)}">${escapeHTML(title)}</div>
+        ${sourceMeta}
+      </div>
+      <div class="cg-count-stack">
+        <div class="cg-stat" id="cg-source-cited-count">
+          <strong class="cg-stat-value">\u2026</strong>
+          <span class="cg-stat-label">Cited by</span>
+        </div>
+      </div>
+    </div>`;
+  return DIALOG_CHROME_HTML + header + commandBarHTML(MODE_TABS_HTML) + BODY_FOOTER_HTML;
+}
+
+/**
+ * Author-mode header: identity line + a hero-metrics stack (concept B \u2014 h-index
+ * prominent, i10/works/cited alongside). No citing/references tabs. Reuses the
+ * work-mode `.cg-dialog-top` / `.cg-stat` layout so the two headers stay
+ * visually consistent.
+ */
+export function buildAuthorDialogHTML(vm: ProfileViewModel): string {
+  const ids = [vm.orcid ? `ORCID ${vm.orcid}` : "", "OpenAlex"].filter(Boolean).join(" \u00B7 ");
+  const stat = (value: string, label: string, hero = false): string =>
+    `<div class="cg-stat${hero ? " cg-stat--hero" : ""}">` +
+    `<strong class="cg-stat-value">${escapeHTML(value)}</strong>` +
+    `<span class="cg-stat-label">${escapeHTML(label)}</span></div>`;
+  const header = `
+    <div class="cg-dialog-top">
+      <div class="cg-header-text">
+        <div class="cg-eyebrow">Author</div>
+        <div class="cg-dialog-title" title="${escapeHTML(vm.name)}">${escapeHTML(vm.name)}</div>
+        <div class="cg-source-authors">${escapeHTML(ids)}</div>
+      </div>
+      <div class="cg-count-stack cg-author-metrics">
+        ${stat(vm.hIndex, "h-index", true)}
+        ${stat(vm.i10Index, "i10")}
+        ${stat(vm.worksCount, "works")}
+        ${stat(vm.citedByCount, "cited")}
+      </div>
+    </div>`;
+  return DIALOG_CHROME_HTML + header + commandBarHTML("") + BODY_FOOTER_HTML;
 }
 
 // ────────────────────────────────────────────────────────

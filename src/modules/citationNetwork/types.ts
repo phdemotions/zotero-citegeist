@@ -3,8 +3,14 @@
  */
 
 import type { OpenAlexWork } from "../openalex";
+import type { OpenAlexAuthorProfile } from "../openalexAuthors";
 
-export type NetworkMode = "citing" | "references";
+/**
+ * Dialog subject: works that cite / are cited by a paper, or the works OF an
+ * author. `"author"` reuses the whole browser shell — only the header (an author
+ * hero instead of source metadata + tabs) and the fetch source differ.
+ */
+export type NetworkMode = "citing" | "references" | "author";
 
 // Re-export so existing imports in this folder keep working.
 export { MAX_RENDERED_RESULTS, UNDO_TIMEOUT_MS } from "../../constants";
@@ -64,8 +70,13 @@ export interface NetworkState {
   overlay: HTMLElement;
   dialog: HTMLElement;
   win: Window;
-  work: OpenAlexWork;
+  /** The subject paper for `citing`/`references`; null in `author` mode. */
+  work: OpenAlexWork | null;
   mode: NetworkMode;
+  /** `author` mode only: the OpenAlex author id the works are filtered by. */
+  authorId?: string;
+  /** `author` mode only: the resolved profile driving the header hero. */
+  authorProfile?: OpenAlexAuthorProfile;
   results: OpenAlexWork[];
   cursor: string;
   hasMore: boolean;

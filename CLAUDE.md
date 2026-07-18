@@ -79,9 +79,9 @@ typings/                        # Zotero type declarations
 
 **Constants:** Every magic number lives in `src/constants.ts`. Do not hardcode timeouts, sizes, or thresholds inline.
 
-**Caching (v2.0.0+):** Cached metrics live in a plugin-owned SQLite database at `<profile>/citegeist.sqlite`. Reads hit a synchronous in-memory mirror loaded at startup (Zotero's column `dataProvider` is sync). Writes go to SQLite first, then update the mirror. Only the user-curated `Citegeist match ID: W…` line is mirrored back to Zotero's `Extra` field for downgrade safety and cross-device sync. See `src/modules/cache/` and `docs/MIGRATION-v2.0.0.md`. The one-shot migration from v1.3.x Extra-namespaced fields is in `cache/migration.ts`.
+**Caching (v2.0.0+):** Cached metrics live in a plugin-owned SQLite database at `<profile>/citegeist.sqlite`. Reads hit a synchronous in-memory mirror loaded at startup (Zotero's column `dataProvider` is sync). Writes go to SQLite first, then update the mirror. Only the user-curated `Citegeist match ID: W…` line is mirrored back to Zotero's `Extra` field for downgrade safety and cross-device sync. See `src/modules/cache/` and `docs/MIGRATION-v2.0.0.md`. The one-shot migration from v1.3.x Extra-namespaced fields is in `cache/migration.ts`. Author identity lives in a separate normalized sub-module `cache/authors/` (`authors` + `item_authors` tables, curated-wins writes under the shared exported `withKeyLock`, no sync mirror — reads are async, pane-only); the external handoff is a native Zotero `openalex:author` item relation, not `Extra`.
 
-**Rate limiting:** All OpenAlex calls go through a single `rateLimitedFetch` (8 req/s, 125ms interval, exponential backoff on 429/5xx). Never call the API directly.
+**Rate limiting + metered API:** All OpenAlex calls go through a single `rateLimitedFetch` (8 req/s, 125ms interval, exponential backoff on transient 429/5xx). Never call the API directly. OpenAlex is metered as of July 2026 (singleton lookups free, list+filter metered; `mailto` is dead) — an optional, opt-in `api_key` pref rides the query string and is redacted centrally in `normalizeError`. A budget-exhausted `429` (`X-RateLimit-Remaining: 0`) raises `OpenAlexBudgetError` (no retry) and `401/403` raises `OpenAlexAuthError` — both distinct from `OpenAlexNetworkError`.
 
 **HTML safety:** Use `escapeHTML()` for interpolating user data into HTML strings. Use the `safeHTML` tagged template for new code. Never set `.innerHTML` directly — use `safeInnerHTML()` from `utils.ts` which uses DOMParser to handle Zotero's XUL document context correctly.
 
@@ -128,16 +128,16 @@ Locally, always verify with `rm -rf node_modules && npm install` before releasin
 
 ## Key Files
 
-| File                  | Purpose                                                          |
-| --------------------- | ---------------------------------------------------------------- |
-| `docs/STATUS.md`      | Current project state, what was done last session, upcoming work |
-| `docs/ISSUES.md`      | Open bugs and feature requests with priorities                   |
+| File                  | Purpose                                                                                                                                                                                 |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs/STATUS.md`      | Current project state, what was done last session, upcoming work                                                                                                                        |
+| `docs/ISSUES.md`      | Open bugs and feature requests with priorities                                                                                                                                          |
 | `docs/solutions/`     | Documented fixes to past problems (bugs, patterns), by category with YAML frontmatter (`module`, `tags`, `problem_type`) — relevant when debugging or implementing in a documented area |
-| `docs/BACKLOG.md`     | Curated longer-term enhancement ideas                            |
-| `docs/STANDARDS.md`   | OKF documentation standard — pin, scope (docs-only), cadence     |
-| `docs/index.md`       | OKF bundle catalog (reserved index of every docs/ file)          |
-| `CHANGELOG.md`        | Keep-a-Changelog format, one entry per release                   |
-| `docs/DESIGN.md`      | Architecture decisions and trade-offs                            |
-| `CONTRIBUTING.md`     | Dev setup, commands, PR guidelines                               |
-| `docs/paper/paper.md` | JOSS paper (in progress)                                         |
-| `CITATION.cff`        | Machine-readable citation metadata                               |
+| `docs/BACKLOG.md`     | Curated longer-term enhancement ideas                                                                                                                                                   |
+| `docs/STANDARDS.md`   | OKF documentation standard — pin, scope (docs-only), cadence                                                                                                                            |
+| `docs/index.md`       | OKF bundle catalog (reserved index of every docs/ file)                                                                                                                                 |
+| `CHANGELOG.md`        | Keep-a-Changelog format, one entry per release                                                                                                                                          |
+| `docs/DESIGN.md`      | Architecture decisions and trade-offs                                                                                                                                                   |
+| `CONTRIBUTING.md`     | Dev setup, commands, PR guidelines                                                                                                                                                      |
+| `docs/paper/paper.md` | JOSS paper (in progress)                                                                                                                                                                |
+| `CITATION.cff`        | Machine-readable citation metadata                                                                                                                                                      |

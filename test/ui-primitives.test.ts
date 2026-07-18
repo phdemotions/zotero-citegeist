@@ -39,6 +39,10 @@ describe("cgComponents", () => {
     expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
   });
 
+  it("emits no raw < or & — the pane bodyXHTML parses as XML, where a stray one aborts the whole parse and the pane silently vanishes (regression guard for the itemPaneSection XML break)", () => {
+    expect(css).not.toMatch(/[<&]/);
+  });
+
   it("carries the reduced-motion + focus-visible a11y affordances", () => {
     expect(css).toContain("prefers-reduced-motion");
     expect(css).toContain(":focus-visible");
@@ -48,6 +52,11 @@ describe("cgComponents", () => {
 describe("cgDesignTokens", () => {
   it("emits the token block scoped to the surface", () => {
     expect(cgDesignTokens(SCOPE)).toContain(`${SCOPE} {`);
+  });
+
+  it("emits no raw < or & (XML-safe for the pane style block)", () => {
+    expect(cgDesignTokens(SCOPE, { embedded: true })).not.toMatch(/[<&]/);
+    expect(cgDesignTokens(SCOPE)).not.toMatch(/[<&]/);
   });
 
   it("embedded mode sources text from Zotero's --fill-* theme vars", () => {

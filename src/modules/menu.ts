@@ -16,7 +16,12 @@
  * paths stay in sync.
  */
 
-import { fetchAndCacheItems, canResolveWork } from "./citationService";
+import {
+  fetchAndCacheItems,
+  canResolveWork,
+  resolveAuthorsForItems,
+  type AuthorBackfillResult,
+} from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import { showCitationNetwork } from "./citationNetwork";
 import { logError } from "./utils";
@@ -25,7 +30,9 @@ const MENU_IDS = {
   fetchCitations: "citegeist-menu-fetch",
   viewCiting: "citegeist-menu-citing",
   viewRefs: "citegeist-menu-refs",
+  resolveAuthors: "citegeist-menu-resolve-authors",
   fetchCollection: "citegeist-menu-fetch-collection",
+  resolveCollection: "citegeist-menu-resolve-collection",
   separator: "citegeist-menu-separator",
   collectionSeparator: "citegeist-collection-menu-separator",
 };
@@ -122,6 +129,23 @@ function summarizeBatch(r: BatchResult, total: number): string {
   if (r.errors > 0) parts.push(`${r.errors} couldn't be matched`);
   if (parts.length === 0) parts.push(`${total} processed`);
   return `Done — ${parts.join(", ")}`;
+}
+
+/**
+ * One-line summary of an author-identity backfill for the ProgressWindow.
+ * Keeps the budget-stopped count distinct from a genuine no-match so a spent
+ * daily budget never reads as "no authors found".
+ */
+function summarizeAuthorBackfill(r: AuthorBackfillResult, total: number): string {
+  const parts: string[] = [];
+  if (r.resolved > 0) parts.push(`${r.resolved} resolved`);
+  if (r.already > 0) parts.push(`${r.already} already linked`);
+  if (r.unresolved > 0) parts.push(`${r.unresolved} no author match`);
+  if (r.budgetStopped > 0) parts.push(`${r.budgetStopped} skipped (daily budget spent)`);
+  if (r.errors > 0) parts.push(`${r.errors} failed`);
+  if (parts.length === 0) parts.push(`${total} processed`);
+  const head = r.cancelled ? "Stopped" : "Done";
+  return `${head} — ${parts.join(", ")}`;
 }
 
 /** Recursively gather all items from a collection and its subcollections. */
@@ -307,6 +331,105 @@ async function runFetchCollection(win: Window): Promise<void> {
   }
 }
 
+async function runResolveAuthorsSelected(win: Window): Promise<void> {
+  const pane = Zotero.getActiveZoteroPane();
+  const items = pane.getSelectedItems();
+  if (items.length === 0) return;
+
+  const eligible = items.filter(canResolveWork);
+  if (eligible.length === 0) {
+    Services.prompt.alert(
+      win,
+      "Citegeist: Nothing to resolve",
+      items.length === 0
+        ? "No items selected."
+        : `None of the ${items.length} selected item${items.length === 1 ? "" : "s"} has a recognized identifier to resolve authors from.`,
+    );
+    return;
+  }
+
+  const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
+  progressWin.changeHeadline("Citegeist: Resolving Author Identities");
+  const progress = new progressWin.ItemProgress(
+    "chrome://citegeist/content/icons/icon-16-color.png",
+    `Resolving authors for ${eligible.length} item${eligible.length !== 1 ? "s" : ""}…`,
+  );
+  progressWin.show();
+
+  let result: AuthorBackfillResult;
+  try {
+    result = await resolveAuthorsForItems(eligible, (current, total) => {
+      progress.setProgress((current / total) * 100);
+      progress.setText(`${current}/${total} items processed`);
+    });
+  } catch (e) {
+    logError("menu resolve-authors batch", e);
+    progress.setProgress(100);
+    progress.setText("Citegeist: resolve failed — see Debug Output");
+    progressWin.startCloseTimer(5000);
+    return;
+  }
+
+  progress.setProgress(100);
+  progress.setText(summarizeAuthorBackfill(result, eligible.length));
+  progressWin.startCloseTimer(6000);
+}
+
+async function runResolveAuthorsCollection(win: Window): Promise<void> {
+  const pane = Zotero.getActiveZoteroPane();
+  const collection = pane.getSelectedCollection();
+
+  const allItems = new Map<number, _ZoteroTypes.Item>();
+  if (collection) {
+    gatherCollectionItems(collection, allItems);
+  } else {
+    const rawLibraryID = pane.getSelectedLibraryID?.();
+    const libraryID = rawLibraryID || Zotero.Libraries.userLibraryID;
+    const libraryItems = await Zotero.Items.getAll(libraryID, false);
+    for (const item of libraryItems) allItems.set(item.id, item);
+  }
+
+  const totalItems = allItems.size;
+  const eligible = [...allItems.values()].filter(canResolveWork);
+  const scope = collection ? "collection" : "library";
+  if (eligible.length === 0) {
+    Services.prompt.alert(
+      win,
+      "Citegeist: Nothing to resolve",
+      totalItems === 0
+        ? `This ${scope} is empty.`
+        : `None of the ${totalItems} item${totalItems === 1 ? "" : "s"} in this ${scope} has a recognized identifier to resolve authors from.`,
+    );
+    return;
+  }
+
+  const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
+  progressWin.changeHeadline("Citegeist: Resolving Author Identities");
+  const progress = new progressWin.ItemProgress(
+    "chrome://citegeist/content/icons/icon-16-color.png",
+    `Resolving authors for ${eligible.length} item${eligible.length === 1 ? "" : "s"}…`,
+  );
+  progressWin.show();
+
+  let result: AuthorBackfillResult;
+  try {
+    result = await resolveAuthorsForItems(eligible, (current, total) => {
+      progress.setProgress((current / total) * 100);
+      progress.setText(`${current}/${total} items processed`);
+    });
+  } catch (e) {
+    logError("menu resolve-authors-collection batch", e);
+    progress.setProgress(100);
+    progress.setText("Citegeist: resolve failed — see Debug Output");
+    progressWin.startCloseTimer(5000);
+    return;
+  }
+
+  progress.setProgress(100);
+  progress.setText(summarizeAuthorBackfill(result, eligible.length));
+  progressWin.startCloseTimer(6000);
+}
+
 // ── MenuManager path (Zotero 8+) ─────────────────────────────────────────────
 
 /**
@@ -349,6 +472,22 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
         onShowing: (_e, ctx) => ctx.setVisible(itemsSingleResolvable(ctx.items)),
         onCommand: () => runViewNetwork("references"),
       },
+      {
+        menuType: "menuitem",
+        l10nID: "citegeist-menu-resolve-authors",
+        icon: "chrome://citegeist/content/icons/icon-16.svg",
+        onShowing: (_e, ctx) =>
+          ctx.setVisible(
+            ctx.items && ctx.items.length > 0
+              ? ctx.items.some(canResolveWork)
+              : eligibleSelectedCount() > 0,
+          ),
+        onCommand: () => {
+          runResolveAuthorsSelected(Zotero.getMainWindow()).catch((e) =>
+            logError("menu resolve-authors", e),
+          );
+        },
+      },
     ],
   });
   if (itemResult === false) return false;
@@ -365,6 +504,16 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
         onCommand: () => {
           runFetchCollection(Zotero.getMainWindow()).catch((e) =>
             logError("menu fetch-collection", e),
+          );
+        },
+      },
+      {
+        menuType: "menuitem",
+        l10nID: "citegeist-menu-resolve-collection",
+        icon: "chrome://citegeist/content/icons/icon-16.svg",
+        onCommand: () => {
+          runResolveAuthorsCollection(Zotero.getMainWindow()).catch((e) =>
+            logError("menu resolve-authors-collection", e),
           );
         },
       },
@@ -397,6 +546,37 @@ function itemsSingleResolvable(items: _ZoteroTypes.Item[] | undefined): boolean 
 }
 
 // ── DOM path (Zotero 7.0.x fallback) ─────────────────────────────────────────
+
+/**
+ * Which DOM item-menu entries are SHOWN for a given selection (caller sets
+ * `.hidden = !shown`). Pure, so the separator-vs-entries rule is unit-tested
+ * rather than buried in the popup handler.
+ *
+ * The separator groups the four entries below it, so it must show only when at
+ * least one of them shows. Fetch / Resolve show when any selected item is
+ * eligible; Citing / References are single-eligible-item actions — which implies
+ * eligibility — so "any entry shows" reduces exactly to `eligibleCount > 0`.
+ * The old handler kept the separator visible for a single *ineligible* item
+ * (`eligibleCount === 0 && items.length !== 1`), stranding a lone empty section
+ * in the right-click menu — issue #72.
+ */
+export function itemMenuVisibility(items: _ZoteroTypes.Item[]): {
+  fetch: boolean;
+  resolveAuthors: boolean;
+  citing: boolean;
+  references: boolean;
+  separator: boolean;
+} {
+  const eligibleCount = items.filter(canResolveWork).length;
+  const singleResolvable = items.length === 1 && eligibleCount === 1;
+  return {
+    fetch: eligibleCount > 0,
+    resolveAuthors: eligibleCount > 0,
+    citing: singleResolvable,
+    references: singleResolvable,
+    separator: eligibleCount > 0,
+  };
+}
 
 function registerViaDOM(win: Window): void {
   const doc = win.document;
@@ -443,21 +623,28 @@ function registerViaDOM(win: Window): void {
     refsItem.addEventListener("command", () => runViewNetwork("references"));
     itemMenu.appendChild(refsItem);
 
-    // Hide citing/refs when multiple items are selected (single-item actions)
-    // and hide Fetch when no selected items are eligible — a no-op click looked
-    // like the feature was broken.
+    const resolveItem = (doc as XULDocument).createXULElement("menuitem");
+    resolveItem.id = MENU_IDS.resolveAuthors;
+    resolveItem.setAttribute("label", "Resolve Author Identities (Citegeist)");
+    resolveItem.setAttribute("image", "chrome://citegeist/content/icons/icon-16.svg");
+    // 'A' (Authors) is free on the default item context menu alongside 'G'.
+    resolveItem.setAttribute("accesskey", "A");
+    resolveItem.addEventListener("command", () => {
+      runResolveAuthorsSelected(win).catch((e) => logError("menu resolve-authors", e));
+    });
+    itemMenu.appendChild(resolveItem);
+
+    // Gate every entry — and the separator — on the current selection, so a
+    // no-op click never looks like the feature is broken and no stray empty
+    // section is left behind (issue #72). Visibility rule lives in the pure,
+    // tested itemMenuVisibility().
     itemMenu.addEventListener("popupshowing", () => {
-      // Materialize the selection once and reuse it for every gate — the
-      // getSelectedItems() call and the canResolveWork pass are the only
-      // non-trivial cost here, and "select all → right-click" can make the
-      // selection large.
-      const items = Zotero.getActiveZoteroPane().getSelectedItems();
-      const eligibleCount = items.filter(canResolveWork).length;
-      fetchItem.hidden = eligibleCount === 0;
-      sep.hidden = eligibleCount === 0 && items.length !== 1;
-      const singleResolvable = items.length === 1 && eligibleCount === 1;
-      citingItem.hidden = !singleResolvable;
-      refsItem.hidden = !singleResolvable;
+      const v = itemMenuVisibility(Zotero.getActiveZoteroPane().getSelectedItems());
+      fetchItem.hidden = !v.fetch;
+      resolveItem.hidden = !v.resolveAuthors;
+      citingItem.hidden = !v.citing;
+      refsItem.hidden = !v.references;
+      sep.hidden = !v.separator;
     });
   }
 
@@ -477,6 +664,16 @@ function registerViaDOM(win: Window): void {
       runFetchCollection(win).catch((e) => logError("menu fetch-collection", e));
     });
     collectionMenu.appendChild(fetchAll);
+
+    const resolveAll = (doc as XULDocument).createXULElement("menuitem");
+    resolveAll.id = MENU_IDS.resolveCollection;
+    resolveAll.setAttribute("label", "Resolve All Author Identities (Citegeist)");
+    resolveAll.setAttribute("image", "chrome://citegeist/content/icons/icon-16.svg");
+    resolveAll.setAttribute("accesskey", "A");
+    resolveAll.addEventListener("command", () => {
+      runResolveAuthorsCollection(win).catch((e) => logError("menu resolve-authors-collection", e));
+    });
+    collectionMenu.appendChild(resolveAll);
   }
 
   Zotero.debug("[Citegeist] Menus registered (DOM)");
