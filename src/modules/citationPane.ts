@@ -1,12 +1,14 @@
 /**
  * The unified Citegeist item-pane section: citation impact + author discovery.
  *
- * Composition follows docs/design-system/pane-composition-language.md — one hero
- * (the citation count), a single supporting-metric line (FWCI, percentile,
- * trend), two peer "explore" buttons (citing works / references), a full-bleed
- * hairline, then the author link rows (name, h-index, chevron; each opens that
- * author's works). Metrics render synchronously from the cache in onRender;
- * author rows load async in renderAuthorRows under a paneGeneration guard.
+ * Composition: two titled cards. An "Impact" card holds the one hero (the
+ * citation count), a single supporting-metric line (FWCI, percentile, trend) and
+ * the two peer "explore" actions; an "Authors" card holds the author link rows
+ * (name, h-index, chevron; each opens that author's works). Cards fill the pane
+ * width and the author list reflows into columns when the pane is dragged wide,
+ * so extra width is used rather than left as dead space. Metrics render
+ * synchronously from the cache in onRender; author rows load async in
+ * renderAuthorRows under a paneGeneration guard.
  *
  * IMPORTANT: interactive elements + all interpolated data are built via the DOM
  * API (createElement + textContent), never innerHTML — Zotero's XUL/XHTML pane
@@ -162,7 +164,9 @@ function renderEmptyState(
   // the whole tree. (ADV-U2)
   clearSuggestionAria(container);
   const s = EMPTY_STATES[key];
-  container.innerHTML = `<div class="${s.cls}">${s.html}</div>`;
+  // Wrapped in a card so loading/empty states sit on the same surface as real
+  // content: no bare text line, and no layout jump when the cards replace them.
+  container.innerHTML = `<div class="cg-card cg-state-card"><div class="${s.cls}">${s.html}</div></div>`;
   setSummary(s.summary);
 }
 
@@ -258,18 +262,36 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
           #citegeist-pane-root {
             font-family: var(--cg-font);
             font-feature-settings: 'kern' 1, 'liga' 1;
-            /* 12px top/side, 16px bottom — content sits on the 4pt grid; the
-               full-bleed hairline negates the 12px side padding (see .cg-hairline). */
-            padding: var(--cg-space-3) var(--cg-space-3) var(--cg-space-4);
-            /* Cap the content so a dragged-wide item pane doesn't stretch the hero
-               chip, the buttons, and the author rows apart (name→chevron gap grows
-               unbounded otherwise). Left-aligned; extra pane width becomes right
-               margin. Composition is tuned for ~320px; 26rem is a comfortable ceiling. */
-            max-width: 26rem;
+            /* Even 12px gutter; each card owns its inner padding and the content
+               column owns the gap BETWEEN cards, so spacing is systematic rather
+               than a pile of per-element margins. */
+            padding: var(--cg-space-3);
+            /* Deliberately no max-width: the cards are meant to FILL a dragged-wide
+               pane (the old 26rem cap left dead space on the right). Nothing
+               stretches badly now — the hero is left-grouped and the author list
+               reflows into columns. */
             font-size: var(--cg-size-footnote);
             line-height: 1.5;
             color: var(--cg-text-primary);
           }
+
+          /* Card stack — one systematic gap; layout does the spacing. */
+          #citegeist-content {
+            display: flex;
+            flex-direction: column;
+            gap: var(--cg-space-3);
+          }
+
+          /* Each card's uppercase title sits above its content. */
+          .cg-card-title { display: block; margin-bottom: var(--cg-space-2); }
+
+          /* Pane-local card fill. The shared .cg-card primitive uses
+             --cg-surface-elevated, which is #FFFFFF in light mode — identical to
+             Zotero's own item-pane background, so the card would read as nothing
+             but a 1px hairline. The sunken tint reads as a real grouped box
+             against the host background in BOTH themes, which is the entire point
+             of grouping. Border stays for definition. */
+          #citegeist-pane-root .cg-card { background: var(--cg-surface-sunken); }
           .cg-loading {
             color: var(--cg-text-secondary);
             display: flex;
@@ -302,17 +324,16 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
             color: var(--cg-danger);
             font-weight: 600;
             font-size: 11px;
-            margin-bottom: 8px;
           }
 
           /* ── Hero: the citation count is the single largest element on the
-             surface (composition rule 2). Number + label share a baseline; the
-             top-percentile chip is the only evidence accent, optically centered
-             at the right. See docs/design-system/pane-composition-language.md. ── */
+             surface. Number, label and the top-percentile chip are LEFT-grouped as
+             one unit; a right-aligned chip drifts absurdly far from the number it
+             qualifies once the pane is dragged wide (the old "stretched" look). ── */
           .cg-hero {
             display: flex;
             align-items: baseline;
-            justify-content: space-between;
+            flex-wrap: wrap;
             gap: var(--cg-space-2);
           }
           .cg-hero-main {
@@ -353,23 +374,24 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
 
           /* ── Action row: two peer explore buttons (tinted, equal width). The
              hero number is the one hero, so neither action is a filled primary.
-             .cg-actions / .cg-btn come from cgComponents(); the row's own top
-             margin (16, off the metric line) is the only local override. ── */
-          #citegeist-pane-root .cg-actions { margin: var(--cg-space-4) 0 0; }
+             .cg-actions / .cg-btn come from cgComponents(); inside the Impact card
+             the card padding owns the bottom space, so only the 12px top margin is
+             local. Vertical padding is tightened from the primitive's 14px: a 44px
+             control is right for the dialog, too heavy for two side-by-side
+             actions in a 320px sidebar card. ── */
+          #citegeist-pane-root .cg-actions { margin: var(--cg-space-3) 0 0; }
+          #citegeist-pane-root .cg-actions > .cg-btn { padding: var(--cg-space-2) var(--cg-space-3); }
 
-          /* ── Full-bleed hairline separating impact from authors (rule 6). Negates
-             the 12px side padding so it spans the pane edge-to-edge. ── */
-          .cg-hairline {
-            height: 0;
-            border: none;
-            border-top: 1px solid var(--cg-hairline);
-            margin: var(--cg-space-4) calc(-1 * var(--cg-space-3)) 0;
+          /* ── Authors: link rows (name · h-index · chevron) inside their own card.
+             The card boundary replaces the old full-bleed hairline. Each row is a
+             clickable unit → the author-works dialog, so a hover tint is earned; a
+             border is not. The list reflows into columns as the pane widens, which
+             is what actually consumes the extra horizontal space. ── */
+          .cg-authorlist {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 0 var(--cg-space-3);
           }
-
-          /* ── Authors: eyebrow + link rows (name · h-index · chevron). Each row
-             is a clickable unit → the author-works dialog, so a hover tint is
-             earned; a border is not (rule 1). ── */
-          .cg-authors-eyebrow { display: block; margin: var(--cg-space-4) 0 var(--cg-space-1); }
           .cg-authorrow {
             display: flex;
             align-items: center;
@@ -412,7 +434,6 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
              from the shared .cg-card primitive; this keeps only the card's own
              outer spacing + base type. (.cg-match-banner was dead — removed.) */
           .cg-match-card {
-            margin-bottom: var(--cg-space-3);
             font-size: 11px;
             line-height: 1.5;
           }
@@ -463,6 +484,13 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
           #citegeist-pane-root .cg-match-verify:hover {
             text-decoration: underline;
           }
+          /* Keep the focus treatment identical to every other interactive element
+             in the pane (.cg-btn, .cg-authorrow) instead of falling through to
+             Zotero's default outline. */
+          #citegeist-pane-root .cg-match-verify:focus-visible {
+            outline: 2px solid var(--cg-sage-accent);
+            outline-offset: 2px;
+          }
           /* Confirm / "Not this paper" reuse the shared .cg-btn / .cg-btn--filled /
              .cg-btn--tinted primitives (assigned in renderSuggestion) so they
              match the data view's buttons exactly. Only the :disabled hook above
@@ -470,13 +498,12 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
           /* DOI-prompt chrome comes from the shared .cg-banner primitive (incl.
              its strong block heading); this keeps only the outer spacing. No
              angle brackets in pane-style comments — see the CDATA note above. */
-          .cg-doi-prompt {
-            margin-top: var(--cg-space-3);
-          }
+          /* No margin here: the prompt is a flex child of #citegeist-content,
+             which already owns the gap. Actions sit on the 4pt grid. */
           .cg-doi-prompt-actions {
             display: flex;
-            gap: 6px;
-            margin-top: 6px;
+            gap: var(--cg-space-2);
+            margin-top: var(--cg-space-2);
           }
           /* DOI-prompt buttons use the shared .cg-btn--sm primitive
              (assigned in renderDoiPrompt) — see ui/components.ts. */
@@ -926,6 +953,15 @@ function renderPane(
   const isBook = isBookType(item);
   const suppressCount = isBook && data.citedByCount === 0;
 
+  // ── Impact card: hero count + supporting metrics + the two explore actions,
+  // in one titled box. ──
+  const impact = doc.createElement("div");
+  impact.className = "cg-card cg-impact-card";
+  const impactTitle = doc.createElement("span");
+  impactTitle.className = "cg-eyebrow cg-card-title";
+  impactTitle.textContent = "Impact";
+  impact.appendChild(impactTitle);
+
   if (!suppressCount) {
     // ── Hero: the citation count is the single largest element ──
     const hero = doc.createElement("div");
@@ -954,7 +990,7 @@ function renderPane(
       chipWrap.appendChild(chip);
       hero.appendChild(chipWrap);
     }
-    container.appendChild(hero);
+    impact.appendChild(hero);
 
     // ── Supporting-metric line: FWCI · percentile · trend ──
     const line = doc.createElement("div");
@@ -986,12 +1022,12 @@ function renderPane(
       addSep();
       line.appendChild(doc.createTextNode(trend));
     }
-    if (!first) container.appendChild(line);
+    if (!first) impact.appendChild(line);
   } else {
     const note = doc.createElement("div");
     note.className = "cg-booknote";
     note.textContent = "Citation tracking for books is limited in OpenAlex.";
-    container.appendChild(note);
+    impact.appendChild(note);
   }
 
   // ── Action row: two peer explore buttons (tinted, equal width) ──
@@ -1027,7 +1063,8 @@ function renderPane(
   actions.appendChild(
     makeActionButton("References \u2192", "View works cited by this paper", "references"),
   );
-  container.appendChild(actions);
+  impact.appendChild(actions);
+  container.appendChild(impact);
 
   // \u2500\u2500 Authors: async link rows (name, h-index, chevron; tap opens author works) \u2500\u2500
   const authorsRegion = doc.createElement("div");
@@ -1042,8 +1079,8 @@ function renderPane(
 /**
  * Load and render the author link rows into `region`. Author reads are async
  * (no sync mirror, pane-only), so this runs after the synchronous metric render
- * and appends when ready. The eyebrow + hairline live INSIDE the populated
- * region so a resolved-author-less item shows no dangling separator. Guarded by
+ * and appends when ready. The whole card is built INSIDE the populated region so
+ * an item with no resolved authors shows no empty card. Guarded by
  * `paneGeneration`: an item switch mid-load drops the write.
  */
 async function renderAuthorRows(
@@ -1069,14 +1106,17 @@ async function renderAuthorRows(
     if (vms.length === 0) return;
 
     region.textContent = "";
-    const hr = doc.createElement("div");
-    hr.className = "cg-hairline";
-    region.appendChild(hr);
-    const eyebrow = doc.createElement("span");
-    eyebrow.className = "cg-eyebrow cg-authors-eyebrow";
-    eyebrow.textContent = "Authors";
-    region.appendChild(eyebrow);
-    for (const vm of vms) region.appendChild(authorRow(doc, vm));
+    const card = doc.createElement("div");
+    card.className = "cg-card cg-authors-card";
+    const title = doc.createElement("span");
+    title.className = "cg-eyebrow cg-card-title";
+    title.textContent = "Authors";
+    card.appendChild(title);
+    const list = doc.createElement("div");
+    list.className = "cg-authorlist";
+    for (const vm of vms) list.appendChild(authorRow(doc, vm));
+    card.appendChild(list);
+    region.appendChild(card);
   } catch (e) {
     if (gen !== paneGeneration) return;
     logError("renderAuthorRows", e);
@@ -1094,6 +1134,9 @@ function authorRow(doc: Document, vm: AuthorRowViewModel): HTMLElement {
   const name = doc.createElement("span");
   name.className = "cg-authorrow-name";
   name.textContent = vm.name;
+  // Long names ellipsis at the grid's 190px column minimum; the tooltip is the
+  // sighted-mouse equivalent of the button's aria-label.
+  name.title = vm.name;
   btn.appendChild(name);
 
   if (vm.hIndexLabel) {
