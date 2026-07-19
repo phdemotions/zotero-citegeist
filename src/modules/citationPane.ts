@@ -385,12 +385,19 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
           /* ── Authors: link rows (name · h-index · chevron) inside their own card.
              The card boundary replaces the old full-bleed hairline. Each row is a
              clickable unit → the author-works dialog, so a hover tint is earned; a
-             border is not. The list reflows into columns as the pane widens, which
-             is what actually consumes the extra horizontal space. ── */
+             border is not. ── */
           .cg-authorlist {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-            gap: 0 var(--cg-space-3);
+            display: flex;
+            flex-direction: column;
+            /* ONE author per line, always — never a multi-column grid. Authorship
+               order is semantic in academia (first author, senior author), and
+               columns turn an ordered byline into a grid of equals; names also
+               ellipsis badly in a narrow column. Rows run full width, so the extra
+               width of a dragged-wide pane goes to the NAME (fewer truncations)
+               with the h-index column aligned right. The cap engages only on an
+               unusually wide pane, where an unbounded name-to-h-index gap would
+               otherwise read as broken. */
+            max-width: 34rem;
           }
           .cg-authorrow {
             display: flex;

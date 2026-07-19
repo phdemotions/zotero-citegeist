@@ -82,13 +82,16 @@ FWCI 3.42 · 95th percentile · +18% 2024   ← one supporting-metric line (8 be
                                              buttons — tinted, equal width
 - - - - - - - - - - - - - - - - - - - -      (card boundary, 12 gap)
 AUTHORS                                   ← card title
-Baumeister, R. F.   h 164   ›             ← author link rows; the list reflows into
-Vohs, K. D.         h 98    ›                columns as the pane widens
+Baumeister, R. F.              h 164   ›  ← author link rows: ALWAYS one per line;
+Vohs, K. D.                    h 98    ›     h-index aligned right
 ```
 
-The pane has **no max-width**: the cards are meant to fill a dragged-wide pane,
-and the author list reflows (`repeat(auto-fit, minmax(190px, 1fr))`) so extra
-width becomes another column instead of dead space on the right.
+The pane has **no max-width**: the cards are meant to fill a dragged-wide pane.
+The author list is **always a single column** — authorship order is semantic
+(first author, senior author), so a multi-column grid would turn an ordered
+byline into a grid of equals. Extra width goes to the author *name* (fewer
+truncations), with the h-index aligned right; the list caps at `34rem` purely so
+the name-to-h-index gap can't grow unbounded on an unusually wide pane.
 
 Author rows are **links, not curation** — tap a name to open that author's works
 in the citation-network browser (author mode). No confirm/override, no state
