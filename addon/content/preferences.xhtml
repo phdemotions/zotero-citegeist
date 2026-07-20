@@ -54,6 +54,24 @@
       style="font-size: 11px; margin-top: 6px; display: none;" />
   </groupbox>
 
+  <groupbox>
+    <label><html:h2>Troubleshooting</html:h2></label>
+
+    <description style="font-size: 11px; opacity: 0.7;">
+      If something isn't working, copy the diagnostic report and paste it into your GitHub issue. It contains your Citegeist build, your Zotero version, and the problems recorded this session — no library content and no personal details.
+    </description>
+
+    <hbox align="center" style="margin-top: 8px;">
+      <html:button id="citegeist-copy-report-btn">Copy diagnostic report</html:button>
+      <html:button id="citegeist-clear-report-btn" style="margin-left: 8px;">Clear</html:button>
+      <spacer flex="1" />
+      <label id="citegeist-report-status" style="font-size: 11px; opacity: 0.7;" />
+    </hbox>
+
+    <html:pre id="citegeist-report-preview"
+      style="font-size: 11px; line-height: 1.5; max-height: 180px; overflow: auto; margin-top: 8px; white-space: pre-wrap; word-break: break-word; opacity: 0.8;" />
+  </groupbox>
+
   <html:script><![CDATA[
     (function () {
       const ADDON_ID = "__addonID__";
@@ -107,6 +125,58 @@
 
         btn.disabled = false;
       });
+
+      /* Troubleshooting. Zotero.Citegeist is installed by hooks.onStartup.
+         This pane is a standalone document that cannot import from the
+         bundle, so it calls through that bridge rather than reimplementing
+         the report - one implementation, no drift. */
+      const copyBtn = document.getElementById("citegeist-copy-report-btn");
+      const clearBtn = document.getElementById("citegeist-clear-report-btn");
+      const preview = document.getElementById("citegeist-report-preview");
+      const reportStatus = document.getElementById("citegeist-report-status");
+
+      function diagnostics() {
+        return Zotero.Citegeist || null;
+      }
+
+      function refreshPreview() {
+        const cg = diagnostics();
+        if (!cg) {
+          preview.textContent =
+            "Diagnostics unavailable \u2014 restart Zotero so Citegeist can finish loading.";
+          copyBtn.disabled = true;
+          clearBtn.disabled = true;
+          return;
+        }
+        preview.textContent = cg.buildDiagnosticReport({});
+      }
+
+      function setReportStatus(msg) {
+        reportStatus.setAttribute("value", msg);
+        /* Cleared after a beat so the label does not read as permanent state. */
+        setTimeout(function () { reportStatus.setAttribute("value", ""); }, 4000);
+      }
+
+      copyBtn.addEventListener("click", () => {
+        const cg = diagnostics();
+        if (!cg) return;
+        try {
+          Zotero.Utilities.Internal.copyTextToClipboard(cg.buildDiagnosticReport({}));
+          setReportStatus("Copied to clipboard");
+        } catch {
+          setReportStatus("Couldn\u2019t copy \u2014 select the text below instead");
+        }
+      });
+
+      clearBtn.addEventListener("click", () => {
+        const cg = diagnostics();
+        if (!cg) return;
+        cg.clearDiagnostics();
+        refreshPreview();
+        setReportStatus("Cleared");
+      });
+
+      refreshPreview();
     })();
   ]]></html:script>
 

@@ -195,6 +195,10 @@ declare namespace _ZoteroTypes {
 
 declare const Zotero: {
   version: string;
+  /** Host platform string, e.g. "MacIntel". Used in the diagnostic report. */
+  platform?: string;
+  /** Active UI locale, e.g. "en-US". Used in the diagnostic report. */
+  locale?: string;
   debug(msg: string, level?: number): void;
   log(msg: string): void;
   getActiveZoteroPane(): {

@@ -145,3 +145,14 @@ export const TITLE_MATCH_MEDIUM_THRESHOLD = 0.72;
 export const TITLE_SEARCH_RESULTS = 5;
 /** Days before retrying a dismissed or no-match item. */
 export const NO_MATCH_RETRY_DAYS = 30;
+
+// ── Diagnostics ──
+/**
+ * How many recent failures the in-memory diagnostic ring buffer keeps.
+ *
+ * Sized for one debugging session's worth of context in a copy-pasted bug
+ * report: big enough that the failure *before* the visible one is still there
+ * (usually the real cause), small enough that the report stays readable in a
+ * GitHub comment.
+ */
+export const DIAGNOSTIC_RING_BUFFER_SIZE = 50;

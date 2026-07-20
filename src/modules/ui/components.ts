@@ -155,6 +155,33 @@ export function cgComponents(scope: string): string {
       color: var(--cg-text-tertiary);
     }
 
+    /* Diagnostic block (coded failure state). Deliberately near-cardless: the
+       message reads as body copy, and the machine-facing detail sits behind a
+       divider, disclosed only on request. A failure should not shout with a
+       box and a colour when what the user needs is a sentence and, if they
+       want it, a code to quote. Neutral by design: sage means ACTION and amber
+       means EVIDENCE, so neither may be spent on an error. */
+    ${scope} .cg-diag { font-size: var(--cg-size-footnote); line-height: 1.5; color: var(--cg-text-secondary); }
+    ${scope} .cg-diag-msg { margin: 0 0 var(--cg-space-2) 0; }
+    ${scope} .cg-diag-disclosure { border-top: 1px solid var(--cg-hairline); padding-top: var(--cg-space-2); }
+    ${scope} .cg-diag-detail {
+      margin: var(--cg-space-2) 0 0 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: var(--cg-size-caption);
+      line-height: 1.6;
+      color: var(--cg-text-tertiary);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    ${scope} .cg-diag-code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: var(--cg-size-caption);
+      color: var(--cg-text-tertiary);
+      background: var(--cg-neutral-tint);
+      border-radius: var(--cg-radius-sm);
+      padding: 1px 5px;
+    }
+
     @media (prefers-reduced-motion: reduce) {
       ${scope} .cg-btn { transition: none; }
       ${scope} .cg-btn:active { transform: none; }

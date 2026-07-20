@@ -37,7 +37,8 @@ import {
   getTitleMatchMeta,
 } from "./cache";
 import { searchByMetadata, type TitleMatchResult } from "./titleSearch";
-import { OpenAlexNetworkError, OpenAlexBudgetError, logError } from "./utils";
+import { OpenAlexNetworkError, OpenAlexBudgetError, codeForError, logError } from "./utils";
+import type { DiagnosticCode } from "./diagnostics";
 import { BULK_FETCH_DELAY_MS, NO_MATCH_RETRY_DAYS } from "../constants";
 
 /**
@@ -68,7 +69,17 @@ export type FetchError =
 export type FetchResult =
   | { status: "ok"; work: OpenAlexWork }
   | { status: "cached" }
-  | { status: "error"; error: FetchError }
+  | {
+      status: "error";
+      error: FetchError;
+      /**
+       * Diagnostic code for the underlying failure, when one is known. Lets the
+       * pane show the specific explanation — "today's OpenAlex budget is spent,
+       * add a key" — instead of a generic "something went wrong", and gives a
+       * bug report something to quote.
+       */
+      code?: DiagnosticCode;
+    }
   | { status: "suggestion"; candidate: OpenAlexWork; tier: "high" | "medium"; confidence: number };
 
 /** A resolved identifier ready for an OpenAlex lookup. */
@@ -223,7 +234,7 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
     return await fetchAndCacheItemInner(item);
   } catch (e) {
     logError(`fetchAndCacheItem(${item.id})`, e);
-    return { status: "error", error: "unexpected" };
+    return { status: "error", error: "unexpected", code: codeForError(e) };
   }
 }
 

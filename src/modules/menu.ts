@@ -24,6 +24,7 @@ import {
 } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import { showCitationNetwork } from "./citationNetwork";
+import { guard } from "./diagnostics";
 import { logError } from "./utils";
 
 const MENU_IDS = {
@@ -77,6 +78,31 @@ interface MenuManagerOptions {
   pluginID: string;
   target: string;
   menus: MenuManagerMenuData[];
+}
+
+/**
+ * Wrap every handler in a menu tree with an error boundary, recursing into
+ * submenus.
+ *
+ * Applied once at the `registerMenu` call rather than at each handler, so a
+ * menu item added later is protected without anyone remembering to wrap it.
+ * A throwing `onCommand` does nothing at all from the user's side — the menu
+ * closes and no work happens — and a throwing `onShowing` can break the whole
+ * popup, so neither can be left bare.
+ */
+function guardMenus(menus: MenuManagerMenuData[]): MenuManagerMenuData[] {
+  return menus.map((menu) => ({
+    ...menu,
+    onShowing: menu.onShowing
+      ? (e: Event, ctx: MenuManagerContext) =>
+          guard(`menu onShowing ${menu.l10nID ?? menu.menuType}`, () => menu.onShowing?.(e, ctx))
+      : undefined,
+    onCommand: menu.onCommand
+      ? (e: Event, ctx: MenuManagerContext) =>
+          guard(`menu onCommand ${menu.l10nID ?? menu.menuType}`, () => menu.onCommand?.(e, ctx))
+      : undefined,
+    menus: menu.menus ? guardMenus(menu.menus) : undefined,
+  }));
 }
 
 interface ZoteroMenuManager {
@@ -458,7 +484,7 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
     menuID: MM_ITEM_MENU_ID,
     pluginID,
     target: "main/library/item",
-    menus: [
+    menus: guardMenus([
       {
         menuType: "menuitem",
         // l10nID, NOT label: the MenuManager schema has no `label` field — it
@@ -510,7 +536,7 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
           );
         },
       },
-    ],
+    ]),
   });
   if (itemResult === false) return false;
 
@@ -518,7 +544,7 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
     menuID: MM_COLLECTION_MENU_ID,
     pluginID,
     target: "main/library/collection",
-    menus: [
+    menus: guardMenus([
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-fetch-collection",
@@ -539,7 +565,7 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
           );
         },
       },
-    ],
+    ]),
   });
   if (collectionResult === false) {
     // Roll back the item menu so we don't leave a half-registered set, then

@@ -39,7 +39,14 @@ import {
   persistProfileMetrics,
   type AuthorRowViewModel,
 } from "./authorProfile";
-import { logError, isBookType, toOrdinal } from "./utils";
+import { codeForError, logError, isBookType, toOrdinal } from "./utils";
+import {
+  buildDiagnosticReport,
+  describeCode,
+  guard,
+  guardAsync,
+  type DiagnosticCode,
+} from "./diagnostics";
 import { cgDesignTokens } from "./ui/tokens";
 import { cgComponents } from "./ui/components";
 import { resolveHostScheme } from "./ui/theme";
@@ -159,11 +166,6 @@ const EMPTY_STATES = {
   // borrowing "not found", which sends the user hunting for a data problem that
   // isn't there. See docs/ISSUES.md — the user-facing error-code surface that
   // makes this self-diagnosable is designed separately.
-  unexpected: {
-    html: "Citegeist hit an unexpected problem loading this item. Use the refresh button to try again; if it keeps happening, check Help → Debug Output Logging.",
-    summary: "Error",
-    cls: "cg-no-identifier",
-  },
   confirmLoading: { html: "Loading…", summary: "Loading…", cls: "cg-loading" },
   matchSaved: {
     html: "Match confirmed — the metrics didn’t load just yet. Use the refresh button to try again.",
@@ -188,6 +190,98 @@ function renderEmptyState(
   // content: no bare text line, and no layout jump when the cards replace them.
   container.innerHTML = `<div class="cg-card cg-state-card"><div class="${s.cls}">${s.html}</div></div>`;
   setSummary(s.summary);
+}
+
+/**
+ * Copy text to the system clipboard. Not in the typings, hence the cast —
+ * same idiom as {@link openCitegeistSettings}.
+ */
+function copyToClipboard(text: string): boolean {
+  try {
+    (
+      Zotero as unknown as {
+        Utilities: { Internal: { copyTextToClipboard(s: string): void } };
+      }
+    ).Utilities.Internal.copyTextToClipboard(text);
+    return true;
+  } catch (e) {
+    logError("copyToClipboard", e);
+    return false;
+  }
+}
+
+/**
+ * Render a coded failure state.
+ *
+ * The shape is deliberate: a plain sentence the user can act on, and the
+ * machine-facing detail — code, call site, build, host — behind a disclosure.
+ * Most users never open it; the ones filing an issue get everything a
+ * maintainer would otherwise have to ask for, in one paste. Nothing here is
+ * coloured: sage means ACTION and amber means EVIDENCE in this design system,
+ * so an error may spend neither.
+ */
+function renderDiagnosticState(
+  container: HTMLElement,
+  setSummary: (s: string) => void,
+  code: DiagnosticCode,
+  context: string,
+): void {
+  clearSuggestionAria(container);
+  const entry = describeCode(code);
+  const doc = container.ownerDocument;
+
+  container.innerHTML = "";
+  const card = doc.createElement("div");
+  card.className = "cg-card cg-state-card";
+  const wrap = doc.createElement("div");
+  wrap.className = "cg-diag";
+
+  const msg = doc.createElement("p");
+  msg.className = "cg-diag-msg";
+  msg.textContent = entry.message;
+  wrap.appendChild(msg);
+
+  const disclosure = doc.createElement("div");
+  disclosure.className = "cg-diag-disclosure";
+
+  const toggle = doc.createElement("button");
+  toggle.className = "cg-btn cg-btn--plain cg-btn--sm";
+  toggle.textContent = "Details";
+  toggle.setAttribute("aria-expanded", "false");
+
+  const detail = doc.createElement("p");
+  detail.className = "cg-diag-detail";
+  detail.style.display = "none";
+  detail.textContent = buildDiagnosticReport({ code, context });
+
+  const copy = doc.createElement("button");
+  copy.className = "cg-btn cg-btn--sm";
+  copy.textContent = "Copy report";
+  copy.style.display = "none";
+  copy.style.marginTop = "8px";
+
+  toggle.addEventListener("click", () => {
+    const open = detail.style.display === "none";
+    detail.style.display = open ? "" : "none";
+    copy.style.display = open ? "" : "none";
+    toggle.setAttribute("aria-expanded", String(open));
+  });
+  copy.addEventListener("click", () => {
+    // Report is rebuilt on copy, not reused from the disclosure: anything that
+    // failed while the panel sat open belongs in what the user pastes.
+    copy.textContent = copyToClipboard(buildDiagnosticReport({ code, context }))
+      ? "Copied"
+      : "Couldn't copy";
+  });
+
+  disclosure.appendChild(toggle);
+  disclosure.appendChild(detail);
+  disclosure.appendChild(copy);
+  wrap.appendChild(disclosure);
+  card.appendChild(wrap);
+  container.appendChild(card);
+
+  setSummary("Error");
 }
 
 function clearSuggestionAria(container: HTMLElement): void {
@@ -509,42 +603,54 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
         <div id="citegeist-content"></div>
       </div>
     `,
-      onItemChange: ({ item, setEnabled }) => {
-        // Bump the generation token so any in-flight onAsyncRender / onConfirm
-        // from the previous item's fetch detects the mismatch on resume and
-        // drops its DOM write instead of clobbering the new item's pane.
-        paneGeneration++;
-        // Also disable for trashed items — without this the pane stays
-        // interactive on items in the trash, letting users confirm matches
-        // or fetch citations against records that will be hard-deleted.
-        setEnabled(item.isRegularItem() && !item.deleted);
-      },
-      onRender: ({ body, item, setSectionSummary }) => {
-        applyHostScheme(body);
-        const container = body.querySelector("#citegeist-content") as HTMLElement;
-        if (!container) return;
+      onItemChange: ({ item, setEnabled }) =>
+        guard("pane onItemChange", () => {
+          // Bump the generation token so any in-flight onAsyncRender / onConfirm
+          // from the previous item's fetch detects the mismatch on resume and
+          // drops its DOM write instead of clobbering the new item's pane.
+          paneGeneration++;
+          // Also disable for trashed items — without this the pane stays
+          // interactive on items in the trash, letting users confirm matches
+          // or fetch citations against records that will be hard-deleted.
+          setEnabled(item.isRegularItem() && !item.deleted);
+        }),
+      onRender: ({ body, item, setSectionSummary }) =>
+        guard(
+          "pane onRender",
+          () => {
+            applyHostScheme(body);
+            const container = body.querySelector("#citegeist-content") as HTMLElement;
+            if (!container) return;
 
-        const cached = getCachedData(item);
-        if (cached) {
-          renderPane(container, cached, item);
-          setSectionSummary(citationSummary(cached.citedByCount, item));
-          return;
-        }
+            const cached = getCachedData(item);
+            if (cached) {
+              renderPane(container, cached, item);
+              setSectionSummary(citationSummary(cached.citedByCount, item));
+              return;
+            }
 
-        // Check for a pending unconfirmed suggestion from a previous fetch
-        const suggestion = getPendingSuggestion(item);
-        if (suggestion) {
-          renderSuggestion(container, suggestion, item, setSectionSummary);
-          return;
-        }
+            // Check for a pending unconfirmed suggestion from a previous fetch
+            const suggestion = getPendingSuggestion(item);
+            if (suggestion) {
+              renderSuggestion(container, suggestion, item, setSectionSummary);
+              return;
+            }
 
-        if (!extractIdentifier(item)) {
-          renderEmptyState(container, setSectionSummary, "noIdentifier");
-          return;
-        }
+            if (!extractIdentifier(item)) {
+              renderEmptyState(container, setSectionSummary, "noIdentifier");
+              return;
+            }
 
-        renderEmptyState(container, setSectionSummary, "loading");
-      },
+            renderEmptyState(container, setSectionSummary, "loading");
+          },
+          // Zotero paints the section from this callback; a throw here leaves an
+          // empty panel with no explanation anywhere the user can reach.
+          (code) => {
+            const container = body.querySelector("#citegeist-content") as HTMLElement;
+            if (container)
+              renderDiagnosticState(container, setSectionSummary, code, "pane onRender");
+          },
+        ),
       onAsyncRender: async ({ body, item, setSectionSummary }) => {
         applyHostScheme(body);
         const container = body.querySelector("#citegeist-content") as HTMLElement;
@@ -564,7 +670,12 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
         } catch (e) {
           logError("pane onAsyncRender", e);
           if (gen === paneGeneration && !getCachedData(item)) {
-            renderEmptyState(container, setSectionSummary, "unexpected");
+            renderDiagnosticState(
+              container,
+              setSectionSummary,
+              codeForError(e),
+              "pane onAsyncRender",
+            );
           }
         }
         return;
@@ -594,15 +705,22 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
               invalidateColumnCache(item.id);
             }
           } else if (result.status === "error" && !alreadyCached) {
-            const key =
-              result.error === "network"
-                ? "unavailable"
-                : result.error === "no-match"
-                  ? "notFoundTitle"
-                  : result.error === "unexpected"
-                    ? "unexpected"
-                    : "notFound";
-            renderEmptyState(container, setSectionSummary, key);
+            // "Not on OpenAlex" and "no identifier" are outcomes, not failures —
+            // plain copy, no diagnostic affordance, so the pane stays quiet when
+            // nothing is actually broken. A network or unexpected failure gets
+            // the coded state, because that is what a user ends up reporting.
+            if (result.error === "no-match") {
+              renderEmptyState(container, setSectionSummary, "notFoundTitle");
+            } else if (result.error === "not-found" || result.error === "no-identifier") {
+              renderEmptyState(container, setSectionSummary, "notFound");
+            } else {
+              renderDiagnosticState(
+                container,
+                setSectionSummary,
+                result.code ?? (result.error === "network" ? "CG-NET01" : "CG-BUG01"),
+                `pane fetch (item ${item.id})`,
+              );
+            }
           }
         }
       },
@@ -614,60 +732,76 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
           // a plain string is dropped and the button gets no tooltip. Text comes
           // from the FTL's `.tooltiptext` (see citegeist-pane-refresh).
           l10nID: "citegeist-pane-refresh",
-          onClick: async ({ body, item, setSectionSummary }) => {
-            // Per-item gate: spam-click on item A must not silently swallow a
-            // refresh on item B.
-            if (refreshing.has(item.id)) return;
-            refreshing.add(item.id);
-            // Bump the generation token so any in-flight onConfirm / async
-            // render handler resuming after this `clearCache` call bails
-            // instead of writing stale post-confirm state over the now-empty
-            // pane.
-            paneGeneration++;
-            const gen = paneGeneration;
-            try {
-              const container = body.querySelector("#citegeist-content") as HTMLElement;
-              if (container) renderEmptyState(container, setSectionSummary, "refreshing");
-              await clearCache(item); // wide-clear: also nukes pending suggestion
-              const result = await fetchAndCacheItem(item);
-              if (gen !== paneGeneration) return;
-              const cached = getCachedData(item);
-              if (container) {
-                if (cached) {
-                  renderPane(
-                    container,
-                    cached,
-                    item,
-                    result.status === "ok" ? result.work : undefined,
-                  );
-                  setSectionSummary(citationSummary(cached.citedByCount, item));
-                  invalidateColumnCache(item.id);
-                } else if (result.status === "suggestion") {
-                  const suggestion = getPendingSuggestion(item);
-                  if (suggestion) {
-                    renderSuggestion(container, suggestion, item, setSectionSummary);
-                    invalidateColumnCache(item.id);
+          onClick: ({ body, item, setSectionSummary }) =>
+            guardAsync(
+              "pane refresh button",
+              async () => {
+                // Per-item gate: spam-click on item A must not silently swallow a
+                // refresh on item B.
+                if (refreshing.has(item.id)) return;
+                refreshing.add(item.id);
+                // Bump the generation token so any in-flight onConfirm / async
+                // render handler resuming after this `clearCache` call bails
+                // instead of writing stale post-confirm state over the now-empty
+                // pane.
+                paneGeneration++;
+                const gen = paneGeneration;
+                try {
+                  const container = body.querySelector("#citegeist-content") as HTMLElement;
+                  if (container) renderEmptyState(container, setSectionSummary, "refreshing");
+                  await clearCache(item); // wide-clear: also nukes pending suggestion
+                  const result = await fetchAndCacheItem(item);
+                  if (gen !== paneGeneration) return;
+                  const cached = getCachedData(item);
+                  if (container) {
+                    if (cached) {
+                      renderPane(
+                        container,
+                        cached,
+                        item,
+                        result.status === "ok" ? result.work : undefined,
+                      );
+                      setSectionSummary(citationSummary(cached.citedByCount, item));
+                      invalidateColumnCache(item.id);
+                    } else if (result.status === "suggestion") {
+                      const suggestion = getPendingSuggestion(item);
+                      if (suggestion) {
+                        renderSuggestion(container, suggestion, item, setSectionSummary);
+                        invalidateColumnCache(item.id);
+                      }
+                    } else if (
+                      result.status === "error" &&
+                      (result.error === "network" || result.error === "unexpected")
+                    ) {
+                      renderDiagnosticState(
+                        container,
+                        setSectionSummary,
+                        result.code ?? (result.error === "network" ? "CG-NET01" : "CG-BUG01"),
+                        `pane refresh (item ${item.id})`,
+                      );
+                    } else {
+                      renderEmptyState(container, setSectionSummary, "notFound");
+                    }
                   }
-                } else {
-                  renderEmptyState(
-                    container,
-                    setSectionSummary,
-                    result.status === "error" && result.error === "network"
-                      ? "unavailable"
-                      : "notFound",
-                  );
+                } finally {
+                  refreshing.delete(item.id);
                 }
-              }
-            } finally {
-              refreshing.delete(item.id);
-            }
-          },
+              },
+              // The refresh button is the user's retry affordance. If it throws,
+              // the pane is stuck on "Refreshing…" and the one control that could
+              // recover it is the one that broke.
+              (code) => {
+                const container = body.querySelector("#citegeist-content") as HTMLElement;
+                if (container)
+                  renderDiagnosticState(container, setSectionSummary, code, "pane refresh button");
+              },
+            ),
         },
         {
           type: "citegeist-settings",
           icon: "chrome://zotero/skin/16/universal/options.svg",
           l10nID: "citegeist-pane-settings",
-          onClick: () => openCitegeistSettings(),
+          onClick: () => guard("pane settings button", () => openCitegeistSettings()),
         },
       ],
     });

@@ -2,6 +2,9 @@
  * Shared utilities for Citegeist.
  */
 
+import { DIAGNOSTIC_CODES, type DiagnosticCode } from "./diagnostics/codes";
+import { recordDiagnostic } from "./diagnostics/record";
+
 /**
  * Safely set innerHTML in Zotero's XUL document context.
  *
@@ -114,9 +117,32 @@ function rawNormalizeError(e: unknown): string {
   }
 }
 
-/** Prefixed debug logger with consistent formatting. */
+/**
+ * Prefixed debug logger, and the single funnel into the diagnostic ring buffer.
+ *
+ * Every caught error in the codebase already flows through here, so recording
+ * at this one point means the diagnostic report has history even though Zotero
+ * debug logging is off — which it always is until after the bug has happened.
+ * The recorded detail is `normalizeError`'s output, so it is API-key-redacted
+ * before it is ever stored.
+ */
 export function logError(context: string, e: unknown): void {
-  Zotero.debug(`[Citegeist] ERROR ${context}: ${normalizeError(e)}`);
+  const detail = normalizeError(e);
+  Zotero.debug(`[Citegeist] ERROR ${context}: ${detail}`);
+  recordDiagnostic(codeForError(e), context, detail);
+}
+
+/**
+ * The diagnostic code for a caught value.
+ *
+ * A {@link CitegeistError} names its own code; anything else is by definition
+ * unclassified, which is exactly what CG-BUG01 means. Resist the temptation to
+ * sniff message text here — a code inferred from a substring silently
+ * mis-classifies the moment an upstream message is reworded, and a wrong code
+ * in a bug report is worse than an honest "unexpected".
+ */
+export function codeForError(e: unknown): DiagnosticCode {
+  return e instanceof CitegeistError ? e.code : "CG-BUG01";
 }
 
 /**
@@ -129,16 +155,55 @@ export function isBookType(item: _ZoteroTypes.Item): boolean {
 }
 
 /**
- * Distinguishes "OpenAlex unreachable" from "work not found" so UI layers
- * can render a helpful message instead of a flat "not found" dead end.
+ * Base class for every failure Citegeist can explain to a user.
+ *
+ * Carrying the diagnostic code on the error itself is what lets a throw travel
+ * from the fetch layer to the pane without anyone re-deriving what went wrong
+ * from a message string. A subclass picks its code once; every UI layer just
+ * reads `.code`.
  */
-export class OpenAlexNetworkError extends Error {
+export class CitegeistError extends Error {
   constructor(
     message: string,
+    public readonly code: DiagnosticCode,
     public readonly cause?: unknown,
   ) {
     super(message);
+    this.name = "CitegeistError";
+  }
+
+  /** The user-facing explanation for this error's code. */
+  get userMessage(): string {
+    return DIAGNOSTIC_CODES[this.code].message;
+  }
+
+  /** True when repeating the same action might succeed shortly. */
+  get retryable(): boolean {
+    return DIAGNOSTIC_CODES[this.code].retryable;
+  }
+}
+
+/**
+ * Distinguishes "OpenAlex unreachable" from "work not found" so UI layers
+ * can render a helpful message instead of a flat "not found" dead end.
+ */
+export class OpenAlexNetworkError extends CitegeistError {
+  constructor(message: string, cause?: unknown) {
+    super(message, "CG-NET01", cause);
     this.name = "OpenAlexNetworkError";
+  }
+}
+
+/**
+ * A local cache read or write failed. Its own class (rather than a bare throw)
+ * because the most common cause is environmental, not a bug: a Zotero data
+ * directory inside Dropbox/iCloud/OneDrive/Box lets the sync client lock the
+ * SQLite file, and CG-DB01 tells the user that in one sentence.
+ */
+export class CacheError extends CitegeistError {
+  constructor(message: string, cause?: unknown) {
+    super(message, "CG-DB01", cause);
+    this.name = "CacheError";
   }
 }
 
@@ -148,9 +213,9 @@ export class OpenAlexNetworkError extends Error {
  * add an API key rather than showing an "unreachable" dead end, and so a
  * bulk pass can stop cleanly instead of caching a spurious "no data".
  */
-export class OpenAlexBudgetError extends Error {
+export class OpenAlexBudgetError extends CitegeistError {
   constructor(message = "OpenAlex daily budget exhausted") {
-    super(message);
+    super(message, "CG-API42");
     this.name = "OpenAlexBudgetError";
   }
 }
@@ -159,9 +224,9 @@ export class OpenAlexBudgetError extends Error {
  * OpenAlex rejected the request's API key (HTTP 401/403). Distinct from a
  * network failure so the UI can prompt the user to re-check their key.
  */
-export class OpenAlexAuthError extends Error {
+export class OpenAlexAuthError extends CitegeistError {
   constructor(message = "OpenAlex rejected the API key") {
-    super(message);
+    super(message, "CG-API01");
     this.name = "OpenAlexAuthError";
   }
 }

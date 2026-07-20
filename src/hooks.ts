@@ -22,6 +22,12 @@ import {
   purgeAllAuthorRelations,
 } from "./modules/cache";
 import { logError } from "./modules/utils";
+import {
+  buildDiagnosticReport,
+  clearDiagnostics,
+  recentDiagnostics,
+  setPluginVersion,
+} from "./modules/diagnostics";
 import { PREF_AUTHOR_RELATIONS_PURGED, PREF_LAST_BACKUP_PATH, SETTINGS_PANE_ID } from "./constants";
 
 // Bare FTL filename. Zotero auto-registers the plugin's locale/<locale>/*.ftl
@@ -37,6 +43,27 @@ const FTL_FILE = "citegeist.ftl";
  * actually loaded.
  */
 declare const __BUILD_ID__: string;
+
+/**
+ * Expose the diagnostics API on a namespaced global.
+ *
+ * The settings pane is a standalone XHTML document with an inline script — it
+ * cannot import from the bundle. Rather than duplicate the report builder
+ * there (where it would immediately drift), the pane calls through this one
+ * object. Namespaced under `Zotero` so it is reachable from any Zotero
+ * document, and removed on shutdown so a disabled plugin leaves nothing behind.
+ */
+function installDiagnosticsBridge(): void {
+  (Zotero as unknown as Record<string, unknown>).Citegeist = {
+    buildDiagnosticReport,
+    recentDiagnostics,
+    clearDiagnostics,
+  };
+}
+
+function removeDiagnosticsBridge(): void {
+  delete (Zotero as unknown as Record<string, unknown>).Citegeist;
+}
 
 interface PluginData {
   id: string;
@@ -57,6 +84,8 @@ export async function onStartup(data: PluginData): Promise<void> {
   rootURI = data.rootURI;
   cacheReady = false;
   setMenuPluginID(pluginID);
+  setPluginVersion(data.version);
+  installDiagnosticsBridge();
   Zotero.debug(`[Citegeist] Starting v${data.version} (build ${__BUILD_ID__})`);
 
   // Initialize the plugin-owned SQLite cache and warm the in-memory mirror
@@ -230,6 +259,7 @@ function showStartupAlert(title: string, body: string): void {
 export async function onShutdown(_data: PluginData): Promise<void> {
   Zotero.debug("[Citegeist] Shutting down");
   cacheReady = false;
+  removeDiagnosticsBridge();
 
   const win = Zotero.getMainWindow() as Window | null;
   // Each UI-teardown step is best-effort: a throw in any one of them must not
