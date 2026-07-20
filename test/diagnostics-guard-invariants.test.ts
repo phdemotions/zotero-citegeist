@@ -200,6 +200,42 @@ describe("host entry points are guarded", () => {
     expect(menu.match(/menus: guardMenus\(\[/g) ?? []).toHaveLength(2);
   });
 
+  it("the network dialog binds every listener through bindGuarded", () => {
+    for (const file of [
+      "src/modules/citationNetwork/dialog.ts",
+      "src/modules/citationNetwork/collectionPicker.ts",
+    ]) {
+      const text = src(file);
+      // A raw addEventListener means a handler whose throw goes nowhere: the
+      // click silently does nothing and the modal reads as frozen. The two
+      // permitted exceptions are the `earlyClose` bindings, which must keep
+      // their identity so removeEventListener can find them.
+      const raw = [...text.matchAll(/\.addEventListener\(\s*"[^"]+"\s*,\s*(\S+)/g)]
+        .map((m) => m[1])
+        .filter((handler) => !handler.startsWith("earlyClose"));
+      expect(raw, `${file} has raw listeners`).toEqual([]);
+      expect(text).toContain("bindGuarded(");
+    }
+  });
+
+  it("the dialog renders coded failure states instead of hand-written copy", () => {
+    const dialog = src("src/modules/citationNetwork/dialog.ts");
+    expect(dialog).toContain("renderDialogDiagnostic");
+    expect(dialog).toContain("buildDiagnosticElement");
+    // The old copy told the user nothing and gave a report nothing to quote.
+    expect(dialog).not.toContain("An unexpected error occurred");
+  });
+
+  it("there is exactly one error classifier — codeForError, not a parallel mapper", () => {
+    // profileErrorState mapped the same errors to a second, unrelated vocabulary.
+    // Two classifiers drift; the registry is the single source.
+    for (const file of ["src/modules/authorProfile.ts", "src/modules/citationNetwork/dialog.ts"]) {
+      expect(src(file), `${file} still has a parallel classifier`).not.toContain(
+        "profileErrorState",
+      );
+    }
+  });
+
   it("logError is the single funnel that records — no module records directly", () => {
     const utils = src("src/modules/utils.ts");
     expect(utils).toContain("recordDiagnostic(codeForError(e), context, detail)");

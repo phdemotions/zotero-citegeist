@@ -20,14 +20,12 @@ vi.mock("../src/modules/cache/authors", () => cacheMocks);
 
 vi.stubGlobal("Zotero", { debug: vi.fn() });
 
-import { OpenAlexBudgetError, OpenAlexAuthError } from "../src/modules/utils";
 import {
   formatMetric,
   buildProfileViewModel,
   buildAuthorRowViewModels,
   compactTrend,
   getAuthorCreators,
-  profileErrorState,
   maybeReconcileMerge,
 } from "../src/modules/authorProfile";
 
@@ -125,14 +123,6 @@ describe("buildAuthorRowViewModels", () => {
     expect(buildAuthorRowViewModels([], itemAuthors, byId)).toEqual([
       { position: 3, name: "Jane", authorId: "A1", hIndexLabel: "h 20" },
     ]);
-  });
-});
-
-describe("profileErrorState", () => {
-  it("maps error types to states", () => {
-    expect(profileErrorState(new OpenAlexBudgetError("x")).kind).toBe("budget");
-    expect(profileErrorState(new OpenAlexAuthError("x")).kind).toBe("auth");
-    expect(profileErrorState(new Error("x")).kind).toBe("network");
   });
 });
 

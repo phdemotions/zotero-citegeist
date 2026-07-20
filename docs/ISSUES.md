@@ -8,7 +8,8 @@ tags: [citegeist, issues]
 
 # Citegeist — Open Issues
 
-> **Last Updated:** 2026-07-18 (author-identity layer **v3.0.0 merged to `main`** #75, untagged — see STATUS.md; #72 stray-menu-section fixed in that merge. v2.0.4 released #57; v2.0.3 released #56. Closed issues archived to `docs/archive/issues-closed.jsonl`)
+> **Last Updated:** 2026-07-20 (DIAG-001 + DEBT-010 closed: diagnostic codes and guards now cover the network dialog; settings pane swapped the dead `mailto` field for the `api_key` field.)
+> **Previously:** 2026-07-18 (author-identity layer **v3.0.0 merged to `main`** #75, untagged — see STATUS.md; #72 stray-menu-section fixed in that merge. v2.0.4 released #57; v2.0.3 released #56. Closed issues archived to `docs/archive/issues-closed.jsonl`)
 
 ---
 
@@ -18,8 +19,8 @@ tags: [citegeist, issues]
 | ------------ | ---- |
 | P0 (Blocker) | 0    |
 | P1 (High)    | 0    |
-| P2 (Medium)  | 3    |
-| P3 (Low)     | 5    |
+| P2 (Medium)  | 2    |
+| P3 (Low)     | 4    |
 
 ---
 
@@ -36,12 +37,6 @@ _None currently._
 ---
 
 ## P2 — Medium Priority
-
-### DIAG-001: extend diagnostic codes to the citation-network dialog
-
-**Impact:** The dialog is the one significant surface not yet emitting coded states — a failure there still shows generic copy, so a user report about the citing/references browser carries no code. Its lifecycle handlers are also the remaining unguarded host callbacks (the pane, columns and menus are done).
-**Fix:** Wrap the dialog's lifecycle + action handlers in `guardAsync`, and render `.cg-diag` for network/unexpected failures the same way the pane does. Extend `test/diagnostics-guard-invariants.test.ts` to cover it.
-**Effort:** Low-Medium
 
 ### JOSS-001: Paper submission not yet filed
 
@@ -76,12 +71,6 @@ _None currently._
 **Impact:** The native `openalex:author` item-relation handoff (Phase B, U5) hasn't been confirmed to survive a real Zotero 2-device sync round-trip; `citegeist.sqlite`-direct read is the documented fallback.
 **Fix:** Resolve authors on device A, sync, confirm the relations arrive intact on device B.
 **Effort:** Low (manual check)
-
-### DEBT-010: settings pane still offers the dead `mailto` pref, and no API-key field
-
-**Impact:** OpenAlex dropped the `mailto` polite pool in July 2026, but the settings pane still asks for an email and promises "faster speeds via their polite pool" — copy that is now simply untrue. Meanwhile the pref that *does* matter under the metered API, `api_key`, has no field at all, so the only way to raise the daily budget is to edit prefs by hand. Surfaced while adding the Troubleshooting section; deliberately not fixed in that change to keep it single-concern.
-**Fix:** Remove the mailto row (leave the pref read for back-compat), add an `api_key` password field with a link to OpenAlex's key page, and point `CG-API42`'s copy at it.
-**Effort:** Low
 
 ### DEBT-009: v3.0.0 review advisory residuals
 

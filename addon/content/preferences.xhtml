@@ -5,13 +5,14 @@
     <label><html:h2>Citegeist Settings</html:h2></label>
 
     <hbox align="center">
-      <label value="Email for OpenAlex polite pool:" />
-      <html:input type="email" id="citegeist-pref-mailto"
-        preference="extensions.zotero.citegeist.mailto"
+      <label value="OpenAlex API key (optional):" />
+      <html:input type="password" id="citegeist-pref-apikey"
+        preference="extensions.zotero.citegeist.openAlexApiKey"
+        placeholder="Leave blank to use the free anonymous quota"
         style="flex: 1; margin-left: 8px;" />
     </hbox>
     <description style="font-size: 11px; opacity: 0.6; margin-top: 4px;">
-      OpenAlex is the free citation database Citegeist uses. Adding your email gives you faster speeds via their "polite pool." Your email is only sent to OpenAlex, never to us. Optional but recommended.
+      OpenAlex is the citation database Citegeist reads from. It has been metered since July 2026: without a key you get a free daily allowance, which is enough for normal use but can run out during a large library scan (error CG-API42). A free key from openalex.org raises it. The key is stored on this computer only — never synced, never logged, and only ever sent to OpenAlex.
     </description>
 
     <separator class="thin" />

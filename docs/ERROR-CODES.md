@@ -13,9 +13,9 @@ Quote that code in a GitHub issue and we know what happened without a round of
 questions.
 
 **Where to find yours:** the code appears under "Details" in the Citegeist panel
-whenever a fetch fails. For anything else — a blank column, a menu that did
-nothing — open **Settings → Citegeist → Troubleshooting** and click **Copy
-diagnostic report**. That report carries your Citegeist build, your Zotero
+and in the citation-network browser whenever a load fails. For anything else — a
+blank column, a menu that did nothing — open **Settings → Citegeist →
+Troubleshooting** and click **Copy diagnostic report**. That report carries your Citegeist build, your Zotero
 version, and every problem recorded since Zotero started. It contains no library
 content, no file paths, and no personal details.
 
@@ -25,7 +25,7 @@ content, no file paths, and no personal details.
 | ---- | ------------- | ---------- |
 | `CG-NET01` | Couldn't reach OpenAlex. | Check your connection and try again in a few minutes. If it persists, [OpenAlex may be down](https://status.openalex.org). |
 | `CG-API01` | OpenAlex rejected your API key. | Check the key in Citegeist settings, or clear it — Citegeist works fine anonymously on the free quota. |
-| `CG-API42` | Today's OpenAlex request budget is used up. | It resets within 24 hours. A free OpenAlex API key raises the limit; add one in Citegeist settings. |
+| `CG-API42` | Today's OpenAlex request budget is used up. | It resets within 24 hours. A free [OpenAlex API key](https://openalex.org) raises the limit — paste it into **Settings → Citegeist → OpenAlex API key**. |
 | `CG-API50` | OpenAlex returned an unexpected response. | Try again in a few minutes. If it repeats, file an issue with the report. |
 | `CG-DB01` | Couldn't save to Citegeist's local database. | Most often a cloud-sync client holding the file. If your Zotero data folder is inside Dropbox, iCloud Drive, OneDrive or Box, pause sync and retry. |
 | `CG-DB02` | Citegeist's local database couldn't be opened. | Restart Zotero. If it persists, quit Zotero and check that `citegeist.sqlite` in your data folder isn't quarantined by antivirus. |

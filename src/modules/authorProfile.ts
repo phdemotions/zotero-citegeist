@@ -23,7 +23,7 @@ import {
   type AuthorRow,
   type ItemAuthorRow,
 } from "./cache/authors";
-import { OpenAlexBudgetError, OpenAlexAuthError, logError } from "./utils";
+import { logError } from "./utils";
 
 // ────────────────────────────────────────────────────────
 // Metric formatting
@@ -138,33 +138,6 @@ export function buildAuthorRowViewModels(
         hIndexLabel: null,
       };
     });
-}
-
-// ────────────────────────────────────────────────────────
-// Fetch → render state
-// ────────────────────────────────────────────────────────
-
-/** The resolved state of an author-profile load — the render branches. */
-export type ProfileState =
-  | {
-      kind: "ready";
-      profile: OpenAlexAuthorProfile;
-      works: OpenAlexWork[];
-      nextCursor: string | null;
-    }
-  | { kind: "empty"; profile: OpenAlexAuthorProfile }
-  | { kind: "budget" }
-  | { kind: "auth" }
-  | { kind: "network" }
-  | { kind: "not-found" };
-
-/** Map a thrown fetch error to its non-ready profile state. */
-export function profileErrorState(
-  e: unknown,
-): Extract<ProfileState, { kind: "budget" | "auth" | "network" }> {
-  if (e instanceof OpenAlexBudgetError) return { kind: "budget" };
-  if (e instanceof OpenAlexAuthError) return { kind: "auth" };
-  return { kind: "network" };
 }
 
 /**

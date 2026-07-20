@@ -40,13 +40,7 @@ import {
   type AuthorRowViewModel,
 } from "./authorProfile";
 import { codeForError, logError, isBookType, toOrdinal } from "./utils";
-import {
-  buildDiagnosticReport,
-  describeCode,
-  guard,
-  guardAsync,
-  type DiagnosticCode,
-} from "./diagnostics";
+import { buildDiagnosticElement, guard, guardAsync, type DiagnosticCode } from "./diagnostics";
 import { cgDesignTokens } from "./ui/tokens";
 import { cgComponents } from "./ui/components";
 import { resolveHostScheme } from "./ui/theme";
@@ -193,32 +187,12 @@ function renderEmptyState(
 }
 
 /**
- * Copy text to the system clipboard. Not in the typings, hence the cast —
- * same idiom as {@link openCitegeistSettings}.
- */
-function copyToClipboard(text: string): boolean {
-  try {
-    (
-      Zotero as unknown as {
-        Utilities: { Internal: { copyTextToClipboard(s: string): void } };
-      }
-    ).Utilities.Internal.copyTextToClipboard(text);
-    return true;
-  } catch (e) {
-    logError("copyToClipboard", e);
-    return false;
-  }
-}
-
-/**
- * Render a coded failure state.
+ * Render a coded failure state into the pane.
  *
- * The shape is deliberate: a plain sentence the user can act on, and the
- * machine-facing detail — code, call site, build, host — behind a disclosure.
- * Most users never open it; the ones filing an issue get everything a
- * maintainer would otherwise have to ask for, in one paste. Nothing here is
- * coloured: sage means ACTION and amber means EVIDENCE in this design system,
- * so an error may spend neither.
+ * The block itself is built by the shared renderer so this and the network
+ * dialog stay one design, not two — see `diagnostics/surface.ts`. The pane
+ * adds only what is pane-specific: the state card it sits in, and the section
+ * summary.
  */
 function renderDiagnosticState(
   container: HTMLElement,
@@ -227,60 +201,11 @@ function renderDiagnosticState(
   context: string,
 ): void {
   clearSuggestionAria(container);
-  const entry = describeCode(code);
-  const doc = container.ownerDocument;
-
   container.innerHTML = "";
-  const card = doc.createElement("div");
+  const card = container.ownerDocument.createElement("div");
   card.className = "cg-card cg-state-card";
-  const wrap = doc.createElement("div");
-  wrap.className = "cg-diag";
-
-  const msg = doc.createElement("p");
-  msg.className = "cg-diag-msg";
-  msg.textContent = entry.message;
-  wrap.appendChild(msg);
-
-  const disclosure = doc.createElement("div");
-  disclosure.className = "cg-diag-disclosure";
-
-  const toggle = doc.createElement("button");
-  toggle.className = "cg-btn cg-btn--plain cg-btn--sm";
-  toggle.textContent = "Details";
-  toggle.setAttribute("aria-expanded", "false");
-
-  const detail = doc.createElement("p");
-  detail.className = "cg-diag-detail";
-  detail.style.display = "none";
-  detail.textContent = buildDiagnosticReport({ code, context });
-
-  const copy = doc.createElement("button");
-  copy.className = "cg-btn cg-btn--sm";
-  copy.textContent = "Copy report";
-  copy.style.display = "none";
-  copy.style.marginTop = "8px";
-
-  toggle.addEventListener("click", () => {
-    const open = detail.style.display === "none";
-    detail.style.display = open ? "" : "none";
-    copy.style.display = open ? "" : "none";
-    toggle.setAttribute("aria-expanded", String(open));
-  });
-  copy.addEventListener("click", () => {
-    // Report is rebuilt on copy, not reused from the disclosure: anything that
-    // failed while the panel sat open belongs in what the user pastes.
-    copy.textContent = copyToClipboard(buildDiagnosticReport({ code, context }))
-      ? "Copied"
-      : "Couldn't copy";
-  });
-
-  disclosure.appendChild(toggle);
-  disclosure.appendChild(detail);
-  disclosure.appendChild(copy);
-  wrap.appendChild(disclosure);
-  card.appendChild(wrap);
+  card.appendChild(buildDiagnosticElement(container.ownerDocument, code, context));
   container.appendChild(card);
-
   setSummary("Error");
 }
 

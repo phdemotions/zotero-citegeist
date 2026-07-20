@@ -7,6 +7,7 @@
  */
 
 import { escapeHTML, logError, safeInnerHTML } from "../utils";
+import { bindGuarded } from "../diagnostics";
 import type { CollectionNode, NetworkState } from "./types";
 import type { OpenAlexWork } from "../openalex";
 import { findCachedItemKeyByOpenAlexId } from "../cache";
@@ -124,28 +125,33 @@ function bindPickerOptionEvents(
 ): void {
   // Bind chevron toggles
   container.querySelectorAll(".cg-picker-chevron").forEach((chev) => {
-    (chev as HTMLElement).addEventListener("click", (e: Event) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const parentId = Number((chev as HTMLElement).dataset.parentId);
-      if (expanded.has(parentId)) {
-        expanded.delete(parentId);
-        chev.classList.remove("expanded");
-      } else {
-        expanded.add(parentId);
-        chev.classList.add("expanded");
-      }
-      // Show/hide children based on expanded state
-      container.querySelectorAll(".cg-picker-option").forEach((opt) => {
-        const optEl = opt as HTMLElement;
-        const depth = Number(optEl.dataset.depth);
-        if (depth > 0) {
-          const visible = isAncestorExpandedDOM(optEl, container, expanded);
-          if (visible) optEl.removeAttribute("hidden");
-          else optEl.setAttribute("hidden", "");
+    bindGuarded(
+      chev as HTMLElement,
+      "click",
+      "collection picker chevasHTMLElement click",
+      (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const parentId = Number((chev as HTMLElement).dataset.parentId);
+        if (expanded.has(parentId)) {
+          expanded.delete(parentId);
+          chev.classList.remove("expanded");
+        } else {
+          expanded.add(parentId);
+          chev.classList.add("expanded");
         }
-      });
-    });
+        // Show/hide children based on expanded state
+        container.querySelectorAll(".cg-picker-option").forEach((opt) => {
+          const optEl = opt as HTMLElement;
+          const depth = Number(optEl.dataset.depth);
+          if (depth > 0) {
+            const visible = isAncestorExpandedDOM(optEl, container, expanded);
+            if (visible) optEl.removeAttribute("hidden");
+            else optEl.setAttribute("hidden", "");
+          }
+        });
+      },
+    );
   });
 
   // Bind option selection + keyboard nav
@@ -157,8 +163,8 @@ function bindPickerOptionEvents(
       if ((e.target as HTMLElement)?.classList?.contains("cg-picker-chevron")) return;
       onToggle(optEl);
     };
-    optEl.addEventListener("click", handler);
-    optEl.addEventListener("keydown", (e: Event) => {
+    bindGuarded(optEl, "click", "collection picker optEl click", handler);
+    bindGuarded(optEl, "keydown", "collection picker optEl keydown", (e: Event) => {
       const ke = e as KeyboardEvent;
       if (ke.key === "Enter" || ke.key === " ") {
         ke.preventDefault();
@@ -304,7 +310,7 @@ export function renderItemPickerContent(
 
   // Done button
   const doneBtn = picker.querySelector(".cg-picker-done") as HTMLButtonElement;
-  doneBtn?.addEventListener("click", async (e: Event) => {
+  bindGuarded(doneBtn, "click", "collection picker doneBtn click", async (e: Event) => {
     e.stopPropagation();
     const isInLibrary = doneBtn.dataset.inLibrary === "true";
     const doneWorkId = doneBtn.dataset.workId!;
@@ -327,7 +333,7 @@ export function initDefaultCollectionPicker(state: NetworkState): void {
   const dropdown = state.dialog.querySelector("#cg-default-dropdown") as HTMLElement;
   if (!chip || !dropdown) return;
 
-  chip.addEventListener("click", (e: Event) => {
+  bindGuarded(chip, "click", "collection picker chip click", (e: Event) => {
     e.stopPropagation();
     if (dropdown.hidden) {
       renderDefaultDropdown(state);
@@ -359,8 +365,10 @@ export function initDefaultCollectionPicker(state: NetworkState): void {
     const movedToInteractive = target.closest("button, a, input, select, [tabindex]");
     if (!movedToInteractive) chip.focus();
   };
-  state.dialog.addEventListener("click", closeOnOutside);
-  dropdown.addEventListener("click", (e: Event) => e.stopPropagation());
+  bindGuarded(state.dialog, "click", "collection picker dialog click", closeOnOutside);
+  bindGuarded(dropdown, "click", "collection picker dropdown click", (e: Event) =>
+    e.stopPropagation(),
+  );
 }
 
 export function renderDefaultDropdown(state: NetworkState): void {

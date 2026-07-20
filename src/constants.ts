@@ -109,12 +109,6 @@ export const PREF_AUTHOR_RELATIONS_PURGED = "extensions.zotero.citegeist.authorR
 export const PREF_CACHE_LIFETIME_DAYS = "extensions.zotero.citegeist.cacheLifetimeDays";
 export const PREF_AUTO_FETCH = "extensions.zotero.citegeist.autoFetch";
 /**
- * @deprecated OpenAlex dropped the `mailto` polite pool (July 2026). The client
- * no longer sends it; use {@link PREF_OPENALEX_API_KEY} instead. The pref key is
- * retained only so the legacy preferences field has a home until U9 removes it.
- */
-export const PREF_MAILTO = "extensions.zotero.citegeist.mailto";
-/**
  * Optional, opt-in OpenAlex API key. OpenAlex is metered as of July 2026
  * ($0.10/day anonymous, $1/day with a free key). Stored locally; never synced;
  * never logged (redacted via {@link redactApiKey}). Empty/unset → anonymous.

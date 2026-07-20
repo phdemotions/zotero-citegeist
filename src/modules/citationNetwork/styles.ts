@@ -542,6 +542,12 @@ export function getDialogCSS(): string {
       color: var(--cg-text-tertiary); font-size: 13px; line-height: 1.5;
       font-family: var(--cg-font);
     }
+    /* Diagnostic variant: the coded failure block reads as prose plus a
+       machine-facing report, so it is left-aligned and measure-capped rather
+       than centred like the short empty-state lines above. */
+    .cg-empty--diag {
+      text-align: left; max-width: 34rem; margin: 0 auto; padding: 40px 24px;
+    }
     .cg-empty-title {
       font-size: 14px; font-weight: 600; color: var(--cg-text-secondary); margin-bottom: 4px;
     }

@@ -55,6 +55,42 @@ export async function guardAsync<T>(
   }
 }
 
+/**
+ * Attach a DOM listener whose handler is wrapped in a boundary.
+ *
+ * A throw inside a listener never reaches the code that attached it — the
+ * browser logs it somewhere the user will never look and the click simply does
+ * nothing. In a modal like the citation-network dialog that reads as a frozen
+ * UI. Handlers may be sync or async; a rejected promise is caught too, which a
+ * bare `addEventListener` silently drops.
+ *
+ * `target` is nullable so call sites can pass a `querySelector` result
+ * directly; a missing element is a no-op, matching `el?.addEventListener(…)`.
+ */
+export function bindGuarded(
+  target: EventTarget | null | undefined,
+  type: string,
+  label: string,
+  handler: (event: Event) => void | Promise<void>,
+  options?: AddEventListenerOptions | boolean,
+): void {
+  if (!target) return;
+  target.addEventListener(
+    type,
+    (event: Event) => {
+      try {
+        const result = handler(event);
+        if (result && typeof (result as Promise<void>).catch === "function") {
+          (result as Promise<void>).catch((e: unknown) => handle(label, e));
+        }
+      } catch (e) {
+        handle(label, e);
+      }
+    },
+    options,
+  );
+}
+
 function handle(label: string, e: unknown, onError?: GuardFallback): void {
   logError(label, e);
   if (!onError) return;

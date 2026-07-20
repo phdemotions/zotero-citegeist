@@ -16,7 +16,13 @@
 
 import { resolveWorkForItem, canResolveWork } from "../citationService";
 import { getAllCachedOpenAlexIds } from "../cache";
-import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../utils";
+import { escapeHTML, safeInnerHTML, codeForError, logError } from "../utils";
+import {
+  bindGuarded,
+  buildDiagnosticElement,
+  describeCode,
+  type DiagnosticCode,
+} from "../diagnostics";
 import { SEARCH_DEBOUNCE_MS, INFINITE_SCROLL_THRESHOLD_PX } from "../../constants";
 import type { NetworkMode, NetworkSortKey, NetworkState } from "./types";
 import { getDialogCSS } from "./styles";
@@ -33,7 +39,6 @@ import { resolveHostScheme } from "../ui/theme";
 import { fetchAuthorProfile, type OpenAlexAuthorProfile } from "../openalexAuthors";
 import {
   buildProfileViewModel,
-  profileErrorState,
   persistProfileMetrics,
   maybeReconcileMerge,
   type ProfileViewModel,
@@ -154,6 +159,23 @@ function createDialogShell(
 // Entry point
 // ────────────────────────────────────────────────────────
 
+/**
+ * Render the coded failure block into the dialog body.
+ *
+ * The block itself comes from the shared renderer so the dialog and the item
+ * pane present a failure identically; only the surrounding layout is
+ * dialog-specific (left-aligned and measure-capped, unlike the centred
+ * one-line empty states).
+ */
+function renderDialogDiagnostic(body: HTMLElement, code: DiagnosticCode, context: string): void {
+  const doc = body.ownerDocument;
+  body.innerHTML = "";
+  const wrap = doc.createElement("div");
+  wrap.className = "cg-empty cg-empty--diag";
+  wrap.appendChild(buildDiagnosticElement(doc, code, context));
+  body.appendChild(wrap);
+}
+
 export async function showCitationNetwork(
   item: _ZoteroTypes.Item,
   mode: NetworkMode,
@@ -221,6 +243,9 @@ export async function showCitationNetwork(
       if (activeDialog === overlay) activeDialog = null;
     }
   };
+  // Raw listeners on purpose: earlyClose is removed by identity below, and a
+  // wrapper would make removeEventListener silently no-op. The handler itself
+  // only closes the dialog, so there is nothing here that can fail.
   overlay.addEventListener("keydown", earlyClose);
   overlay.addEventListener("click", earlyClose);
 
@@ -253,17 +278,10 @@ export async function showCitationNetwork(
     if (closedBeforeReady()) return;
     logError(`showCitationNetwork load (item ${item.id}, ${mode})`, e);
     if (body) {
-      const msg =
-        e instanceof OpenAlexNetworkError
-          ? `<div class="cg-empty">
-            <div class="cg-empty-title">OpenAlex is unavailable</div>
-            Could not reach the citation service. Try again in a few minutes.
-          </div>`
-          : `<div class="cg-empty">
-            <div class="cg-empty-title">Something went wrong</div>
-            An unexpected error occurred while loading citations.
-          </div>`;
-      safeInnerHTML(body, msg);
+      // Coded state, built by the shared renderer. The dialog used to
+      // hand-write its own generic failure copy, which told the user nothing
+      // and gave a bug report nothing to quote.
+      renderDialogDiagnostic(body, codeForError(e), `network dialog load (${mode})`);
     }
     return;
   }
@@ -293,7 +311,12 @@ export async function showCitationNetwork(
   overlay.removeEventListener("keydown", earlyClose);
   overlay.removeEventListener("click", earlyClose);
   // Ensure close handlers update the phase variable the closures above use.
-  overlay.addEventListener("citegeist:dialog-closed", markClosed as EventListener);
+  bindGuarded(
+    overlay,
+    "citegeist:dialog-closed",
+    "network dialog overlay citegeist:dialog-closed",
+    markClosed as EventListener,
+  );
 
   phase = "ready";
 
@@ -380,16 +403,11 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
   } catch (e) {
     if (myOpen !== dialogOpenSeq) return; // superseded mid-fetch — newer open owns the UI
     logError(`showAuthorWorks(${authorId})`, e);
-    const st = profileErrorState(e);
-    Services.prompt.alert(
-      null,
-      "Citegeist",
-      st.kind === "budget"
-        ? "Today's OpenAlex budget is used up. It resets tomorrow — add a free API key in Settings → Citegeist to raise it."
-        : st.kind === "auth"
-          ? "OpenAlex rejected the API key. Check it in Settings → Citegeist."
-          : "Couldn't reach OpenAlex. Try again in a few minutes.",
-    );
+    // This path is a modal alert (no dialog body to render into yet), so the
+    // code is appended to the message — a user reporting "the author view
+    // won't open" still has something to quote.
+    const code = codeForError(e);
+    Services.prompt.alert(null, "Citegeist", `${describeCode(code).message}\n\n${code}`);
     return;
   }
 
@@ -690,10 +708,12 @@ export function bindDialogEvents(state: NetworkState): void {
   const { dialog, overlay } = state;
 
   // Close button
-  dialog.querySelector("#cg-btn-close")?.addEventListener("click", () => closeDialog(state));
+  bindGuarded(dialog.querySelector("#cg-btn-close"), "click", "network dialog close button", () =>
+    closeDialog(state),
+  );
 
   // Escape
-  overlay.addEventListener("keydown", (e: Event) => {
+  bindGuarded(overlay, "keydown", "network dialog overlay keydown", (e: Event) => {
     if ((e as KeyboardEvent).key === "Escape") {
       // Close any open picker first, then dialog
       const openPicker = dialog.querySelector(".cg-item-picker:not([hidden])") as HTMLElement;
@@ -710,7 +730,7 @@ export function bindDialogEvents(state: NetworkState): void {
   });
 
   // Overlay backdrop click
-  overlay.addEventListener("click", (e: Event) => {
+  bindGuarded(overlay, "click", "network dialog overlay click", (e: Event) => {
     if (e.target === overlay) closeDialog(state);
   });
 
@@ -729,7 +749,8 @@ export function bindDialogEvents(state: NetworkState): void {
     // flight so focus + aria-selected + tabindex stay in sync (C2: the
     // click handler short-circuits on `state.loading`, but focus had
     // already moved, desyncing roving-tabindex from the active tab).
-    tabEl.addEventListener("keydown", (e: KeyboardEvent) => {
+    bindGuarded(tabEl, "keydown", "network dialog tabEl keydown", (evt: Event) => {
+      const e = evt as KeyboardEvent;
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
       if (state.loading) return;
       e.preventDefault();
@@ -738,7 +759,7 @@ export function bindDialogEvents(state: NetworkState): void {
       next.focus();
       (next as HTMLElement).click();
     });
-    tabEl.addEventListener("click", async () => {
+    bindGuarded(tabEl, "click", "network dialog tabEl click", async () => {
       const newMode = tabEl.dataset.mode as NetworkMode;
       if (newMode === state.mode || state.loading) return;
       // Cancel any pending debounced search — without this, a mid-typing
@@ -769,7 +790,7 @@ export function bindDialogEvents(state: NetworkState): void {
 
   // Search (debounced)
   const searchInput = dialog.querySelector(".cg-search-input") as HTMLInputElement;
-  searchInput?.addEventListener("input", () => {
+  bindGuarded(searchInput, "input", "network dialog searchInput input", () => {
     if (state.searchTimeout) clearTimeout(state.searchTimeout);
     state.searchTimeout = setTimeout(() => {
       state.searchTimeout = null;
@@ -779,24 +800,26 @@ export function bindDialogEvents(state: NetworkState): void {
 
   // Sort
   const sortSelect = dialog.querySelector(".cg-sort-select") as HTMLSelectElement;
-  sortSelect?.addEventListener("change", () => {
+  bindGuarded(sortSelect, "change", "network dialog sortSelect change", () => {
     state.sortBy = sortSelect.value as NetworkSortKey;
     renderResults(state, searchInput?.value || "");
   });
 
   // Hide-in-library filter toggle
   const hideToggle = dialog.querySelector("#cg-hide-in-library") as HTMLButtonElement | null;
-  hideToggle?.addEventListener("click", () => {
-    state.hideInLibrary = !state.hideInLibrary;
-    hideToggle.setAttribute("aria-checked", state.hideInLibrary ? "true" : "false");
-    hideToggle.classList.toggle("cg-switch-on", state.hideInLibrary);
-    renderResults(state, searchInput?.value || "");
-  });
+  if (hideToggle) {
+    bindGuarded(hideToggle, "click", "network dialog hideToggle click", () => {
+      state.hideInLibrary = !state.hideInLibrary;
+      hideToggle.setAttribute("aria-checked", state.hideInLibrary ? "true" : "false");
+      hideToggle.classList.toggle("cg-switch-on", state.hideInLibrary);
+      renderResults(state, searchInput?.value || "");
+    });
+  }
 
   // ── Body event delegation (survives re-renders) ──
   const body = dialog.querySelector(".cg-dialog-body") as HTMLElement;
 
-  body?.addEventListener("click", (e: Event) => {
+  bindGuarded(body, "click", "network dialog body click", (e: Event) => {
     const target = e.target as HTMLElement;
 
     // Close any open per-item picker if clicking outside it
@@ -870,7 +893,7 @@ export function bindDialogEvents(state: NetworkState): void {
   });
 
   // Keyboard on body -- buttons + row navigation
-  body?.addEventListener("keydown", (e: Event) => {
+  bindGuarded(body, "keydown", "network dialog body keydown", (e: Event) => {
     const ke = e as KeyboardEvent;
     const target = ke.target as HTMLElement;
 
@@ -946,7 +969,7 @@ export function bindDialogEvents(state: NetworkState): void {
       ? win.requestAnimationFrame.bind(win)
       : (cb) => setTimeout(() => cb(0), 16);
   let scrollScheduled = false;
-  body?.addEventListener("scroll", () => {
+  bindGuarded(body, "scroll", "network dialog body scroll", () => {
     if (scrollScheduled) return;
     scrollScheduled = true;
     schedule(async () => {
@@ -962,7 +985,7 @@ export function bindDialogEvents(state: NetworkState): void {
   // are picked up live. Filters out hidden elements explicitly so the
   // trap doesn't park focus on `cg-picker-option[hidden]` nodes that
   // surrounding CSS keeps reachable in the DOM. (P3.1)
-  dialog.addEventListener("keydown", (e: Event) => {
+  bindGuarded(dialog, "keydown", "network dialog dialog keydown", (e: Event) => {
     const ke = e as KeyboardEvent;
     if (ke.key !== "Tab") return;
     const all = dialog.querySelectorAll<HTMLElement>(

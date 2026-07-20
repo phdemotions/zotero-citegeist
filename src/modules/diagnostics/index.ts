@@ -28,5 +28,6 @@ export {
   clearDiagnostics,
   type DiagnosticEntry,
 } from "./record";
-export { guard, guardAsync, type GuardFallback } from "./guard";
+export { guard, guardAsync, bindGuarded, type GuardFallback } from "./guard";
 export { buildDiagnosticReport, setPluginVersion, type ReportContext } from "./report";
+export { buildDiagnosticElement, renderDiagnosticInto, copyToClipboard } from "./surface";
