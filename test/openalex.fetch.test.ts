@@ -138,3 +138,30 @@ describe("error discrimination", () => {
     expect(await getWorkById("W1")).toBeNull();
   });
 });
+
+/**
+ * The tests above mock `Zotero.HTTP.request` as RESOLVING on 401/404/429. Real
+ * Zotero only does that when `successCodes: false` is passed — its default is
+ * `success = status >= 200 && status < 300` (chrome/content/zotero/xpcom/http.js),
+ * which rejects every error status before the caller can read it. Without the
+ * flag the whole discriminator above is dead code in production: "not found",
+ * "budget exhausted" and "bad key" all collapse into the network-error branch
+ * and get retried three times each, while this suite stays green against a
+ * mock that no longer matches the host. This guards the contract itself.
+ */
+describe("Zotero.HTTP contract", () => {
+  it("passes successCodes: false so error statuses reach our own classifier", async () => {
+    httpRequest.mockResolvedValue(httpResponse(200, { id: "https://openalex.org/W1" }));
+    await getWorkById("W1");
+    expect(httpRequest.mock.calls[0][2]).toMatchObject({ successCodes: false });
+  });
+
+  it("still surfaces a genuine transport rejection as OpenAlexNetworkError", async () => {
+    vi.useFakeTimers();
+    httpRequest.mockRejectedValue(new Error("NS_ERROR_OFFLINE"));
+    const p = getWorkById("W1");
+    const assertion = expect(p).rejects.toBeInstanceOf(OpenAlexNetworkError);
+    await vi.runAllTimersAsync();
+    await assertion;
+  });
+});

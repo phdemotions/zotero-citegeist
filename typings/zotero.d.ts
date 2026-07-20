@@ -247,6 +247,12 @@ declare const Zotero: {
         body?: string;
         responseType?: string;
         timeout?: number;
+        /**
+         * Status codes treated as success. Zotero REJECTS any other status
+         * before the caller sees it; `false` means "resolve on any status" so
+         * the caller can classify 404/429/401 itself.
+         */
+        successCodes?: number[] | false;
       },
     ): Promise<{
       status: number;

@@ -178,6 +178,13 @@ async function fetchJson<T>(url: string, label: string, attempt: number): Promis
       },
       responseType: "text",
       timeout: OPENALEX_REQUEST_TIMEOUT_MS,
+      // Resolve on ANY status so the classification below actually runs.
+      // Zotero's default is `success = status >= 200 && status < 300`
+      // (http.js), which REJECTS every 404/429/401/5xx before we can read it —
+      // collapsing "not found", "budget exhausted" and "bad key" into the
+      // network-error branch, retried three times each. Every status branch
+      // below is dead code without this flag.
+      successCodes: false,
     });
   } catch (e) {
     // Network-level failure (timeout, DNS, offline) — retry then bubble up.
