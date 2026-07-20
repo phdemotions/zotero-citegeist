@@ -9,8 +9,14 @@
 
 import { build } from "esbuild";
 import {
-  cpSync, mkdirSync, rmSync, readFileSync, writeFileSync,
-  existsSync, readdirSync, statSync,
+  cpSync,
+  mkdirSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  readdirSync,
+  statSync,
 } from "fs";
 import { join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -28,7 +34,22 @@ const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8"));
 const meta = readBuildMetadata(pkg);
 const { addonID, version } = meta;
 
-console.log(`\n  Citegeist build — v${version} (${isDev ? "dev" : "production"})\n`);
+let gitSha = "nogit";
+try {
+  gitSha = execSync("git rev-parse --short HEAD", {
+    cwd: ROOT,
+    stdio: ["ignore", "pipe", "ignore"],
+  })
+    .toString()
+    .trim();
+} catch {
+  // Not a git checkout — the timestamp alone still identifies the build.
+}
+const buildId = `${gitSha}-${new Date().toISOString().slice(11, 19).replace(/:/g, "")}`;
+
+console.log(
+  `\n  Citegeist build — v${version} (${isDev ? "dev" : "production"}) build ${buildId}\n`,
+);
 
 // Step 1: Clean and copy
 if (existsSync(BUILD_DIR)) {
@@ -73,7 +94,15 @@ await build({
   outfile: join(scriptsDir, "citegeist.js"),
   sourcemap: isDev ? "inline" : false,
   minify: !isDev,
-  define: { __DEV__: isDev ? "true" : "false" },
+  define: {
+    __DEV__: isDev ? "true" : "false",
+    // Every build gets a unique stamp. The version alone is useless for telling
+    // builds apart: we deliberately hold the version steady across many
+    // iterations, and Zotero will happily keep running an older same-version
+    // copy — which cost real debugging time. This is logged at startup so
+    // "which build is actually running?" is answerable from Debug Output.
+    __BUILD_ID__: JSON.stringify(buildId),
+  },
   logLevel: "info",
 });
 console.log("  [2/3] TypeScript compiled");

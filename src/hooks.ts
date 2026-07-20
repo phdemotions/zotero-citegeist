@@ -30,6 +30,14 @@ import { PREF_AUTHOR_RELATIONS_PURGED, PREF_LAST_BACKUP_PATH, SETTINGS_PANE_ID }
 // doesn't match the auto-registered source key).
 const FTL_FILE = "citegeist.ftl";
 
+/**
+ * Unique per-build stamp injected by scripts/build.mjs. The version is
+ * intentionally held steady across many iterations, so it cannot identify a
+ * build; this can. Logged at startup so Debug Output proves which build Zotero
+ * actually loaded.
+ */
+declare const __BUILD_ID__: string;
+
 interface PluginData {
   id: string;
   version: string;
@@ -49,7 +57,7 @@ export async function onStartup(data: PluginData): Promise<void> {
   rootURI = data.rootURI;
   cacheReady = false;
   setMenuPluginID(pluginID);
-  Zotero.debug(`[Citegeist] Starting v${data.version}`);
+  Zotero.debug(`[Citegeist] Starting v${data.version} (build ${__BUILD_ID__})`);
 
   // Initialize the plugin-owned SQLite cache and warm the in-memory mirror
   // BEFORE any reader (pane, column) registers. Column dataProvider is
