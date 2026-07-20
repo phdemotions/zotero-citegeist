@@ -40,8 +40,23 @@ import { searchByMetadata, type TitleMatchResult } from "./titleSearch";
 import { OpenAlexNetworkError, OpenAlexBudgetError, logError } from "./utils";
 import { BULK_FETCH_DELAY_MS, NO_MATCH_RETRY_DAYS } from "../constants";
 
-/** Reason a fetch didn't produce a work. */
-export type FetchError = "no-identifier" | "not-found" | "network" | "invalid-item" | "no-match";
+/**
+ * Reason a fetch didn't produce a work.
+ *
+ * `"unexpected"` is the catch-all for anything the enumerated cases don't
+ * cover — a cache write failing (a Zotero data directory on Dropbox/iCloud/Box
+ * can lock the SQLite file), a budget/auth error, a bug. It exists so a fetch
+ * ALWAYS resolves to a rendered state: an unhandled throw used to escape into
+ * the pane's `onAsyncRender`, which has no error boundary, leaving the spinner
+ * up forever with nothing for the user to report.
+ */
+export type FetchError =
+  | "no-identifier"
+  | "not-found"
+  | "network"
+  | "invalid-item"
+  | "no-match"
+  | "unexpected";
 
 /**
  * Discriminated union for fetch results. Five states:
@@ -197,7 +212,22 @@ export async function resolveWorkForItem(item: _ZoteroTypes.Item): Promise<OpenA
  * Fetch citation data for a single Zotero item and cache it.
  * Returns the work data on success so callers can use it without a second API call.
  */
+/**
+ * Fetch + cache one item's metrics. NEVER throws: every failure resolves to a
+ * `{ status: "error" }` result. The pane's `onAsyncRender` awaits this with no
+ * error boundary of its own, so a throw here leaves the loading spinner up
+ * permanently — the user sees an app that hung, with nothing to report.
+ */
 export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchResult> {
+  try {
+    return await fetchAndCacheItemInner(item);
+  } catch (e) {
+    logError(`fetchAndCacheItem(${item.id})`, e);
+    return { status: "error", error: "unexpected" };
+  }
+}
+
+async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchResult> {
   if (!item.isRegularItem() || item.deleted) {
     return { status: "error", error: "invalid-item" };
   }

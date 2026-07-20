@@ -154,6 +154,16 @@ const EMPTY_STATES = {
     summary: "Not found",
     cls: "cg-no-identifier",
   },
+  // Something failed that isn't "offline" and isn't "not on OpenAlex" — a cache
+  // write, a budget/auth rejection, a bug. Says so honestly rather than
+  // borrowing "not found", which sends the user hunting for a data problem that
+  // isn't there. See docs/ISSUES.md — the user-facing error-code surface that
+  // makes this self-diagnosable is designed separately.
+  unexpected: {
+    html: "Citegeist hit an unexpected problem loading this item. Use the refresh button to try again; if it keeps happening, check Help → Debug Output Logging.",
+    summary: "Error",
+    cls: "cg-no-identifier",
+  },
   confirmLoading: { html: "Loading…", summary: "Loading…", cls: "cg-loading" },
   matchSaved: {
     html: "Match confirmed — the metrics didn’t load just yet. Use the refresh button to try again.",
@@ -540,41 +550,60 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
         const container = body.querySelector("#citegeist-content") as HTMLElement;
         if (!container) return;
 
-        // If we already rendered cached data in onRender and it's fresh, skip
-        const alreadyCached = getCachedData(item);
-        if (alreadyCached && !isCacheStale(item)) return;
-
-        // If a suggestion is already rendered (from a prior fetch stored in Extra), skip
-        if (!alreadyCached && getPendingSuggestion(item)) return;
-
-        // Snapshot the generation BEFORE the await so a mid-fetch item
-        // change is detected on resume. Without this, Zotero's body-element
-        // reuse would have us writing item A's data into item B's pane.
+        // Snapshot the generation BEFORE any await so a mid-fetch item change
+        // is detected on resume. Without this, Zotero's body-element reuse
+        // would have us writing item A's data into item B's pane.
         const gen = paneGeneration;
-        const result = await fetchAndCacheItem(item);
-        if (gen !== paneGeneration) return;
 
-        if (result.status === "ok") {
-          const freshData = getCachedData(item);
-          if (freshData) {
-            renderPane(container, freshData, item, result.work);
-            setSectionSummary(citationSummary(freshData.citedByCount, item));
-            invalidateColumnCache(item.id);
+        // Error boundary. Zotero does nothing with a rejected onAsyncRender, so
+        // anything escaping this handler leaves the "Fetching citation data…"
+        // spinner up forever — an app that looks hung, with nothing for the
+        // user to report. Every exit path must render a state.
+        try {
+          await renderAsync();
+        } catch (e) {
+          logError("pane onAsyncRender", e);
+          if (gen === paneGeneration && !getCachedData(item)) {
+            renderEmptyState(container, setSectionSummary, "unexpected");
           }
-        } else if (result.status === "suggestion") {
-          const suggestion = getPendingSuggestion(item);
-          if (suggestion) {
-            renderSuggestion(container, suggestion, item, setSectionSummary);
-            invalidateColumnCache(item.id);
+        }
+        return;
+
+        async function renderAsync(): Promise<void> {
+          // If we already rendered cached data in onRender and it's fresh, skip
+          const alreadyCached = getCachedData(item);
+          if (alreadyCached && !isCacheStale(item)) return;
+
+          // If a suggestion is already rendered (from a prior fetch stored in Extra), skip
+          if (!alreadyCached && getPendingSuggestion(item)) return;
+
+          const result = await fetchAndCacheItem(item);
+          if (gen !== paneGeneration) return;
+
+          if (result.status === "ok") {
+            const freshData = getCachedData(item);
+            if (freshData) {
+              renderPane(container, freshData, item, result.work);
+              setSectionSummary(citationSummary(freshData.citedByCount, item));
+              invalidateColumnCache(item.id);
+            }
+          } else if (result.status === "suggestion") {
+            const suggestion = getPendingSuggestion(item);
+            if (suggestion) {
+              renderSuggestion(container, suggestion, item, setSectionSummary);
+              invalidateColumnCache(item.id);
+            }
+          } else if (result.status === "error" && !alreadyCached) {
+            const key =
+              result.error === "network"
+                ? "unavailable"
+                : result.error === "no-match"
+                  ? "notFoundTitle"
+                  : result.error === "unexpected"
+                    ? "unexpected"
+                    : "notFound";
+            renderEmptyState(container, setSectionSummary, key);
           }
-        } else if (result.status === "error" && !alreadyCached) {
-          const key =
-            result.error === "network"
-              ? "unavailable"
-              : result.error === "no-match"
-                ? "notFoundTitle"
-                : "notFound";
-          renderEmptyState(container, setSectionSummary, key);
         }
       },
       sectionButtons: [
