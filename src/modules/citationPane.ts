@@ -25,16 +25,18 @@ import {
   type CachedData,
   type PendingSuggestion,
 } from "./cache";
-import { fetchAndCacheItem, extractIdentifier } from "./citationService";
+import { fetchAndCacheItem, extractIdentifier, resolveAuthorsForItem } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import { normalizeDOI } from "./openalex";
 import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork, showAuthorWorks } from "./citationNetwork";
+import { fetchAuthorProfile } from "./openalexAuthors";
 import { getItemAuthors, getAuthor, type AuthorRow } from "./cache/authors";
 import {
   buildAuthorRowViewModels,
   compactTrend,
   getAuthorCreators,
+  persistProfileMetrics,
   type AuthorRowViewModel,
 } from "./authorProfile";
 import { logError, isBookType, toOrdinal } from "./utils";
@@ -96,6 +98,14 @@ const refreshing = new Set<number>();
  * invalidated by an intentional user wipe.
  */
 let paneGeneration = 0;
+
+/**
+ * Per-session attempt guards. An item with no resolvable authors, or an author
+ * whose metrics fetch fails, must not re-hit the API on every single pane
+ * render — record the attempt and move on.
+ */
+const authorResolveAttempted = new Set<string>();
+const authorMetricsAttempted = new Set<string>();
 
 const PANE_ID = "citegeist-citation-details";
 
@@ -275,11 +285,17 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
             color: var(--cg-text-primary);
           }
 
-          /* Card stack — one systematic gap; layout does the spacing. */
+          /* Card stack — one systematic gap, and ONE shared content measure so
+             every card is exactly the same width. Without it the Impact card
+             stretched to the full pane (metre-wide buttons) while the author list
+             sat at its own narrower cap: two different widths, reading as two
+             unrelated design systems. The measure also keeps line length sane
+             when the pane is dragged very wide. */
           #citegeist-content {
             display: flex;
             flex-direction: column;
             gap: var(--cg-space-3);
+            max-width: 34rem;
           }
 
           /* Each card's uppercase title sits above its content. */
@@ -394,10 +410,9 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
                columns turn an ordered byline into a grid of equals; names also
                ellipsis badly in a narrow column. Rows run full width, so the extra
                width of a dragged-wide pane goes to the NAME (fewer truncations)
-               with the h-index column aligned right. The cap engages only on an
-               unusually wide pane, where an unbounded name-to-h-index gap would
-               otherwise read as broken. */
-            max-width: 34rem;
+               with the h-index column aligned right. Width is governed by the
+               shared content measure on #citegeist-content, so this list and the
+               Impact card above it are always exactly the same width. */
           }
           .cg-authorrow {
             display: flex;
@@ -1098,8 +1113,25 @@ async function renderAuthorRows(
   const doc = region.ownerDocument;
   try {
     const creators = getAuthorCreators(item);
-    const itemAuthors = await getItemAuthors(item.libraryID, item.key);
+    let itemAuthors = await getItemAuthors(item.libraryID, item.key);
     if (gen !== paneGeneration) return;
+
+    // Lazy resolve on view. An item cached before the author layer existed — or
+    // whose metrics are still fresh, so fetchAndCacheItem short-circuits and
+    // never reaches the author write — has no rows at all. Resolving here means
+    // clicking an OLD article fills its authors in instead of silently showing
+    // nothing. Once per item per session so an item OpenAlex genuinely can't
+    // resolve doesn't re-hit the API on every click.
+    if (itemAuthors.length === 0) {
+      const attemptKey = `${item.libraryID}/${item.key}`;
+      if (!authorResolveAttempted.has(attemptKey)) {
+        authorResolveAttempted.add(attemptKey);
+        await resolveAuthorsForItem(item);
+        if (gen !== paneGeneration) return;
+        itemAuthors = await getItemAuthors(item.libraryID, item.key);
+        if (gen !== paneGeneration) return;
+      }
+    }
 
     const resolvedIds = [...new Set(itemAuthors.map((r) => r.author_id))];
     const authorRowsData = await Promise.all(resolvedIds.map((id) => getAuthor(id)));
@@ -1121,13 +1153,58 @@ async function renderAuthorRows(
     card.appendChild(title);
     const list = doc.createElement("div");
     list.className = "cg-authorlist";
-    for (const vm of vms) list.appendChild(authorRow(doc, vm));
+    const hSpans = new Map<string, HTMLElement>();
+    for (const vm of vms) {
+      const row = authorRow(doc, vm);
+      const hSpan = row.querySelector(".cg-authorrow-h");
+      if (vm.authorId && hSpan) hSpans.set(vm.authorId, hSpan as HTMLElement);
+      list.appendChild(row);
+    }
     card.appendChild(list);
     region.appendChild(card);
+
+    // Rows are on screen; backfill the h-index labels without blocking paint.
+    void fillAuthorMetrics(vms, hSpans, gen);
   } catch (e) {
     if (gen !== paneGeneration) return;
     logError("renderAuthorRows", e);
     region.textContent = "";
+  }
+}
+
+/**
+ * Fill in the h-index labels after the rows are painted.
+ *
+ * `cacheItemAuthors` stores identity ONLY (id, display name, ORCID) — `h_index`
+ * stays null until something fetches the author, which previously happened only
+ * when the user opened that author's works dialog. Result: the pane showed no
+ * h-index at all. This fetches the missing ones with FREE `/authors/{id}`
+ * singleton lookups (`aggregatesOnly`, so an author with zeroed aggregates never
+ * drags a whole byline through the METERED works derivation) and persists them,
+ * so the next render is instant. Sequential on purpose: the shared rate limiter
+ * would queue them anyway, and returning on the first budget/auth/network error
+ * avoids hammering an API that is already refusing us.
+ */
+async function fillAuthorMetrics(
+  vms: ReadonlyArray<AuthorRowViewModel>,
+  hSpans: ReadonlyMap<string, HTMLElement>,
+  gen: number,
+): Promise<void> {
+  for (const vm of vms) {
+    if (!vm.authorId || vm.hIndexLabel) continue;
+    if (authorMetricsAttempted.has(vm.authorId)) continue;
+    authorMetricsAttempted.add(vm.authorId);
+    try {
+      const profile = await fetchAuthorProfile(vm.authorId, { aggregatesOnly: true });
+      if (gen !== paneGeneration) return;
+      if (!profile || profile.hIndex === null) continue;
+      persistProfileMetrics(profile);
+      const span = hSpans.get(vm.authorId);
+      if (span) span.textContent = `h ${profile.hIndex.toLocaleString("en-US")}`;
+    } catch (e) {
+      logError("fillAuthorMetrics", e);
+      return;
+    }
   }
 }
 
@@ -1141,17 +1218,17 @@ function authorRow(doc: Document, vm: AuthorRowViewModel): HTMLElement {
   const name = doc.createElement("span");
   name.className = "cg-authorrow-name";
   name.textContent = vm.name;
-  // Long names ellipsis at the grid's 190px column minimum; the tooltip is the
-  // sighted-mouse equivalent of the button's aria-label.
+  // Long names ellipsis in a narrow pane; the tooltip is the sighted-mouse
+  // equivalent of the button's aria-label.
   name.title = vm.name;
   btn.appendChild(name);
 
-  if (vm.hIndexLabel) {
-    const h = doc.createElement("span");
-    h.className = "cg-authorrow-h";
-    h.textContent = vm.hIndexLabel;
-    btn.appendChild(h);
-  }
+  // Always present, even when empty: fillAuthorMetrics writes the h-index into
+  // this node once the free lookup returns.
+  const h = doc.createElement("span");
+  h.className = "cg-authorrow-h";
+  if (vm.hIndexLabel) h.textContent = vm.hIndexLabel;
+  btn.appendChild(h);
 
   const chev = doc.createElement("span");
   chev.className = "cg-authorrow-chev";
