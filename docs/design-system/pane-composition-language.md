@@ -86,12 +86,18 @@ Baumeister, R. F.              h 164   ›  ← author link rows: ALWAYS one per
 Vohs, K. D.                    h 98    ›     h-index aligned right
 ```
 
-The pane has **no max-width**: the cards are meant to fill a dragged-wide pane.
+**One shared content measure.** `#citegeist-content` caps at `34rem`, so every
+card is exactly the same width. This is load-bearing: when the Impact card
+stretched to the full pane while the author list sat at its own narrower cap,
+the two read as two unrelated design systems (and the explore buttons grew
+metre-wide). Never cap an individual card or list — change the one measure.
+Below the cap the cards fill the pane normally; above it the extra width is left
+as margin, which is the deliberate trade for a sane line length.
+
 The author list is **always a single column** — authorship order is semantic
 (first author, senior author), so a multi-column grid would turn an ordered
 byline into a grid of equals. Extra width goes to the author *name* (fewer
-truncations), with the h-index aligned right; the list caps at `34rem` purely so
-the name-to-h-index gap can't grow unbounded on an unusually wide pane.
+truncations), with the h-index aligned right.
 
 Author rows are **links, not curation** — tap a name to open that author's works
 in the citation-network browser (author mode). No confirm/override, no state
