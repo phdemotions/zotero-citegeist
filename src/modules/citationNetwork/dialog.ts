@@ -631,29 +631,28 @@ export function buildDialogHTML(title: string, sourceMetaLine: string): string {
 }
 
 /**
- * Author-mode header: identity line + a hero-metrics stack (concept B \u2014 h-index
- * prominent, i10/works/cited alongside). No citing/references tabs. Reuses the
- * work-mode `.cg-dialog-top` / `.cg-stat` layout so the two headers stay
- * visually consistent.
+ * Author-mode header. Composes the SHARED `.cg-metricline` primitive rather than
+ * a row of boxed stat tiles: four bordered, equal-weight tiles flattened the
+ * hierarchy and looked nothing like the item pane's Impact card, which does the
+ * identical job (one dominant figure, then supporting metrics inline). A box is
+ * earned by an interaction, not by a number.
  */
 export function buildAuthorDialogHTML(vm: ProfileViewModel): string {
   const ids = [vm.orcid ? `ORCID ${vm.orcid}` : "", "OpenAlex"].filter(Boolean).join(" \u00B7 ");
-  const stat = (value: string, label: string, hero = false): string =>
-    `<div class="cg-stat${hero ? " cg-stat--hero" : ""}">` +
-    `<strong class="cg-stat-value">${escapeHTML(value)}</strong>` +
-    `<span class="cg-stat-label">${escapeHTML(label)}</span></div>`;
+  const sep = `<span class="cg-metricline-sep">\u00B7</span>`;
+  const metrics = [
+    `<strong>h-index ${escapeHTML(vm.hIndex)}</strong>`,
+    `i10 ${escapeHTML(vm.i10Index)}`,
+    `${escapeHTML(vm.worksCount)} works`,
+    `${escapeHTML(vm.citedByCount)} cited`,
+  ].join(sep);
   const header = `
-    <div class="cg-dialog-top">
+    <div class="cg-dialog-top cg-dialog-top--author">
       <div class="cg-header-text">
         <div class="cg-eyebrow">Author</div>
         <div class="cg-dialog-title" title="${escapeHTML(vm.name)}">${escapeHTML(vm.name)}</div>
+        <div class="cg-metricline">${metrics}</div>
         <div class="cg-source-authors">${escapeHTML(ids)}</div>
-      </div>
-      <div class="cg-count-stack cg-author-metrics">
-        ${stat(vm.hIndex, "h-index", true)}
-        ${stat(vm.i10Index, "i10")}
-        ${stat(vm.worksCount, "works")}
-        ${stat(vm.citedByCount, "cited")}
       </div>
     </div>`;
   return DIALOG_CHROME_HTML + header + commandBarHTML("") + BODY_FOOTER_HTML;

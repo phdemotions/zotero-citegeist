@@ -342,47 +342,13 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
             font-size: 11px;
           }
 
-          /* ── Hero: the citation count is the single largest element on the
-             surface. Number, label and the top-percentile chip are LEFT-grouped as
-             one unit; a right-aligned chip drifts absurdly far from the number it
-             qualifies once the pane is dragged wide (the old "stretched" look). ── */
-          .cg-hero {
-            display: flex;
-            align-items: baseline;
-            flex-wrap: wrap;
-            gap: var(--cg-space-2);
-          }
-          .cg-hero-main {
-            display: flex;
-            align-items: baseline;
-            gap: var(--cg-space-2);
-            min-width: 0;
-          }
-          .cg-hero-stat {
-            font-size: var(--cg-size-display);
-            font-weight: var(--cg-weight-bold);
-            letter-spacing: -0.025em;
-            color: var(--cg-text-primary);
-            font-variant-numeric: tabular-nums;
-            line-height: 1.05;
-          }
-          .cg-hero-label {
-            font-size: var(--cg-size-subhead);
-            color: var(--cg-text-secondary);
-          }
-          .cg-hero-chip { flex-shrink: 0; align-self: center; }
-
-          /* ── Supporting-metric line: FWCI · percentile · trend on one row, 8px
-             under the hero, tabular, ' · ' separators with equal space. ── */
-          .cg-metricline {
-            margin-top: var(--cg-space-2);
-            font-size: var(--cg-size-subhead);
-            color: var(--cg-text-secondary);
-            font-variant-numeric: tabular-nums;
-            line-height: 1.4;
-          }
-          .cg-metricline-sep { color: var(--cg-text-tertiary); margin: 0 var(--cg-space-2); }
-          .cg-metricline strong { color: var(--cg-text-primary); font-weight: var(--cg-weight-semibold); }
+          /* .cg-hero / .cg-hero-value / .cg-hero-label / .cg-hero-chip and
+             .cg-metricline are SHARED primitives (ui/components.ts) — the dialog's
+             author header composes the same shapes, which is what makes the two
+             surfaces read as one product. Nothing pane-local to declare here.
+             Number, label and chip are LEFT-grouped by the primitive; a
+             right-aligned chip drifted far from the number it qualifies once the
+             pane was dragged wide. */
 
           /* Book-with-no-citations note replaces the hero (OpenAlex book coverage
              is sparse; a bare "0" would misread as genuinely uncited). */
@@ -989,25 +955,26 @@ function renderPane(
     const hero = doc.createElement("div");
     hero.className = "cg-hero";
 
-    const main = doc.createElement("div");
-    main.className = "cg-hero-main";
     const stat = doc.createElement("span");
-    stat.className = "cg-hero-stat";
+    stat.className = "cg-hero-value";
     stat.textContent = data.citedByCount.toLocaleString();
-    main.appendChild(stat);
+    hero.appendChild(stat);
     const label = doc.createElement("span");
     label.className = "cg-hero-label";
     label.textContent = data.citedByCount === 1 ? "citation" : "citations";
-    main.appendChild(label);
-    hero.appendChild(main);
+    hero.appendChild(label);
 
-    // Top-percentile chip — the one evidence accent (amber at Top 1%). The exact
-    // percentile lives in the metric line below; the chip is the at-a-glance flag.
+    // Top-percentile chip. Evidence uses ONE hue at two intensities — bordered
+    // amber for exceptional, soft amber for notable — never the sage action
+    // accent. The exact percentile lives in the metric line below; the chip is
+    // the at-a-glance flag.
     if (data.isTop1Percent || data.isTop10Percent) {
       const chipWrap = doc.createElement("span");
       chipWrap.className = "cg-hero-chip";
       const chip = doc.createElement("span");
-      chip.className = data.isTop1Percent ? "cg-chip cg-chip--amber" : "cg-chip";
+      chip.className = data.isTop1Percent
+        ? "cg-chip cg-chip--amber-strong"
+        : "cg-chip cg-chip--amber";
       chip.textContent = data.isTop1Percent ? "Top 1%" : "Top 10%";
       chipWrap.appendChild(chip);
       hero.appendChild(chipWrap);

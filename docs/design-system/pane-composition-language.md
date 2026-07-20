@@ -56,11 +56,22 @@ composition; these rules are the pane's.
    `--cg-text-tertiary`). Region labels are eyebrows, not headers. Numbers are
    always `font-variant-numeric: tabular-nums`.
 
-5. **Restraint — one accent.** Sage (`--cg-sage-accent`) is the only accent:
-   links, the primary action, interactive affordances. Amber
-   (`--cg-amber-*`) is _evidence only_ — top-percentile, a warning state — never
-   decoration. Everything else is neutral (inherits Zotero's `--fill-*`). No
-   shadows on the pane; no decorative fills.
+5. **Colour has roles: sage = action, amber = evidence, structure = neutral.**
+   Sage (`--cg-sage-accent`, `--cg-sage-tint-*`) marks what you can **act on** —
+   buttons, links, hover, focus, selected state. It is never a surface, never a
+   hairline, never a badge. Amber (`--cg-amber-*`) is **evidence only**, at two
+   intensities: `.cg-chip--amber` (notable) and `.cg-chip--amber-strong`
+   (exceptional). Everything structural — card fills, hairlines, dividers,
+   resting control borders, non-semantic chips — uses the neutral tokens
+   (`--cg-surface-*`, `--cg-hairline`, `--cg-neutral-tint`).
+
+   _Why (2026-07-19)._ Sage had drifted into six unrelated jobs: card fill,
+   hairlines, button fill, hover, focus ring **and** the Top-10% chip. When
+   surfaces, borders and badges are all faintly green the accent stops reading
+   as an accent and nothing stands out. Percentile was worse — sage at Top 10%
+   but amber at Top 1%, i.e. the same evidence in two hues, with the 10% case
+   borrowing the action colour so a badge looked like a button. One meaning per
+   colour. No shadows on the pane; no decorative fills.
 
 6. **One separation cue.** A region is separated by its card boundary OR a
    hairline OR whitespace — never two at once. Since the top-level regions are
@@ -106,6 +117,18 @@ row is a clickable unit, so a hover tint is earned; a border is not.
 
 ## Applying it
 
+- **Metrics are presented with the shared primitives, everywhere.** One
+  dominant figure via `.cg-hero` / `.cg-hero-value` / `.cg-hero-label`
+  (+ `.cg-hero-chip` for the evidence badge), then supporting figures inline on
+  `.cg-metricline` with `.cg-metricline-sep` between them and `strong` on the
+  label that matters. These live in `src/modules/ui/components.ts` precisely so
+  the item pane's Impact card and the dialog's author header compose the SAME
+  shapes — that shared shape is what makes two different surfaces read as one
+  product. Never re-declare them surface-locally.
+- **Never build a row of boxed metric tiles.** It flattens hierarchy (every
+  figure equal weight) and it contradicts rule 1. The author header shipped that
+  way and read as a jumble; it is now the hero + metric-line pair. The gallery's
+  `.cg-stat-grid` is retained only as a deprecated reference.
 - New surface? Start from the reference layout, not from components. Compose
   with hierarchy + rhythm first; add a `.cg-*` primitive only where the rule
   earns it.
