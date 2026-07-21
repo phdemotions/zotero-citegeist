@@ -5,7 +5,7 @@
 <h1 align="center">Citegeist</h1>
 
 <p align="center">
-  A free Zotero plugin that shows citation counts, field-weighted impact, and journal rankings alongside the items in your library — and lets you follow citations forward and backward without leaving Zotero. Works with DOIs, PubMed IDs, arXiv IDs, and ISBNs.
+  A free Zotero plugin that shows citation counts, field-weighted impact, and journal rankings alongside the items in your library — follow citations forward and backward, and explore any author's full body of work, without leaving Zotero. Works with DOIs, PubMed IDs, arXiv IDs, and ISBNs.
 </p>
 
 <p align="center">
@@ -27,10 +27,21 @@ For each item in your library, Citegeist adds:
 - **Journal-level metrics** (2-year mean citedness, h-index) and membership flags for the UTD24, FT50, ABDC 2025, and AJG 2024 lists (3,177 journals covered)
 - **Year-over-year citation trend** so you can see whether a paper is still being cited
 - A **citation-network browser** for forward (citing works) and backward (references) snowballing, with one-click "Add to Zotero" for any result
-- **Author discovery** &mdash; match a paper's authors to OpenAlex and open a Scholar-style view of everything they've published, right in the pane
 - Automatic **retraction flags** from OpenAlex
 
-No account, API key, or subscription — the only optional setting is your email, which OpenAlex uses to put requests in its polite pool for faster responses.
+No account or subscription required. OpenAlex has been metered since July 2026, so anonymous use draws on a free daily allowance — plenty for everyday browsing. Large, library-wide scans can exhaust it; a free OpenAlex API key raises the limit (see [Settings](#settings)).
+
+### Author discovery — new in v3.0
+
+The headline addition in v3.0: Citegeist matches each paper's authors to their [OpenAlex](https://openalex.org) profiles and gives you a **Scholar-style view of everything an author has published, inside Zotero.**
+
+- See each matched author's **h-index** right in the item pane.
+- **Click a name** to open that author's full body of work, sortable by citations, field-weighted impact, or year.
+- **Add any of their papers** to your library in one click, exactly as in the citation-network browser.
+- Matching runs **automatically in the background** whenever citation data loads — nothing extra to set up.
+- Each match is recorded as a **native Zotero `openalex:author` relation** on the item, so other tools in your workflow can read the authorship without touching Citegeist's database.
+
+[Full walkthrough below ↓](#authors)
 
 ---
 
@@ -185,12 +196,14 @@ Right-click any collection in the left sidebar:
 
 Open Zotero's settings (**Zotero &rarr; Settings** on macOS, **Edit &rarr; Preferences** on Windows/Linux) and select the **Citegeist** tab:
 
-| Setting              | Default   | What it does                                                                                                          |
-| -------------------- | --------- | --------------------------------------------------------------------------------------------------------------------- |
-| **Email**            | _(empty)_ | Optional. Providing an email gets you faster data speeds. Only shared with OpenAlex (our data source), never with us. |
-| **Auto-fetch**       | On        | Fetches citation data automatically as you browse. Turn off to fetch manually via right-click.                        |
-| **Cache lifetime**   | 7 days    | How long before cached data is refreshed. Set higher (30&ndash;90 days) for large libraries.                          |
-| **Results per page** | 25        | How many results to load at a time in the citation network browser.                                                   |
+| Setting              | Default   | What it does                                                                                                                                                                                                                                                                                                   |
+| -------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OpenAlex API key** | _(empty)_ | Optional. OpenAlex meters requests; without a key you get a free daily allowance (fine for everyday use), and only bump into it on large scans (error `CG-API42`). A [free key](https://openalex.org) raises the limit. Stored only on this computer — never synced, never logged, only ever sent to OpenAlex. |
+| **Auto-fetch**       | On        | Fetches citation data automatically as you browse. Turn off to fetch manually via right-click.                                                                                                                                                                                                                 |
+| **Cache lifetime**   | 7 days    | How long before cached data is refreshed. Set higher (30&ndash;90 days) for large libraries.                                                                                                                                                                                                                   |
+| **Results per page** | 25        | How many results to load at a time in the citation network browser.                                                                                                                                                                                                                                            |
+
+Below these, a **Troubleshooting** section shows a running log of any problems Citegeist has hit this session and a **Copy diagnostic report** button — see [Troubleshooting](#troubleshooting).
 
 ---
 
@@ -277,7 +290,9 @@ Citegeist includes four ranking lists commonly used in business, management, eco
 <details>
 <summary><strong>Do I need an API key or account?</strong></summary>
 
-No. Everything is free, no sign-up required. Optionally add your email in settings for faster data speeds.
+No sign-up or paid subscription — Citegeist and its data are free.
+
+OpenAlex has metered its API since July 2026, so anonymous use draws on a **free daily allowance**. That's plenty for everyday browsing; you'd only bump into it running large, library-wide scans (you'll see error `CG-API42` if you do). A **free OpenAlex API key** raises the limit — get one at [openalex.org](https://openalex.org) and paste it into **Settings &rarr; Citegeist**. The key is stored only on your computer, never synced and never logged.
 
 </details>
 
@@ -325,6 +340,17 @@ No. Citegeist requires Zotero 7 or later. You can [upgrade for free](https://www
 ## Troubleshooting
 
 <details>
+<summary><strong>Something went wrong — how to report it so it gets fixed fast</strong></summary>
+
+Every failure in Citegeist carries a short **error code** — `CG-NET01`, `CG-DB01`, `CG-API42`, and so on. When a fetch fails, the code appears under **Details** in the Citegeist pane (and in the citation-network browser). For anything else — a blank column, a menu that did nothing — open **Settings &rarr; Citegeist &rarr; Troubleshooting** and click **Copy diagnostic report**.
+
+That report lists your Citegeist build, your Zotero version, and every problem recorded since Zotero started — with **no library content and no personal details**. Pasting it into a [GitHub issue](https://github.com/phdemotions/zotero-citegeist/issues) usually means the cause can be identified without a back-and-forth.
+
+The full list of codes and what each one means is in [`docs/ERROR-CODES.md`](docs/ERROR-CODES.md).
+
+</details>
+
+<details>
 <summary><strong>Upgrading from v1.3.x — what changed, and what to do if something looks wrong</strong></summary>
 
 v2.0.0 moved cached citation data out of Zotero's `Extra` field and into a plugin-owned SQLite database (`<profile>/citegeist.sqlite`). A one-time migration on first launch strips the old `Citegeist.*` lines from your items and rewrites them into the new cache. After migration:
@@ -363,19 +389,22 @@ Citegeist needs at least one recognized identifier per item — DOI, PubMed ID, 
 
 1. Confirm the item has a **DOI**, or a `PMID:` / `arXiv:` line in its **Extra** field, or an **ISBN** (for books).
 2. Check **Settings → Citegeist → Auto-fetch** is enabled (or right-click the item and choose **Fetch Citation Counts**).
-3. Give it a few seconds — requests are rate-limited to 8/second to stay inside OpenAlex's polite pool.
+3. Give it a few seconds — requests are rate-limited to 8/second to stay within OpenAlex's limits.
 4. If many items show "—", the metric may simply not be available on OpenAlex for those works.
 5. Books show blank citation cells when OpenAlex reports zero citations — this is expected, as book coverage in OpenAlex is incomplete.
 </details>
 
 <details>
-<summary><strong>"OpenAlex is currently unavailable"</strong></summary>
+<summary><strong>"Couldn't reach OpenAlex" (CG-NET01)</strong></summary>
 
-Citegeist distinguishes "not found" from "service unreachable." If you see the unavailable message:
+Citegeist distinguishes "not found" from "service unreachable." If you see the can't-reach message:
 
 - Check your internet connection.
 - Visit [status.openalex.org](https://status.openalex.org) or try loading `https://api.openalex.org/works/doi:10.1038/nature12373` in a browser.
 - Cached data in your library is unaffected and continues to work offline.
+
+Seeing `CG-API42` instead? That's the daily request allowance, not a connection problem — add a free API key in settings (see the FAQ above).
+
 </details>
 
 <details>
@@ -388,7 +417,9 @@ OpenAlex indexes a broader and more open set of sources than Scopus/WoS, so coun
 <details>
 <summary><strong>How do I see Citegeist's debug output?</strong></summary>
 
-In Zotero, open **Help → Debug Output Logging → Enable**, reproduce the problem, then **Help → Debug Output Logging → View Output**. Look for lines prefixed with `[Citegeist]` and paste the relevant portion when filing a bug.
+For most problems, **Settings &rarr; Citegeist &rarr; Troubleshooting &rarr; Copy diagnostic report** is quicker and captures everything needed (see the first entry in this section).
+
+For deeper issues, open **Help → Debug Output Logging → Enable**, reproduce the problem, then **Help → Debug Output Logging → View Output**. Look for lines prefixed with `[Citegeist]` — including the startup line, which now names the exact build (`[Citegeist] Starting v3.0.0 (build …)`) — and paste the relevant portion when filing a bug.
 
 </details>
 
