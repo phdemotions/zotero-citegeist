@@ -11,6 +11,7 @@ import {
   OpenAlexBudgetError,
   OpenAlexAuthError,
   OpenAlexNetworkError,
+  OpenAlexResponseError,
   normalizeError,
   redactApiKey,
 } from "../src/modules/utils";
@@ -147,11 +148,13 @@ describe("error discrimination", () => {
     expect(httpRequest).toHaveBeenCalledTimes(1);
   });
 
-  it("treats a 429 with remaining budget as transient and retries, then network-errors", async () => {
+  it("treats a 429 with remaining budget as transient and retries, then response-errors", async () => {
     vi.useFakeTimers();
     httpRequest.mockResolvedValue(httpResponse(429, {}, { "X-RateLimit-Remaining": "42" }));
     const p = getWorkById("W1");
-    const assertion = expect(p).rejects.toBeInstanceOf(OpenAlexNetworkError);
+    // The service answered (429), so this is CG-API50 "unexpected response" —
+    // NOT CG-NET01, which would tell the user to check a connection that is fine.
+    const assertion = expect(p).rejects.toBeInstanceOf(OpenAlexResponseError);
     await vi.runAllTimersAsync();
     await assertion;
     // initial attempt + 2 retries (OPENALEX_RETRY_DELAYS_MS has length 2)

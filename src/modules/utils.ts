@@ -100,9 +100,14 @@ export function redactApiKey(s: string): string {
  * left untouched — only what reaches the shareable buffer is scrubbed.
  */
 export function redactPaths(s: string): string {
-  return s
-    .replace(/\/(?:Users|home)\/[^\s"')]+/g, "~")
-    .replace(/[A-Za-z]:\\Users\\[^\s"')]+/gi, "~");
+  return (
+    s
+      // Consume the user segment up to the NEXT SEPARATOR, not the next space:
+      // a profile folder is often "John Smith", and stopping at the space left
+      // the surname behind ("~ Smith\\Zotero\\…").
+      .replace(/\/(?:Users|home)\/[^/\r\n]*/g, "~")
+      .replace(/[A-Za-z]:\\Users\\[^\\\r\n]*/gi, "~")
+  );
 }
 
 /**
@@ -112,7 +117,19 @@ export function redactPaths(s: string): string {
  * the others.
  */
 export function redactSensitive(s: string): string {
-  return redactOpenAlexIds(redactPaths(redactApiKey(s)));
+  return redactDois(redactOpenAlexIds(redactPaths(redactApiKey(s))));
+}
+
+/**
+ * Replace a DOI with `<doi>`.
+ *
+ * A DOI is the most direct pointer to library content there is, and it is named
+ * first in the report's on-screen promise, so it gets the same defense-in-depth
+ * net as an OpenAlex id. Matches the bare form, which also covers a doi.org URL
+ * (the DOI is a substring of it).
+ */
+export function redactDois(s: string): string {
+  return s.replace(/\b10\.\d{4,9}\/[^\s"')<>]+/gi, "<doi>");
 }
 
 /**
@@ -233,6 +250,20 @@ export class OpenAlexNetworkError extends CitegeistError {
   constructor(message: string, cause?: unknown) {
     super(message, "CG-NET01", cause);
     this.name = "OpenAlexNetworkError";
+  }
+}
+
+/**
+ * OpenAlex answered, but with something we can't use — an unexpected status
+ * (400/422/…) or a body that isn't valid JSON. Distinct from
+ * {@link OpenAlexNetworkError}: telling a user to "check your internet
+ * connection" when the service replied is misleading, and it sends them
+ * debugging the wrong thing.
+ */
+export class OpenAlexResponseError extends CitegeistError {
+  constructor(message: string, cause?: unknown) {
+    super(message, "CG-API50", cause);
+    this.name = "OpenAlexResponseError";
   }
 }
 

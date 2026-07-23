@@ -19,6 +19,7 @@ function stubZotero(dataDir: string): void {
   });
 }
 
+import { logError } from "../src/modules/utils";
 import {
   buildDiagnosticReport,
   copyToClipboard,
@@ -68,16 +69,24 @@ describe("buildDiagnosticReport", () => {
     expect(report).toContain("Recent problems (1)");
   });
 
-  it("never throws — a host API that misbehaves still yields a report string", () => {
+  it("degrades per-fact when one host API throws — it does not bail out entirely", () => {
     vi.stubGlobal("Zotero", {
       debug: vi.fn(),
-      get version(): string {
+      version: "9.0.1",
+      get platform(): string {
         throw new Error("host exploded");
       },
+      locale: "en-US",
       DataDirectory: { dir: "/Users/x/Zotero" },
     });
-    expect(() => buildDiagnosticReport({})).not.toThrow();
-    expect(typeof buildDiagnosticReport({})).toBe("string");
+    const report = buildDiagnosticReport({});
+    // The broken fact is marked unavailable, and every OTHER fact still lands —
+    // asserting only "didn't throw" would pass even if the whole body bailed to
+    // the outer catch and the report lost all its host context.
+    expect(report).toContain("Platform: unavailable");
+    expect(report).toContain("9.0.1");
+    expect(report).toContain("en-US");
+    expect(report).toContain("Recent problems");
   });
 });
 
@@ -96,5 +105,17 @@ describe("copyToClipboard", () => {
     // A failed copy must not take out the error panel it lives in.
     vi.stubGlobal("Zotero", { debug: vi.fn() });
     expect(copyToClipboard("x")).toBe(false);
+  });
+});
+
+describe("report privacy net", () => {
+  it("scrubs a DOI on the real recording path (logError, the single funnel)", () => {
+    stubZotero("/Users/x/Zotero");
+    // A Zotero DB error embeds every bound parameter — including the item's DOI
+    // and title — in its message. It must not survive into the pasted report.
+    logError("cacheWorkData", new Error("locked [PARAMS: 10.1038/nature12373]"));
+    const report = buildDiagnosticReport({});
+    expect(report).not.toContain("10.1038/nature12373");
+    expect(report).toContain("<doi>");
   });
 });

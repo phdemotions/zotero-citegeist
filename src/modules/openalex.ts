@@ -27,6 +27,7 @@ import {
 } from "../constants";
 import {
   OpenAlexNetworkError,
+  OpenAlexResponseError,
   OpenAlexBudgetError,
   OpenAlexAuthError,
   normalizeError,
@@ -235,13 +236,15 @@ async function fetchJson<T>(url: string, label: string, attempt: number): Promis
   }
 
   if (response.status !== 200) {
-    throw new OpenAlexNetworkError(`OpenAlex ${response.status} while fetching ${label}`);
+    // The service ANSWERED — this is not a connectivity problem, so it must not
+    // surface as CG-NET01 "check your internet connection".
+    throw new OpenAlexResponseError(`OpenAlex ${response.status} while fetching ${label}`);
   }
 
   try {
     return JSON.parse(response.responseText) as T;
   } catch (e) {
-    throw new OpenAlexNetworkError(`OpenAlex returned invalid JSON for ${label}`, e);
+    throw new OpenAlexResponseError(`OpenAlex returned invalid JSON for ${label}`, e);
   }
 }
 

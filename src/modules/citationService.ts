@@ -269,7 +269,7 @@ async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchRes
         // resolvable pointer to the paper, and this context is recorded into the
         // shareable diagnostic report.
         logError(`fetchAndCacheItem(confirmed, item ${item.id})`, e);
-        return { status: "error", error: "network" };
+        return { status: "error", error: "network", code: "CG-NET01" };
       }
       throw e;
     }
@@ -292,7 +292,7 @@ async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchRes
   } catch (e) {
     if (e instanceof OpenAlexNetworkError) {
       logError(`fetchAndCacheItem(${item.id})`, e);
-      return { status: "error", error: "network" };
+      return { status: "error", error: "network", code: "CG-NET01" };
     }
     throw e;
   }
@@ -327,7 +327,7 @@ async function attemptTitleSearch(item: _ZoteroTypes.Item): Promise<FetchResult>
   } catch (e) {
     if (e instanceof OpenAlexNetworkError) {
       logError(`attemptTitleSearch(${item.id})`, e);
-      return { status: "error", error: "network" };
+      return { status: "error", error: "network", code: "CG-NET01" };
     }
     throw e;
   }
@@ -474,7 +474,14 @@ export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<Au
       // the pass keeps issuing one metered call per remaining item, and the stop
       // is miscounted as "unresolved" instead of "budget".
       if (r.status === "error" && r.code === "CG-API42") return "budget";
-      return r.status === "cached" ? "already" : "unresolved";
+      if (r.status === "cached") return "already";
+      // A genuine failure (network, DB lock, auth, unexpected) is an ERROR, not
+      // "no author match" — reporting infrastructure trouble as a clean
+      // not-found sends the user looking at their library instead of the cause.
+      if (r.status === "error" && r.error !== "no-match" && r.error !== "no-identifier") {
+        return "error";
+      }
+      return "unresolved";
     }
 
     const work = await getWorkById(workId);

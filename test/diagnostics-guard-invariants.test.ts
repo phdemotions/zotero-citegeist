@@ -33,7 +33,7 @@ import {
   bindGuarded,
 } from "../src/modules/diagnostics";
 import { DIAGNOSTIC_RING_BUFFER_SIZE } from "../src/constants";
-import { logError } from "../src/modules/utils";
+import { CacheError, logError } from "../src/modules/utils";
 
 function src(relative: string): string {
   return readFileSync(fileURLToPath(new URL(`../${relative}`, import.meta.url)), "utf8");
@@ -151,6 +151,20 @@ describe("guard", () => {
     expect(out).toBeUndefined();
     expect(fallback).toHaveBeenCalledWith("CG-BUG01");
     expect(recentDiagnostics()[0]).toMatchObject({ code: "CG-BUG01", context: "unit" });
+  });
+
+  it("hands the fallback the error's OWN code, not a hardcoded CG-BUG01", () => {
+    // Pins guard's code propagation: with only plain-Error cases, a regression
+    // to a hardcoded "CG-BUG01" would be invisible.
+    const fallback = vi.fn();
+    guard(
+      "unit coded",
+      () => {
+        throw new CacheError("locked");
+      },
+      fallback,
+    );
+    expect(fallback).toHaveBeenCalledWith("CG-DB01");
   });
 
   it("does not rethrow when the fallback itself throws", () => {

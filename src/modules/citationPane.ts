@@ -636,7 +636,7 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
                 renderDiagnosticState(
                   container,
                   setSectionSummary,
-                  result.code ?? (result.error === "network" ? "CG-NET01" : "CG-BUG01"),
+                  result.code ?? "CG-BUG01",
                   `pane fetch (item ${item.id})`,
                 );
               }
@@ -705,7 +705,7 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
                       renderDiagnosticState(
                         container,
                         setSectionSummary,
-                        result.code ?? (result.error === "network" ? "CG-NET01" : "CG-BUG01"),
+                        result.code ?? "CG-BUG01",
                         `pane refresh (item ${item.id})`,
                       );
                     } else {
