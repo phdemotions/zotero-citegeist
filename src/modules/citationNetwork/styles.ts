@@ -55,7 +55,7 @@ export function getDialogCSS(): string {
       display: flex; align-items: center;
       padding: 5px 14px;
       background: var(--cg-sage-tint-04);
-      border-bottom: 1px solid var(--cg-sage-tint-08);
+      border-bottom: 1px solid var(--cg-hairline);
       flex-shrink: 0;
     }
     .cg-close-btn {
@@ -74,7 +74,7 @@ export function getDialogCSS(): string {
       display: grid; grid-template-columns: minmax(0, 1fr) auto;
       align-items: center; gap: 14px;
       padding: 13px 14px 11px;
-      border-bottom: 1px solid var(--cg-sage-tint-12);
+      border-bottom: 1px solid var(--cg-hairline);
       flex-shrink: 0;
     }
     .cg-header-text { min-width: 0; }
@@ -92,23 +92,23 @@ export function getDialogCSS(): string {
       font-family: var(--cg-font);
     }
     .cg-count-stack { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-    .cg-stat {
-      min-width: 72px; text-align: right;
-      border: 1px solid var(--cg-sage-tint-15);
-      border-radius: 7px; padding: 6px 9px;
-      background: var(--cg-sage-tint-06);
-    }
+    /* Unboxed on purpose: a box is earned by an interaction, not by a number
+       (see the deprecated stat-tile note in the gallery). The work header's
+       cited-by figure is a plain value + label stack, matching the pane. */
+    .cg-stat { min-width: 72px; text-align: right; }
     .cg-stat-value {
       display: block; font-size: 14px; line-height: 1; color: var(--cg-text-primary);
       font-variant-numeric: tabular-nums;
     }
     .cg-stat-label { font-size: 10px; color: var(--cg-text-tertiary); }
-    /* Author-mode header (U7b): hero h-index (concept B) sits larger than the
-       i10/works/cited stats beside it; the command bar drops the citing/
-       references tabs, so its grid loses the leading tabs column. */
-    .cg-author-metrics { gap: 6px; }
-    .cg-stat--hero { min-width: 84px; }
-    .cg-stat--hero .cg-stat-value { font-size: 24px; }
+    /* Author-mode header: one column (no right-hand stat stack any more) with
+       the name as the dominant element and the metrics on the shared
+       .cg-metricline underneath, mirroring the pane's Impact card. */
+    .cg-dialog-top--author { grid-template-columns: minmax(0, 1fr); }
+    .cg-dialog-top--author .cg-dialog-title {
+      font-size: 17px; font-weight: var(--cg-weight-bold); letter-spacing: -0.02em;
+    }
+    .cg-dialog-top--author .cg-source-authors { margin-top: 5px; }
     .cg-command-bar--notabs { grid-template-columns: minmax(160px, 1fr) auto; }
 
     /* ── Command bar: mode + search + filter + sort ── */
@@ -117,7 +117,7 @@ export function getDialogCSS(): string {
       align-items: center; gap: 8px;
       padding: 9px 14px;
       background: var(--cg-sage-tint-04);
-      border-bottom: 1px solid var(--cg-sage-tint-10);
+      border-bottom: 1px solid var(--cg-hairline);
       flex-shrink: 0;
     }
     .cg-tabs-inner {
@@ -142,7 +142,7 @@ export function getDialogCSS(): string {
     }
     .cg-search-input {
       width: 100%; padding: 7px 10px 7px 30px;
-      border: 1px solid var(--cg-sage-tint-15);
+      border: 1px solid var(--cg-hairline);
       border-radius: 7px; font-size: 12px;
       background: var(--cg-sage-tint-06); color: var(--cg-text-primary); outline: none;
       transition: border-color 0.15s, box-shadow 0.15s;
@@ -158,7 +158,7 @@ export function getDialogCSS(): string {
     .cg-hide-in-library {
       display: inline-flex; align-items: center; gap: 7px;
       min-height: 32px; padding: 7px 9px;
-      border: 1px solid var(--cg-sage-tint-15); border-radius: 7px;
+      border: 1px solid var(--cg-hairline); border-radius: 7px;
       background: var(--cg-sage-tint-06); color: var(--cg-text-secondary);
       font-size: 11px; font-weight: 600; cursor: pointer; white-space: nowrap;
       transition: background 0.12s, color 0.12s, border-color 0.12s;
@@ -190,7 +190,7 @@ export function getDialogCSS(): string {
       font-family: var(--cg-font);
     }
     .cg-sort-select {
-      padding: 6px 8px; border: 1px solid var(--cg-sage-tint-15);
+      padding: 6px 8px; border: 1px solid var(--cg-hairline);
       border-radius: 7px; font-size: 11px;
       background: var(--cg-sage-tint-06); color: var(--cg-text-hover); cursor: pointer;
       font-family: var(--cg-font);
@@ -209,7 +209,7 @@ export function getDialogCSS(): string {
     .cg-result-item {
       display: flex; align-items: flex-start; gap: 10px;
       padding: 13px 14px;
-      border-bottom: 1px solid var(--cg-sage-tint-12);
+      border-bottom: 1px solid var(--cg-hairline);
       cursor: pointer;
       transition: background 0.1s;
     }
@@ -330,7 +330,7 @@ export function getDialogCSS(): string {
     /* ── Expanded detail area ── */
     .cg-result-expanded {
       padding: 8px 14px 12px 14px;
-      border-bottom: 1px solid var(--cg-sage-tint-08);
+      border-bottom: 1px solid var(--cg-hairline);
       background: rgba(56,104,87,0.03);
       animation: cg-expand-in 0.15s ease-out;
     }
@@ -404,7 +404,7 @@ export function getDialogCSS(): string {
     /* ── Skeleton loading ── */
     .cg-skeleton-row {
       display: flex; align-items: flex-start; gap: 10px;
-      padding: 12px 14px; border-bottom: 1px solid var(--cg-sage-tint-08);
+      padding: 12px 14px; border-bottom: 1px solid var(--cg-hairline);
     }
     .cg-skeleton-bar {
       height: 12px; border-radius: 4px;
@@ -426,7 +426,7 @@ export function getDialogCSS(): string {
       position: absolute; right: 0; top: calc(100% + 4px);
       width: 270px; max-height: 300px;
       display: flex; flex-direction: column;
-      background: var(--cg-surface-elevated); border: 1px solid var(--cg-sage-tint-20);
+      background: var(--cg-surface-elevated); border: 1px solid var(--cg-hairline);
       border-radius: 10px;
       box-shadow: 0 12px 40px rgba(14,22,18,0.6);
       z-index: 20;
@@ -478,7 +478,7 @@ export function getDialogCSS(): string {
     }
     .cg-picker-actions {
       display: flex; justify-content: flex-end; padding: 6px 12px;
-      border-top: 1px solid var(--cg-sage-tint-10);
+      border-top: 1px solid var(--cg-hairline);
       flex-shrink: 0;
       background: var(--cg-surface-elevated);
       border-radius: 0 0 10px 10px;
@@ -490,7 +490,7 @@ export function getDialogCSS(): string {
     .cg-dialog-footer {
       display: flex; align-items: center; justify-content: space-between;
       padding: 10px 14px;
-      border-top: 1px solid var(--cg-sage-tint-12);
+      border-top: 1px solid var(--cg-hairline);
       flex-shrink: 0;
       background: rgba(56,104,87,0.03);
     }
@@ -509,7 +509,7 @@ export function getDialogCSS(): string {
       display: inline-flex; align-items: center; gap: 5px;
       padding: 5px 10px; border-radius: 7px; font-size: 11px; font-weight: 500;
       background: var(--cg-sage-tint-08); color: var(--cg-text-hover);
-      border: 1px solid var(--cg-sage-tint-15);
+      border: 1px solid var(--cg-hairline);
       cursor: pointer; white-space: nowrap; max-width: 200px;
       transition: background 0.12s;
       font-family: var(--cg-font);
@@ -524,7 +524,7 @@ export function getDialogCSS(): string {
       position: absolute; bottom: calc(100% + 6px); right: 0;
       width: 270px; max-height: 300px;
       display: flex; flex-direction: column;
-      background: var(--cg-surface-elevated); border: 1px solid var(--cg-sage-tint-20);
+      background: var(--cg-surface-elevated); border: 1px solid var(--cg-hairline);
       border-radius: 10px;
       box-shadow: 0 12px 40px rgba(14,22,18,0.6);
       z-index: 20;
@@ -542,13 +542,19 @@ export function getDialogCSS(): string {
       color: var(--cg-text-tertiary); font-size: 13px; line-height: 1.5;
       font-family: var(--cg-font);
     }
+    /* Diagnostic variant: the coded failure block reads as prose plus a
+       machine-facing report, so it is left-aligned and measure-capped rather
+       than centred like the short empty-state lines above. */
+    .cg-empty--diag {
+      text-align: left; max-width: 34rem; margin: 0 auto; padding: 40px 24px;
+    }
     .cg-empty-title {
       font-size: 14px; font-weight: 600; color: var(--cg-text-secondary); margin-bottom: 4px;
     }
     .cg-cap-notice {
       text-align: center; padding: 8px 14px; font-size: 11px;
       color: var(--cg-text-quaternary); background: rgba(56,104,87,0.03);
-      border-top: 1px solid var(--cg-sage-tint-06);
+      border-top: 1px solid var(--cg-hairline);
       font-family: var(--cg-font);
     }
 

@@ -4,11 +4,14 @@
  * redaction. Exercises the real fetch path (getWorkById) against a mocked
  * Zotero.HTTP so the retry/discriminator branches are covered end to end.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   OpenAlexBudgetError,
   OpenAlexAuthError,
   OpenAlexNetworkError,
+  OpenAlexResponseError,
   normalizeError,
   redactApiKey,
 } from "../src/modules/utils";
@@ -64,6 +67,37 @@ describe("redactApiKey", () => {
     expect(msg).not.toContain("LEAK");
     expect(msg).toContain("api_key=REDACTED");
   });
+
+  // The diagnostic report is copy-pasted into public GitHub issues and promises
+  // "no personal details", so a username-bearing path must not survive
+  // normalizeError into the ring buffer.
+  it("normalizeError strips absolute paths that carry the OS username", () => {
+    const posix = normalizeError(
+      new Error("locked: /Users/janedoe/Library/CloudStorage/Box/Zotero/citegeist.sqlite"),
+    );
+    expect(posix).not.toContain("janedoe");
+    expect(posix).not.toContain("/Users/");
+    const win = normalizeError(new Error("locked: C:\\Users\\janedoe\\Zotero\\citegeist.sqlite"));
+    expect(win).not.toContain("janedoe");
+  });
+
+  // The P1 that this branch's review caught: fetch labels became the recorded
+  // diagnostic detail, so a raw DOI/PMID/arXiv/ISBN/title in a label leaked
+  // library content into the shareable report. Labels must carry only the
+  // identifier TYPE.
+  it("no OpenAlex fetch label interpolates a library identifier or title", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("../src/modules/openalex.ts", import.meta.url)),
+      "utf8",
+    );
+    const labels = [...source.matchAll(/rateLimitedFetch<[^>]*>\([^,]+,\s*([^)]+?)\)/g)].map((m) =>
+      m[1].trim(),
+    );
+    const leaky = labels.filter((l) => l.includes("${"));
+    expect(leaky, `these labels interpolate a value into the recorded detail: ${leaky}`).toEqual(
+      [],
+    );
+  });
 });
 
 describe("resolveCanonicalId", () => {
@@ -114,11 +148,13 @@ describe("error discrimination", () => {
     expect(httpRequest).toHaveBeenCalledTimes(1);
   });
 
-  it("treats a 429 with remaining budget as transient and retries, then network-errors", async () => {
+  it("treats a 429 with remaining budget as transient and retries, then response-errors", async () => {
     vi.useFakeTimers();
     httpRequest.mockResolvedValue(httpResponse(429, {}, { "X-RateLimit-Remaining": "42" }));
     const p = getWorkById("W1");
-    const assertion = expect(p).rejects.toBeInstanceOf(OpenAlexNetworkError);
+    // The service answered (429), so this is CG-API50 "unexpected response" —
+    // NOT CG-NET01, which would tell the user to check a connection that is fine.
+    const assertion = expect(p).rejects.toBeInstanceOf(OpenAlexResponseError);
     await vi.runAllTimersAsync();
     await assertion;
     // initial attempt + 2 retries (OPENALEX_RETRY_DELAYS_MS has length 2)
@@ -136,5 +172,32 @@ describe("error discrimination", () => {
   it("returns null on 404", async () => {
     httpRequest.mockResolvedValue(httpResponse(404));
     expect(await getWorkById("W1")).toBeNull();
+  });
+});
+
+/**
+ * The tests above mock `Zotero.HTTP.request` as RESOLVING on 401/404/429. Real
+ * Zotero only does that when `successCodes: false` is passed — its default is
+ * `success = status >= 200 && status < 300` (chrome/content/zotero/xpcom/http.js),
+ * which rejects every error status before the caller can read it. Without the
+ * flag the whole discriminator above is dead code in production: "not found",
+ * "budget exhausted" and "bad key" all collapse into the network-error branch
+ * and get retried three times each, while this suite stays green against a
+ * mock that no longer matches the host. This guards the contract itself.
+ */
+describe("Zotero.HTTP contract", () => {
+  it("passes successCodes: false so error statuses reach our own classifier", async () => {
+    httpRequest.mockResolvedValue(httpResponse(200, { id: "https://openalex.org/W1" }));
+    await getWorkById("W1");
+    expect(httpRequest.mock.calls[0][2]).toMatchObject({ successCodes: false });
+  });
+
+  it("still surfaces a genuine transport rejection as OpenAlexNetworkError", async () => {
+    vi.useFakeTimers();
+    httpRequest.mockRejectedValue(new Error("NS_ERROR_OFFLINE"));
+    const p = getWorkById("W1");
+    const assertion = expect(p).rejects.toBeInstanceOf(OpenAlexNetworkError);
+    await vi.runAllTimersAsync();
+    await assertion;
   });
 });

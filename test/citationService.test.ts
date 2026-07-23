@@ -357,6 +357,23 @@ describe("fetchAndCacheItem", () => {
     expect(mockedGetWorkByArxivId).not.toHaveBeenCalled();
   });
 
+  /**
+   * The pane's onAsyncRender awaits this with the loading spinner already on
+   * screen, and Zotero does nothing with a rejected handler — so a throw here
+   * hangs the pane permanently with nothing for the user to report. Budget/auth
+   * errors and cache-write failures (a Zotero data directory on Dropbox/iCloud/
+   * Box can lock the SQLite file) both reach this path.
+   */
+  it("never throws, and carries the specific diagnostic code out to the pane", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    mockedGetWorkByDOI.mockRejectedValue(new OpenAlexBudgetError("budget gone"));
+
+    const result = await fetchAndCacheItem(item);
+    // CG-API42, not a generic failure: the pane can then say "today's OpenAlex
+    // budget is spent, add a key" instead of "something went wrong".
+    expect(result).toEqual({ status: "error", error: "unexpected", code: "CG-API42" });
+  });
+
   it("piggybacks author identity onto a successful fetch (U3)", async () => {
     const item = mockItem({ doi: "10.1234/test" });
     mockedGetWorkByDOI.mockResolvedValue(makeFakeWork());

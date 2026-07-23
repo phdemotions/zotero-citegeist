@@ -1,12 +1,14 @@
 /**
  * The unified Citegeist item-pane section: citation impact + author discovery.
  *
- * Composition follows docs/design-system/pane-composition-language.md — one hero
- * (the citation count), a single supporting-metric line (FWCI, percentile,
- * trend), two peer "explore" buttons (citing works / references), a full-bleed
- * hairline, then the author link rows (name, h-index, chevron; each opens that
- * author's works). Metrics render synchronously from the cache in onRender;
- * author rows load async in renderAuthorRows under a paneGeneration guard.
+ * Composition: two titled cards. An "Impact" card holds the one hero (the
+ * citation count), a single supporting-metric line (FWCI, percentile, trend) and
+ * the two peer "explore" actions; an "Authors" card holds the author link rows
+ * (name, h-index, chevron; each opens that author's works). Cards fill the pane
+ * width and the author list reflows into columns when the pane is dragged wide,
+ * so extra width is used rather than left as dead space. Metrics render
+ * synchronously from the cache in onRender; author rows load async in
+ * renderAuthorRows under a paneGeneration guard.
  *
  * IMPORTANT: interactive elements + all interpolated data are built via the DOM
  * API (createElement + textContent), never innerHTML — Zotero's XUL/XHTML pane
@@ -23,23 +25,27 @@ import {
   type CachedData,
   type PendingSuggestion,
 } from "./cache";
-import { fetchAndCacheItem, extractIdentifier } from "./citationService";
+import { fetchAndCacheItem, extractIdentifier, resolveAuthorsForItem } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import { normalizeDOI } from "./openalex";
 import type { OpenAlexWork } from "./openalex";
 import { showCitationNetwork, showAuthorWorks } from "./citationNetwork";
+import { fetchAuthorProfile } from "./openalexAuthors";
 import { getItemAuthors, getAuthor, type AuthorRow } from "./cache/authors";
 import {
   buildAuthorRowViewModels,
   compactTrend,
   getAuthorCreators,
+  maybeReconcileMerge,
+  persistProfileMetrics,
   type AuthorRowViewModel,
 } from "./authorProfile";
 import { logError, isBookType, toOrdinal } from "./utils";
+import { buildDiagnosticElement, guard, guardAsync, type DiagnosticCode } from "./diagnostics";
 import { cgDesignTokens } from "./ui/tokens";
 import { cgComponents } from "./ui/components";
 import { resolveHostScheme } from "./ui/theme";
-import { SETTINGS_PANE_ID } from "../constants";
+import { MAX_ATTEMPTED_FETCH_CACHE, SETTINGS_PANE_ID } from "../constants";
 
 /**
  * Force `color-scheme` on the pane root to Zotero's actual theme — the same
@@ -95,6 +101,22 @@ const refreshing = new Set<number>();
  */
 let paneGeneration = 0;
 
+/**
+ * Per-session attempt guards. An item with no resolvable authors, or an author
+ * whose metrics fetch fails, must not re-hit the API on every single pane
+ * render — record the attempt and move on. Bounded like the column's
+ * `fetchAttempted`: a very large library shouldn't grow these without limit for
+ * the whole session, and dropping the guard just means a re-attempt, not a bug.
+ */
+const authorResolveAttempted = new Set<string>();
+const authorMetricsAttempted = new Set<string>();
+
+/** Record an attempt, clearing the set first if it has grown past the cap. */
+function noteAttempt(set: Set<string>, key: string): void {
+  if (set.size >= MAX_ATTEMPTED_FETCH_CACHE) set.clear();
+  set.add(key);
+}
+
 const PANE_ID = "citegeist-citation-details";
 
 /**
@@ -122,11 +144,6 @@ const EMPTY_STATES = {
   },
   loading: { html: "Fetching citation data…", summary: "Loading…", cls: "cg-loading" },
   refreshing: { html: "Refreshing…", summary: "Refreshing…", cls: "cg-loading" },
-  unavailable: {
-    html: "OpenAlex is currently unavailable. Try again in a few minutes.",
-    summary: "Unavailable",
-    cls: "cg-no-identifier",
-  },
   notFoundTitle: {
     html: "Not found on OpenAlex. We also searched by title and found no confident match.",
     summary: "Not found",
@@ -162,8 +179,33 @@ function renderEmptyState(
   // the whole tree. (ADV-U2)
   clearSuggestionAria(container);
   const s = EMPTY_STATES[key];
-  container.innerHTML = `<div class="${s.cls}">${s.html}</div>`;
+  // Wrapped in a card so loading/empty states sit on the same surface as real
+  // content: no bare text line, and no layout jump when the cards replace them.
+  container.innerHTML = `<div class="cg-card cg-state-card"><div class="${s.cls}">${s.html}</div></div>`;
   setSummary(s.summary);
+}
+
+/**
+ * Render a coded failure state into the pane.
+ *
+ * The block itself is built by the shared renderer so this and the network
+ * dialog stay one design, not two — see `diagnostics/surface.ts`. The pane
+ * adds only what is pane-specific: the state card it sits in, and the section
+ * summary.
+ */
+function renderDiagnosticState(
+  container: HTMLElement,
+  setSummary: (s: string) => void,
+  code: DiagnosticCode,
+  context: string,
+): void {
+  clearSuggestionAria(container);
+  container.innerHTML = "";
+  const card = container.ownerDocument.createElement("div");
+  card.className = "cg-card cg-state-card";
+  card.appendChild(buildDiagnosticElement(container.ownerDocument, code, context));
+  container.appendChild(card);
+  setSummary("Error");
 }
 
 function clearSuggestionAria(container: HTMLElement): void {
@@ -190,7 +232,7 @@ function namespacedPaneKey(pluginID: string, paneID: string): string {
   return raw.replace(/[@.]/g, "\\$&");
 }
 
-export function registerCitationPane(pluginID: string): void {
+export function registerCitationPane(pluginID: string, rootURI: string): void {
   if (paneRegistered) return;
   paneRegistered = true;
   paneRegisteredPluginID = pluginID;
@@ -208,22 +250,38 @@ export function registerCitationPane(pluginID: string): void {
       paneID: PANE_ID,
       pluginID,
       header: {
+        // Zotero 9 REQUIRES l10nID here — a plain `label` is rejected with
+        // "Option must have .header[\"l10nID\"]" / "Option [\"header\"] is invalid"
+        // and the section never registers (the pane vanishes entirely). The text
+        // comes from the injected FTL (citegeist-pane-header). hooks.ts loads
+        // citegeist.ftl into the window at startup AND on window load so the ID
+        // resolves even when the main window is already open before onStartup.
         l10nID: "citegeist-pane-header",
-        // Self-colored SVG (explicit sage), NOT the context-fill SVG: Zotero 7
-        // renders item-pane section icons without supplying a paint via
-        // -moz-context-properties, so a context-fill icon paints blank. An
-        // explicit-colored SVG renders regardless of the icon treatment.
-        icon: "chrome://citegeist/content/icons/icon-20-color.svg",
+        // The COLOR icon (explicit #8FAD9F fills), NOT icon-16/20.svg — those use
+        // `fill/stroke="context-fill"`, which only resolves inside a XUL chrome
+        // context that sets -moz-context-properties. Zotero paints the section /
+        // sidenav icon as a plain url() image, where context-fill falls back to
+        // transparent → a blank icon. rootURI (jar:) so the URL itself resolves.
+        icon: `${rootURI}content/icons/icon-20-color.svg`,
+        // darkIcon required too — Zotero does NOT default it to `icon` (see the
+        // sidenav note below); omitting it blanks the icon in dark mode.
+        darkIcon: `${rootURI}content/icons/icon-20-color.svg`,
       },
       sidenav: {
+        // l10nID required, same as header (citegeist-pane-sidenav in the FTL).
         l10nID: "citegeist-pane-sidenav",
-        // Context-fill (symbolic) SVG here, NOT the self-colored one: Zotero 8/9
-        // paint sidenav-strip icons via -moz-context-properties (so the icon
-        // tracks the strip's theme + selected state). A hardcoded-color SVG is
-        // not picked up by that paint path and renders blank in the strip — the
-        // "icon missing from the bottom nav" bug. The header (on the pane surface,
-        // not the themed strip) keeps the self-colored icon, which Zotero 7 needs.
-        icon: "chrome://citegeist/content/icons/icon-20.svg",
+        // Color icon (explicit fills): Zotero renders the sidenav icon as a
+        // background-image, so the SVG's own colours show (a context-fill icon
+        // would be blank here). rootURI so the URL resolves.
+        icon: `${rootURI}content/icons/icon-20-color.svg`,
+        // darkIcon is REQUIRED, not optional. Zotero does NOT default it to
+        // `icon` (despite the JSDoc): itemPaneSidenav.js emits
+        // `--custom-sidenav-icon-dark: url('<darkIcon>')` verbatim, and the
+        // sidenav SCSS applies `background-image: var(--custom-sidenav-icon-dark)`
+        // under `@media (prefers-color-scheme: dark)` with NO fallback. Omit it
+        // and dark-mode users get `url('undefined')` → a BLANK sidenav icon —
+        // the persistent blank-icon bug. The sage art reads on both themes.
+        darkIcon: `${rootURI}content/icons/icon-20-color.svg`,
       },
       bodyXHTML: `
       <div id="citegeist-pane-root" xmlns="http://www.w3.org/1999/xhtml">
@@ -242,18 +300,42 @@ export function registerCitationPane(pluginID: string): void {
           #citegeist-pane-root {
             font-family: var(--cg-font);
             font-feature-settings: 'kern' 1, 'liga' 1;
-            /* 12px top/side, 16px bottom — content sits on the 4pt grid; the
-               full-bleed hairline negates the 12px side padding (see .cg-hairline). */
-            padding: var(--cg-space-3) var(--cg-space-3) var(--cg-space-4);
-            /* Cap the content so a dragged-wide item pane doesn't stretch the hero
-               chip, the buttons, and the author rows apart (name→chevron gap grows
-               unbounded otherwise). Left-aligned; extra pane width becomes right
-               margin. Composition is tuned for ~320px; 26rem is a comfortable ceiling. */
-            max-width: 26rem;
+            /* Even 12px gutter; each card owns its inner padding and the content
+               column owns the gap BETWEEN cards, so spacing is systematic rather
+               than a pile of per-element margins. */
+            padding: var(--cg-space-3);
+            /* Deliberately no max-width: the cards are meant to FILL a dragged-wide
+               pane (the old 26rem cap left dead space on the right). Nothing
+               stretches badly now — the hero is left-grouped and the author list
+               reflows into columns. */
             font-size: var(--cg-size-footnote);
             line-height: 1.5;
             color: var(--cg-text-primary);
           }
+
+          /* Card stack — one systematic gap, and ONE shared content measure so
+             every card is exactly the same width. Without it the Impact card
+             stretched to the full pane (metre-wide buttons) while the author list
+             sat at its own narrower cap: two different widths, reading as two
+             unrelated design systems. The measure also keeps line length sane
+             when the pane is dragged very wide. */
+          #citegeist-content {
+            display: flex;
+            flex-direction: column;
+            gap: var(--cg-space-3);
+            max-width: 34rem;
+          }
+
+          /* Each card's uppercase title sits above its content. */
+          .cg-card-title { display: block; margin-bottom: var(--cg-space-2); }
+
+          /* Pane-local card fill. The shared .cg-card primitive uses
+             --cg-surface-elevated, which is #FFFFFF in light mode — identical to
+             Zotero's own item-pane background, so the card would read as nothing
+             but a 1px hairline. The sunken tint reads as a real grouped box
+             against the host background in BOTH themes, which is the entire point
+             of grouping. Border stays for definition. */
+          #citegeist-pane-root .cg-card { background: var(--cg-surface-sunken); }
           .cg-loading {
             color: var(--cg-text-secondary);
             display: flex;
@@ -286,50 +368,15 @@ export function registerCitationPane(pluginID: string): void {
             color: var(--cg-danger);
             font-weight: 600;
             font-size: 11px;
-            margin-bottom: 8px;
           }
 
-          /* ── Hero: the citation count is the single largest element on the
-             surface (composition rule 2). Number + label share a baseline; the
-             top-percentile chip is the only evidence accent, optically centered
-             at the right. See docs/design-system/pane-composition-language.md. ── */
-          .cg-hero {
-            display: flex;
-            align-items: baseline;
-            justify-content: space-between;
-            gap: var(--cg-space-2);
-          }
-          .cg-hero-main {
-            display: flex;
-            align-items: baseline;
-            gap: var(--cg-space-2);
-            min-width: 0;
-          }
-          .cg-hero-stat {
-            font-size: var(--cg-size-display);
-            font-weight: var(--cg-weight-bold);
-            letter-spacing: -0.025em;
-            color: var(--cg-text-primary);
-            font-variant-numeric: tabular-nums;
-            line-height: 1.05;
-          }
-          .cg-hero-label {
-            font-size: var(--cg-size-subhead);
-            color: var(--cg-text-secondary);
-          }
-          .cg-hero-chip { flex-shrink: 0; align-self: center; }
-
-          /* ── Supporting-metric line: FWCI · percentile · trend on one row, 8px
-             under the hero, tabular, ' · ' separators with equal space. ── */
-          .cg-metricline {
-            margin-top: var(--cg-space-2);
-            font-size: var(--cg-size-subhead);
-            color: var(--cg-text-secondary);
-            font-variant-numeric: tabular-nums;
-            line-height: 1.4;
-          }
-          .cg-metricline-sep { color: var(--cg-text-tertiary); margin: 0 var(--cg-space-2); }
-          .cg-metricline strong { color: var(--cg-text-primary); font-weight: var(--cg-weight-semibold); }
+          /* .cg-hero / .cg-hero-value / .cg-hero-label / .cg-hero-chip and
+             .cg-metricline are SHARED primitives (ui/components.ts) — the dialog's
+             author header composes the same shapes, which is what makes the two
+             surfaces read as one product. Nothing pane-local to declare here.
+             Number, label and chip are LEFT-grouped by the primitive; a
+             right-aligned chip drifted far from the number it qualifies once the
+             pane was dragged wide. */
 
           /* Book-with-no-citations note replaces the hero (OpenAlex book coverage
              is sparse; a bare "0" would misread as genuinely uncited). */
@@ -337,23 +384,30 @@ export function registerCitationPane(pluginID: string): void {
 
           /* ── Action row: two peer explore buttons (tinted, equal width). The
              hero number is the one hero, so neither action is a filled primary.
-             .cg-actions / .cg-btn come from cgComponents(); the row's own top
-             margin (16, off the metric line) is the only local override. ── */
-          #citegeist-pane-root .cg-actions { margin: var(--cg-space-4) 0 0; }
+             .cg-actions / .cg-btn come from cgComponents(); inside the Impact card
+             the card padding owns the bottom space, so only the 12px top margin is
+             local. Vertical padding is tightened from the primitive's 14px: a 44px
+             control is right for the dialog, too heavy for two side-by-side
+             actions in a 320px sidebar card. ── */
+          #citegeist-pane-root .cg-actions { margin: var(--cg-space-3) 0 0; }
+          #citegeist-pane-root .cg-actions > .cg-btn { padding: var(--cg-space-2) var(--cg-space-3); }
 
-          /* ── Full-bleed hairline separating impact from authors (rule 6). Negates
-             the 12px side padding so it spans the pane edge-to-edge. ── */
-          .cg-hairline {
-            height: 0;
-            border: none;
-            border-top: 1px solid var(--cg-hairline);
-            margin: var(--cg-space-4) calc(-1 * var(--cg-space-3)) 0;
+          /* ── Authors: link rows (name · h-index · chevron) inside their own card.
+             The card boundary replaces the old full-bleed hairline. Each row is a
+             clickable unit → the author-works dialog, so a hover tint is earned; a
+             border is not. ── */
+          .cg-authorlist {
+            display: flex;
+            flex-direction: column;
+            /* ONE author per line, always — never a multi-column grid. Authorship
+               order is semantic in academia (first author, senior author), and
+               columns turn an ordered byline into a grid of equals; names also
+               ellipsis badly in a narrow column. Rows run full width, so the extra
+               width of a dragged-wide pane goes to the NAME (fewer truncations)
+               with the h-index column aligned right. Width is governed by the
+               shared content measure on #citegeist-content, so this list and the
+               Impact card above it are always exactly the same width. */
           }
-
-          /* ── Authors: eyebrow + link rows (name · h-index · chevron). Each row
-             is a clickable unit → the author-works dialog, so a hover tint is
-             earned; a border is not (rule 1). ── */
-          .cg-authors-eyebrow { display: block; margin: var(--cg-space-4) 0 var(--cg-space-1); }
           .cg-authorrow {
             display: flex;
             align-items: center;
@@ -396,7 +450,6 @@ export function registerCitationPane(pluginID: string): void {
              from the shared .cg-card primitive; this keeps only the card's own
              outer spacing + base type. (.cg-match-banner was dead — removed.) */
           .cg-match-card {
-            margin-bottom: var(--cg-space-3);
             font-size: 11px;
             line-height: 1.5;
           }
@@ -447,6 +500,13 @@ export function registerCitationPane(pluginID: string): void {
           #citegeist-pane-root .cg-match-verify:hover {
             text-decoration: underline;
           }
+          /* Keep the focus treatment identical to every other interactive element
+             in the pane (.cg-btn, .cg-authorrow) instead of falling through to
+             Zotero's default outline. */
+          #citegeist-pane-root .cg-match-verify:focus-visible {
+            outline: 2px solid var(--cg-sage-accent);
+            outline-offset: 2px;
+          }
           /* Confirm / "Not this paper" reuse the shared .cg-btn / .cg-btn--filled /
              .cg-btn--tinted primitives (assigned in renderSuggestion) so they
              match the data view's buttons exactly. Only the :disabled hook above
@@ -454,13 +514,12 @@ export function registerCitationPane(pluginID: string): void {
           /* DOI-prompt chrome comes from the shared .cg-banner primitive (incl.
              its strong block heading); this keeps only the outer spacing. No
              angle brackets in pane-style comments — see the CDATA note above. */
-          .cg-doi-prompt {
-            margin-top: var(--cg-space-3);
-          }
+          /* No margin here: the prompt is a flex child of #citegeist-content,
+             which already owns the gap. Actions sit on the 4pt grid. */
           .cg-doi-prompt-actions {
             display: flex;
-            gap: 6px;
-            margin-top: 6px;
+            gap: var(--cg-space-2);
+            margin-top: var(--cg-space-2);
           }
           /* DOI-prompt buttons use the shared .cg-btn--sm primitive
              (assigned in renderDoiPrompt) — see ui/components.ts. */
@@ -468,143 +527,210 @@ export function registerCitationPane(pluginID: string): void {
         <div id="citegeist-content"></div>
       </div>
     `,
-      onItemChange: ({ item, setEnabled }) => {
-        // Bump the generation token so any in-flight onAsyncRender / onConfirm
-        // from the previous item's fetch detects the mismatch on resume and
-        // drops its DOM write instead of clobbering the new item's pane.
-        paneGeneration++;
-        // Also disable for trashed items — without this the pane stays
-        // interactive on items in the trash, letting users confirm matches
-        // or fetch citations against records that will be hard-deleted.
-        setEnabled(item.isRegularItem() && !item.deleted);
-      },
-      onRender: ({ body, item, setSectionSummary }) => {
-        applyHostScheme(body);
-        const container = body.querySelector("#citegeist-content") as HTMLElement;
-        if (!container) return;
+      onItemChange: ({ item, setEnabled }) =>
+        guard("pane onItemChange", () => {
+          // Bump the generation token so any in-flight onAsyncRender / onConfirm
+          // from the previous item's fetch detects the mismatch on resume and
+          // drops its DOM write instead of clobbering the new item's pane.
+          paneGeneration++;
+          // Also disable for trashed items — without this the pane stays
+          // interactive on items in the trash, letting users confirm matches
+          // or fetch citations against records that will be hard-deleted.
+          setEnabled(item.isRegularItem() && !item.deleted);
+        }),
+      onRender: ({ body, item, setSectionSummary }) =>
+        guard(
+          "pane onRender",
+          () => {
+            applyHostScheme(body);
+            const container = body.querySelector("#citegeist-content") as HTMLElement;
+            if (!container) return;
 
-        const cached = getCachedData(item);
-        if (cached) {
-          renderPane(container, cached, item);
-          setSectionSummary(citationSummary(cached.citedByCount, item));
-          return;
-        }
+            const cached = getCachedData(item);
+            if (cached) {
+              renderPane(container, cached, item);
+              setSectionSummary(citationSummary(cached.citedByCount, item));
+              return;
+            }
 
-        // Check for a pending unconfirmed suggestion from a previous fetch
-        const suggestion = getPendingSuggestion(item);
-        if (suggestion) {
-          renderSuggestion(container, suggestion, item, setSectionSummary);
-          return;
-        }
+            // Check for a pending unconfirmed suggestion from a previous fetch
+            const suggestion = getPendingSuggestion(item);
+            if (suggestion) {
+              renderSuggestion(container, suggestion, item, setSectionSummary);
+              return;
+            }
 
-        if (!extractIdentifier(item)) {
-          renderEmptyState(container, setSectionSummary, "noIdentifier");
-          return;
-        }
+            if (!extractIdentifier(item)) {
+              renderEmptyState(container, setSectionSummary, "noIdentifier");
+              return;
+            }
 
-        renderEmptyState(container, setSectionSummary, "loading");
-      },
-      onAsyncRender: async ({ body, item, setSectionSummary }) => {
-        applyHostScheme(body);
-        const container = body.querySelector("#citegeist-content") as HTMLElement;
-        if (!container) return;
+            renderEmptyState(container, setSectionSummary, "loading");
+          },
+          // Zotero paints the section from this callback; a throw here leaves an
+          // empty panel with no explanation anywhere the user can reach.
+          (code) => {
+            const container = body.querySelector("#citegeist-content") as HTMLElement;
+            if (container)
+              renderDiagnosticState(container, setSectionSummary, code, "pane onRender");
+          },
+        ),
+      // Head guard covers the WHOLE handler, including the applyHostScheme /
+      // querySelector setup — anything escaping leaves the "Fetching citation
+      // data…" spinner up forever, an app that looks hung with nothing to
+      // report. The fallback renders a coded state so the user always ends up
+      // with something to quote.
+      onAsyncRender: ({ body, item, setSectionSummary }) =>
+        guardAsync(
+          "pane onAsyncRender",
+          async () => {
+            applyHostScheme(body);
+            const container = body.querySelector("#citegeist-content") as HTMLElement;
+            if (!container) return;
 
-        // If we already rendered cached data in onRender and it's fresh, skip
-        const alreadyCached = getCachedData(item);
-        if (alreadyCached && !isCacheStale(item)) return;
+            // Snapshot the generation BEFORE any await so a mid-fetch item change
+            // is detected on resume. Without this, Zotero's body-element reuse
+            // would have us writing item A's data into item B's pane.
+            const gen = paneGeneration;
 
-        // If a suggestion is already rendered (from a prior fetch stored in Extra), skip
-        if (!alreadyCached && getPendingSuggestion(item)) return;
+            // If we already rendered cached data in onRender and it's fresh, skip
+            const alreadyCached = getCachedData(item);
+            if (alreadyCached && !isCacheStale(item)) return;
 
-        // Snapshot the generation BEFORE the await so a mid-fetch item
-        // change is detected on resume. Without this, Zotero's body-element
-        // reuse would have us writing item A's data into item B's pane.
-        const gen = paneGeneration;
-        const result = await fetchAndCacheItem(item);
-        if (gen !== paneGeneration) return;
+            // If a suggestion is already rendered (from a prior fetch stored in Extra), skip
+            if (!alreadyCached && getPendingSuggestion(item)) return;
 
-        if (result.status === "ok") {
-          const freshData = getCachedData(item);
-          if (freshData) {
-            renderPane(container, freshData, item, result.work);
-            setSectionSummary(citationSummary(freshData.citedByCount, item));
-            invalidateColumnCache(item.id);
-          }
-        } else if (result.status === "suggestion") {
-          const suggestion = getPendingSuggestion(item);
-          if (suggestion) {
-            renderSuggestion(container, suggestion, item, setSectionSummary);
-            invalidateColumnCache(item.id);
-          }
-        } else if (result.status === "error" && !alreadyCached) {
-          const key =
-            result.error === "network"
-              ? "unavailable"
-              : result.error === "no-match"
-                ? "notFoundTitle"
-                : "notFound";
-          renderEmptyState(container, setSectionSummary, key);
-        }
-      },
+            const result = await fetchAndCacheItem(item);
+            if (gen !== paneGeneration) return;
+
+            if (result.status === "ok") {
+              const freshData = getCachedData(item);
+              if (freshData) {
+                renderPane(container, freshData, item, result.work);
+                setSectionSummary(citationSummary(freshData.citedByCount, item));
+                invalidateColumnCache(item.id);
+              } else {
+                // Fetch said "ok" but the cache read came back empty (a write that
+                // early-returned). Without this the spinner would stay up forever —
+                // the exact silent-hang this handler's boundary exists to prevent.
+                renderEmptyState(container, setSectionSummary, "matchSaved");
+              }
+            } else if (result.status === "suggestion") {
+              const suggestion = getPendingSuggestion(item);
+              if (suggestion) {
+                renderSuggestion(container, suggestion, item, setSectionSummary);
+                invalidateColumnCache(item.id);
+              } else {
+                renderEmptyState(container, setSectionSummary, "matchSaved");
+              }
+            } else if (result.status === "error" && !alreadyCached) {
+              // "Not on OpenAlex" and "no identifier" are outcomes, not failures —
+              // plain copy, no diagnostic affordance, so the pane stays quiet when
+              // nothing is actually broken. A network or unexpected failure gets
+              // the coded state, because that is what a user ends up reporting.
+              if (result.error === "no-match") {
+                renderEmptyState(container, setSectionSummary, "notFoundTitle");
+              } else if (result.error === "not-found" || result.error === "no-identifier") {
+                renderEmptyState(container, setSectionSummary, "notFound");
+              } else {
+                renderDiagnosticState(
+                  container,
+                  setSectionSummary,
+                  result.code ?? "CG-BUG01",
+                  `pane fetch (item ${item.id})`,
+                );
+              }
+            }
+          },
+          (code) => {
+            const container = body.querySelector("#citegeist-content") as HTMLElement;
+            if (container && !getCachedData(item)) {
+              renderDiagnosticState(container, setSectionSummary, code, "pane onAsyncRender");
+            }
+          },
+        ),
       sectionButtons: [
         {
           type: "refresh",
           icon: "chrome://zotero/skin/16/universal/sync.svg",
+          // l10nID, not label: the section-button schema has no `label` field, so
+          // a plain string is dropped and the button gets no tooltip. Text comes
+          // from the FTL's `.tooltiptext` (see citegeist-pane-refresh).
           l10nID: "citegeist-pane-refresh",
-          onClick: async ({ body, item, setSectionSummary }) => {
-            // Per-item gate: spam-click on item A must not silently swallow a
-            // refresh on item B.
-            if (refreshing.has(item.id)) return;
-            refreshing.add(item.id);
-            // Bump the generation token so any in-flight onConfirm / async
-            // render handler resuming after this `clearCache` call bails
-            // instead of writing stale post-confirm state over the now-empty
-            // pane.
-            paneGeneration++;
-            const gen = paneGeneration;
-            try {
-              const container = body.querySelector("#citegeist-content") as HTMLElement;
-              if (container) renderEmptyState(container, setSectionSummary, "refreshing");
-              await clearCache(item); // wide-clear: also nukes pending suggestion
-              const result = await fetchAndCacheItem(item);
-              if (gen !== paneGeneration) return;
-              const cached = getCachedData(item);
-              if (container) {
-                if (cached) {
-                  renderPane(
-                    container,
-                    cached,
-                    item,
-                    result.status === "ok" ? result.work : undefined,
-                  );
-                  setSectionSummary(citationSummary(cached.citedByCount, item));
-                  invalidateColumnCache(item.id);
-                } else if (result.status === "suggestion") {
-                  const suggestion = getPendingSuggestion(item);
-                  if (suggestion) {
-                    renderSuggestion(container, suggestion, item, setSectionSummary);
-                    invalidateColumnCache(item.id);
+          onClick: ({ body, item, setSectionSummary }) =>
+            guardAsync(
+              "pane refresh button",
+              async () => {
+                // Per-item gate: spam-click on item A must not silently swallow a
+                // refresh on item B.
+                if (refreshing.has(item.id)) return;
+                refreshing.add(item.id);
+                // Bump the generation token so any in-flight onConfirm / async
+                // render handler resuming after this `clearCache` call bails
+                // instead of writing stale post-confirm state over the now-empty
+                // pane.
+                paneGeneration++;
+                const gen = paneGeneration;
+                try {
+                  const container = body.querySelector("#citegeist-content") as HTMLElement;
+                  if (container) renderEmptyState(container, setSectionSummary, "refreshing");
+                  await clearCache(item); // wide-clear: also nukes pending suggestion
+                  const result = await fetchAndCacheItem(item);
+                  if (gen !== paneGeneration) return;
+                  const cached = getCachedData(item);
+                  if (container) {
+                    if (cached) {
+                      renderPane(
+                        container,
+                        cached,
+                        item,
+                        result.status === "ok" ? result.work : undefined,
+                      );
+                      setSectionSummary(citationSummary(cached.citedByCount, item));
+                      invalidateColumnCache(item.id);
+                    } else if (result.status === "suggestion") {
+                      const suggestion = getPendingSuggestion(item);
+                      if (suggestion) {
+                        renderSuggestion(container, suggestion, item, setSectionSummary);
+                        invalidateColumnCache(item.id);
+                      } else {
+                        // Suggestion result but nothing pending to render: fall
+                        // back to a terminal state, never leave "Refreshing…" up.
+                        renderEmptyState(container, setSectionSummary, "notFound");
+                      }
+                    } else if (
+                      result.status === "error" &&
+                      (result.error === "network" || result.error === "unexpected")
+                    ) {
+                      renderDiagnosticState(
+                        container,
+                        setSectionSummary,
+                        result.code ?? "CG-BUG01",
+                        `pane refresh (item ${item.id})`,
+                      );
+                    } else {
+                      renderEmptyState(container, setSectionSummary, "notFound");
+                    }
                   }
-                } else {
-                  renderEmptyState(
-                    container,
-                    setSectionSummary,
-                    result.status === "error" && result.error === "network"
-                      ? "unavailable"
-                      : "notFound",
-                  );
+                } finally {
+                  refreshing.delete(item.id);
                 }
-              }
-            } finally {
-              refreshing.delete(item.id);
-            }
-          },
+              },
+              // The refresh button is the user's retry affordance. If it throws,
+              // the pane is stuck on "Refreshing…" and the one control that could
+              // recover it is the one that broke.
+              (code) => {
+                const container = body.querySelector("#citegeist-content") as HTMLElement;
+                if (container)
+                  renderDiagnosticState(container, setSectionSummary, code, "pane refresh button");
+              },
+            ),
         },
         {
           type: "citegeist-settings",
           icon: "chrome://zotero/skin/16/universal/options.svg",
           l10nID: "citegeist-pane-settings",
-          onClick: () => openCitegeistSettings(),
+          onClick: () => guard("pane settings button", () => openCitegeistSettings()),
         },
       ],
     });
@@ -732,12 +858,12 @@ function renderSuggestion(
       if (fresh) {
         renderPane(container, fresh, item, result.status === "ok" ? result.work : undefined);
         setSectionSummary(citationSummary(fresh.citedByCount, item));
-      } else if (result.status === "error") {
-        // Confirmation persisted in SQLite (confirmed_open_alex_id is set), but
-        // the follow-up fetch failed (network blip, transient 5xx). Show a
-        // POSITIVE "match saved" state — NOT "Not found", which made a
-        // successful confirmation read as a failure (W2). Metrics retry on the
-        // next refresh / auto-fetch.
+      } else {
+        // Any non-fresh outcome (error, or a "suggestion"/"cached" result whose
+        // cache read came back empty): show the positive "match saved" state
+        // rather than leave the confirmLoading spinner up forever. NOT "Not
+        // found", which made a successful confirmation read as a failure (W2).
+        // Metrics retry on the next refresh / auto-fetch.
         renderEmptyState(container, setSectionSummary, "matchSaved");
       }
       invalidateColumnCache(item.id);
@@ -874,12 +1000,12 @@ function renderSuggestion(
 }
 
 /**
- * Build the pane content using DOM API (not innerHTML for interactive elements).
+ * Build the pane content entirely through the DOM API.
  *
- * Zotero's item pane renders in a mixed XUL/XHTML context where <button>
- * elements set via innerHTML can fail silently. We build the static parts
- * with innerHTML (fast), then create interactive elements via createElement
- * and attach listeners directly.
+ * Zotero's item pane renders in a mixed XUL/XHTML context where a `<button>`
+ * set via innerHTML can fail silently, so every node here is built with
+ * createElement + textContent (the container is cleared with textContent, never
+ * innerHTML). That also keeps hostile author names and titles inert.
  */
 function renderPane(
   container: HTMLElement,
@@ -907,35 +1033,45 @@ function renderPane(
   const isBook = isBookType(item);
   const suppressCount = isBook && data.citedByCount === 0;
 
+  // ── Impact card: hero count + supporting metrics + the two explore actions,
+  // in one titled box. ──
+  const impact = doc.createElement("div");
+  impact.className = "cg-card cg-impact-card";
+  const impactTitle = doc.createElement("span");
+  impactTitle.className = "cg-eyebrow cg-card-title";
+  impactTitle.textContent = "Impact";
+  impact.appendChild(impactTitle);
+
   if (!suppressCount) {
     // ── Hero: the citation count is the single largest element ──
     const hero = doc.createElement("div");
     hero.className = "cg-hero";
 
-    const main = doc.createElement("div");
-    main.className = "cg-hero-main";
     const stat = doc.createElement("span");
-    stat.className = "cg-hero-stat";
+    stat.className = "cg-hero-value";
     stat.textContent = data.citedByCount.toLocaleString();
-    main.appendChild(stat);
+    hero.appendChild(stat);
     const label = doc.createElement("span");
     label.className = "cg-hero-label";
     label.textContent = data.citedByCount === 1 ? "citation" : "citations";
-    main.appendChild(label);
-    hero.appendChild(main);
+    hero.appendChild(label);
 
-    // Top-percentile chip — the one evidence accent (amber at Top 1%). The exact
-    // percentile lives in the metric line below; the chip is the at-a-glance flag.
+    // Top-percentile chip. Evidence uses ONE hue at two intensities — bordered
+    // amber for exceptional, soft amber for notable — never the sage action
+    // accent. The exact percentile lives in the metric line below; the chip is
+    // the at-a-glance flag.
     if (data.isTop1Percent || data.isTop10Percent) {
       const chipWrap = doc.createElement("span");
       chipWrap.className = "cg-hero-chip";
       const chip = doc.createElement("span");
-      chip.className = data.isTop1Percent ? "cg-chip cg-chip--amber" : "cg-chip";
+      chip.className = data.isTop1Percent
+        ? "cg-chip cg-chip--amber-strong"
+        : "cg-chip cg-chip--amber";
       chip.textContent = data.isTop1Percent ? "Top 1%" : "Top 10%";
       chipWrap.appendChild(chip);
       hero.appendChild(chipWrap);
     }
-    container.appendChild(hero);
+    impact.appendChild(hero);
 
     // ── Supporting-metric line: FWCI · percentile · trend ──
     const line = doc.createElement("div");
@@ -967,12 +1103,12 @@ function renderPane(
       addSep();
       line.appendChild(doc.createTextNode(trend));
     }
-    if (!first) container.appendChild(line);
+    if (!first) impact.appendChild(line);
   } else {
     const note = doc.createElement("div");
     note.className = "cg-booknote";
     note.textContent = "Citation tracking for books is limited in OpenAlex.";
-    container.appendChild(note);
+    impact.appendChild(note);
   }
 
   // ── Action row: two peer explore buttons (tinted, equal width) ──
@@ -1008,7 +1144,8 @@ function renderPane(
   actions.appendChild(
     makeActionButton("References \u2192", "View works cited by this paper", "references"),
   );
-  container.appendChild(actions);
+  impact.appendChild(actions);
+  container.appendChild(impact);
 
   // \u2500\u2500 Authors: async link rows (name, h-index, chevron; tap opens author works) \u2500\u2500
   const authorsRegion = doc.createElement("div");
@@ -1023,8 +1160,8 @@ function renderPane(
 /**
  * Load and render the author link rows into `region`. Author reads are async
  * (no sync mirror, pane-only), so this runs after the synchronous metric render
- * and appends when ready. The eyebrow + hairline live INSIDE the populated
- * region so a resolved-author-less item shows no dangling separator. Guarded by
+ * and appends when ready. The whole card is built INSIDE the populated region so
+ * an item with no resolved authors shows no empty card. Guarded by
  * `paneGeneration`: an item switch mid-load drops the write.
  */
 async function renderAuthorRows(
@@ -1035,8 +1172,25 @@ async function renderAuthorRows(
   const doc = region.ownerDocument;
   try {
     const creators = getAuthorCreators(item);
-    const itemAuthors = await getItemAuthors(item.libraryID, item.key);
+    let itemAuthors = await getItemAuthors(item.libraryID, item.key);
     if (gen !== paneGeneration) return;
+
+    // Lazy resolve on view. An item cached before the author layer existed — or
+    // whose metrics are still fresh, so fetchAndCacheItem short-circuits and
+    // never reaches the author write — has no rows at all. Resolving here means
+    // clicking an OLD article fills its authors in instead of silently showing
+    // nothing. Once per item per session so an item OpenAlex genuinely can't
+    // resolve doesn't re-hit the API on every click.
+    if (itemAuthors.length === 0) {
+      const attemptKey = `${item.libraryID}/${item.key}`;
+      if (!authorResolveAttempted.has(attemptKey)) {
+        noteAttempt(authorResolveAttempted, attemptKey);
+        await resolveAuthorsForItem(item);
+        if (gen !== paneGeneration) return;
+        itemAuthors = await getItemAuthors(item.libraryID, item.key);
+        if (gen !== paneGeneration) return;
+      }
+    }
 
     const resolvedIds = [...new Set(itemAuthors.map((r) => r.author_id))];
     const authorRowsData = await Promise.all(resolvedIds.map((id) => getAuthor(id)));
@@ -1050,18 +1204,75 @@ async function renderAuthorRows(
     if (vms.length === 0) return;
 
     region.textContent = "";
-    const hr = doc.createElement("div");
-    hr.className = "cg-hairline";
-    region.appendChild(hr);
-    const eyebrow = doc.createElement("span");
-    eyebrow.className = "cg-eyebrow cg-authors-eyebrow";
-    eyebrow.textContent = "Authors";
-    region.appendChild(eyebrow);
-    for (const vm of vms) region.appendChild(authorRow(doc, vm));
+    const card = doc.createElement("div");
+    card.className = "cg-card cg-authors-card";
+    const title = doc.createElement("span");
+    title.className = "cg-eyebrow cg-card-title";
+    title.textContent = "Authors";
+    card.appendChild(title);
+    const list = doc.createElement("div");
+    list.className = "cg-authorlist";
+    const hSpans = new Map<string, HTMLElement>();
+    for (const vm of vms) {
+      const row = authorRow(doc, vm);
+      const hSpan = row.querySelector(".cg-authorrow-h");
+      if (vm.authorId && hSpan) hSpans.set(vm.authorId, hSpan as HTMLElement);
+      list.appendChild(row);
+    }
+    card.appendChild(list);
+    region.appendChild(card);
+
+    // Rows are on screen; backfill the h-index labels without blocking paint.
+    void fillAuthorMetrics(vms, hSpans, gen);
   } catch (e) {
     if (gen !== paneGeneration) return;
     logError("renderAuthorRows", e);
     region.textContent = "";
+  }
+}
+
+/**
+ * Fill in the h-index labels after the rows are painted.
+ *
+ * `cacheItemAuthors` stores identity ONLY (id, display name, ORCID) — `h_index`
+ * stays null until something fetches the author, which previously happened only
+ * when the user opened that author's works dialog. Result: the pane showed no
+ * h-index at all. This fetches the missing ones with FREE `/authors/{id}`
+ * singleton lookups (`aggregatesOnly`, so an author with zeroed aggregates never
+ * drags a whole byline through the METERED works derivation) and persists them,
+ * so the next render is instant. Sequential on purpose: the shared rate limiter
+ * would queue them anyway, and returning on the first budget/auth/network error
+ * avoids hammering an API that is already refusing us.
+ */
+async function fillAuthorMetrics(
+  vms: ReadonlyArray<AuthorRowViewModel>,
+  hSpans: ReadonlyMap<string, HTMLElement>,
+  gen: number,
+): Promise<void> {
+  for (const vm of vms) {
+    if (!vm.authorId || vm.hIndexLabel) continue;
+    if (authorMetricsAttempted.has(vm.authorId)) continue;
+    noteAttempt(authorMetricsAttempted, vm.authorId);
+    try {
+      const profile = await fetchAuthorProfile(vm.authorId, { aggregatesOnly: true });
+      if (!profile || profile.hIndex === null) continue;
+      // Persist BEFORE the generation gate. The write is item-scoped and always
+      // correct, so a fetch that resolves after the user switched items must
+      // still land in the cache — otherwise the author is marked "attempted"
+      // for the session but its h-index was thrown away, leaving that author
+      // permanently blank until restart.
+      persistProfileMetrics(profile);
+      // Heal a 301 author-id merge (KTD3): the metrics land under the canonical
+      // id, so item_authors must be repointed too, or the next render reads the
+      // stale id and re-fetches. Cheap SQLite-only rewrite, no metered cost.
+      maybeReconcileMerge(profile);
+      if (gen !== paneGeneration) return;
+      const span = hSpans.get(vm.authorId);
+      if (span) span.textContent = `h ${profile.hIndex.toLocaleString("en-US")}`;
+    } catch (e) {
+      logError("fillAuthorMetrics", e);
+      return;
+    }
   }
 }
 
@@ -1075,14 +1286,17 @@ function authorRow(doc: Document, vm: AuthorRowViewModel): HTMLElement {
   const name = doc.createElement("span");
   name.className = "cg-authorrow-name";
   name.textContent = vm.name;
+  // Long names ellipsis in a narrow pane; the tooltip is the sighted-mouse
+  // equivalent of the button's aria-label.
+  name.title = vm.name;
   btn.appendChild(name);
 
-  if (vm.hIndexLabel) {
-    const h = doc.createElement("span");
-    h.className = "cg-authorrow-h";
-    h.textContent = vm.hIndexLabel;
-    btn.appendChild(h);
-  }
+  // Always present, even when empty: fillAuthorMetrics writes the h-index into
+  // this node once the free lookup returns.
+  const h = doc.createElement("span");
+  h.className = "cg-authorrow-h";
+  if (vm.hIndexLabel) h.textContent = vm.hIndexLabel;
+  btn.appendChild(h);
 
   const chev = doc.createElement("span");
   chev.className = "cg-authorrow-chev";
@@ -1107,4 +1321,6 @@ export function unregisterCitationPane(): void {
     paneRegisteredPluginID = null;
   }
   paneRegistered = false;
+  authorResolveAttempted.clear();
+  authorMetricsAttempted.clear();
 }

@@ -196,14 +196,49 @@
         text-transform: uppercase;
         padding: 2px 8px;
         border-radius: var(--cg-radius-pill);
-        background: var(--cg-sage-tint-12);
-        color: var(--cg-sage-accent);
+        border: 1px solid transparent;
+        background: var(--cg-neutral-tint);
+        color: var(--cg-text-secondary);
       }
+      /* Evidence ladder: ONE hue, two intensities. Never sage — sage means
+         "actionable", so an evidence badge in sage reads as a button. */
       .cg-chip--amber { background: var(--cg-amber-tint); color: var(--cg-amber-strong); }
-      .cg-chip--quiet { background: var(--cg-sage-tint-12); color: var(--cg-text-secondary); }
+      .cg-chip--amber-strong {
+        background: var(--cg-amber-tint);
+        color: var(--cg-amber-strong);
+        border-color: var(--cg-amber-border);
+      }
+      .cg-chip--quiet { background: transparent; color: var(--cg-text-tertiary); border-color: var(--cg-hairline); }
       .cg-chip--danger { background: var(--cg-danger-tint); color: var(--cg-danger); }
 
-      /* Stat tile — equal-weight metric grid */
+      /* Hero metric + supporting line — the canonical way to present metrics.
+         Used by BOTH the item pane's Impact card and the dialog's author header
+         so the two surfaces read as one product. */
+      .cg-hero { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--cg-space-2); }
+      .cg-hero-value {
+        font-size: var(--cg-size-display);
+        font-weight: var(--cg-weight-bold);
+        letter-spacing: -0.025em;
+        color: var(--cg-text-primary);
+        font-variant-numeric: tabular-nums;
+        line-height: 1.05;
+      }
+      .cg-hero-label { font-size: var(--cg-size-subhead); color: var(--cg-text-secondary); }
+      .cg-hero-chip { flex-shrink: 0; align-self: center; }
+      .cg-metricline {
+        margin-top: var(--cg-space-2);
+        font-size: var(--cg-size-subhead);
+        color: var(--cg-text-secondary);
+        font-variant-numeric: tabular-nums;
+        line-height: 1.4;
+      }
+      .cg-metricline strong { color: var(--cg-text-primary); font-weight: var(--cg-weight-semibold); }
+      .cg-metricline-sep { color: var(--cg-text-tertiary); margin: 0 var(--cg-space-2); }
+
+      /* DEPRECATED — boxed metric tiles. A box is earned by an interaction, not
+         by a number, and equal-weight tiles flatten hierarchy (this is what made
+         the author header read as a jumble). Use .cg-hero + .cg-metricline. Kept
+         only so older screenshots stay legible. */
       .cg-stat-grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -376,6 +411,18 @@
       .cg-banner strong { display: block; color: var(--cg-text-primary); font-weight: var(--cg-weight-semibold); margin-bottom: 2px; }
 
       /* Eyebrow — small uppercase section label */
+      .cg-diag { font-size: var(--cg-size-footnote); line-height: 1.5; color: var(--cg-text-secondary); }
+      .cg-diag-msg { margin: 0 0 var(--cg-space-2) 0; }
+      .cg-diag-disclosure { border-top: 1px solid var(--cg-hairline); padding-top: var(--cg-space-2); }
+      .cg-diag-detail {
+        margin: var(--cg-space-2) 0 0 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: var(--cg-size-caption);
+        line-height: 1.6;
+        color: var(--cg-text-tertiary);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
       .cg-eyebrow {
         font-size: var(--cg-size-caption2);
         font-weight: var(--cg-weight-bold);
@@ -519,10 +566,18 @@
               <button class="cg-btn cg-btn--filled" disabled>Disabled</button>
             </div>
             <div class="inline">
-              <span class="cg-chip">Top 10%</span>
-              <span class="cg-chip cg-chip--amber">Top 1%</span>
+              <span class="cg-chip">Neutral</span>
+              <span class="cg-chip cg-chip--amber">Top 10%</span>
+              <span class="cg-chip cg-chip--amber-strong">Top 1%</span>
               <span class="cg-chip cg-chip--quiet">In library</span>
-              <span class="cg-chip">Strong · 94%</span>
+            </div>
+            <div style="margin-top:14px">
+              <div class="cg-hero">
+                <span class="cg-hero-value">1,141</span>
+                <span class="cg-hero-label">citations</span>
+                <span class="cg-hero-chip"><span class="cg-chip cg-chip--amber-strong">Top 1%</span></span>
+              </div>
+              <div class="cg-metricline"><strong>FWCI</strong> 26.47<span class="cg-metricline-sep">·</span>99.6th percentile</div>
             </div>
             <div class="inline">
               <button class="cg-toggle" aria-checked="false"><span class="cg-switch"></span> Hide in library</button>
@@ -550,10 +605,18 @@
               <button class="cg-btn cg-btn--filled" disabled>Disabled</button>
             </div>
             <div class="inline">
-              <span class="cg-chip">Top 10%</span>
-              <span class="cg-chip cg-chip--amber">Top 1%</span>
+              <span class="cg-chip">Neutral</span>
+              <span class="cg-chip cg-chip--amber">Top 10%</span>
+              <span class="cg-chip cg-chip--amber-strong">Top 1%</span>
               <span class="cg-chip cg-chip--quiet">In library</span>
-              <span class="cg-chip">Strong · 94%</span>
+            </div>
+            <div style="margin-top:14px">
+              <div class="cg-hero">
+                <span class="cg-hero-value">1,141</span>
+                <span class="cg-hero-label">citations</span>
+                <span class="cg-hero-chip"><span class="cg-chip cg-chip--amber-strong">Top 1%</span></span>
+              </div>
+              <div class="cg-metricline"><strong>FWCI</strong> 26.47<span class="cg-metricline-sep">·</span>99.6th percentile</div>
             </div>
             <div class="inline">
               <button class="cg-toggle" aria-checked="false"><span class="cg-switch"></span> Hide in library</button>
@@ -656,13 +719,23 @@
         </div>
       </div>
 
-      <h2>States — banner · skeleton · focus</h2>
+      <h2>States — banner · diagnostic · skeleton · focus</h2>
       <div class="pair">
         <div class="panel panel--light cg cx-embedded">
           <div class="panel__tag">Light</div>
           <div class="stack">
             <div class="cg-banner"><strong>One-time migration complete</strong>Your cached data moved into Citegeist's own database.</div>
             <div class="cg-banner cg-banner--amber"><strong>Matched by title</strong>Confirm this is the right paper before relying on the metrics.</div>
+            <div class="cg-diag">
+              <p class="cg-diag-msg">Couldn't save to Citegeist's local database. If your Zotero data folder is inside Dropbox, iCloud Drive, OneDrive or Box, the sync client can lock the file — pausing sync usually clears it.</p>
+              <div class="cg-diag-disclosure">
+                <button class="cg-btn cg-btn--plain cg-btn--sm">Details</button>
+                <p class="cg-diag-detail">CG-DB01 · cacheWorkData
+v3.0.0 build 6aca703
+Zotero 9.0.1 · MacIntel</p>
+                <button class="cg-btn cg-btn--sm" style="margin-top:8px">Copy report</button>
+              </div>
+            </div>
             <div class="stack" style="gap:6px"><div class="cg-skel" style="width:70%"></div><div class="cg-skel" style="width:45%"></div><div class="cg-skel" style="width:55%"></div></div>
             <div class="eyebrow" style="color: var(--cg-text-tertiary); margin-top: 2px">Keyboard focus</div>
             <div class="inline" style="row-gap: 14px">
@@ -679,6 +752,16 @@
           <div class="stack">
             <div class="cg-banner"><strong>One-time migration complete</strong>Your cached data moved into Citegeist's own database.</div>
             <div class="cg-banner cg-banner--amber"><strong>Matched by title</strong>Confirm this is the right paper before relying on the metrics.</div>
+            <div class="cg-diag">
+              <p class="cg-diag-msg">Couldn't save to Citegeist's local database. If your Zotero data folder is inside Dropbox, iCloud Drive, OneDrive or Box, the sync client can lock the file — pausing sync usually clears it.</p>
+              <div class="cg-diag-disclosure">
+                <button class="cg-btn cg-btn--plain cg-btn--sm">Details</button>
+                <p class="cg-diag-detail">CG-DB01 · cacheWorkData
+v3.0.0 build 6aca703
+Zotero 9.0.1 · MacIntel</p>
+                <button class="cg-btn cg-btn--sm" style="margin-top:8px">Copy report</button>
+              </div>
+            </div>
             <div class="stack" style="gap:6px"><div class="cg-skel" style="width:70%"></div><div class="cg-skel" style="width:45%"></div><div class="cg-skel" style="width:55%"></div></div>
             <div class="eyebrow" style="color: var(--cg-text-tertiary); margin-top: 2px">Keyboard focus</div>
             <div class="inline" style="row-gap: 14px">

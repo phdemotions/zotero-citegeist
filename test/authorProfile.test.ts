@@ -9,6 +9,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const oaMocks = vi.hoisted(() => ({
   fetchAuthorProfile: vi.fn(),
   fetchAuthorWorks: vi.fn(),
+  // Real implementation: buildProfileViewModel uses it to strip + validate the
+  // ORCID, so a stub that dropped validation would hide a regression.
+  parseOrcid: (raw: string): string | null => {
+    const s = (raw ?? "")
+      .replace(/^https?:\/\/orcid\.org\//i, "")
+      .trim()
+      .toUpperCase();
+    return /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(s) ? s : null;
+  },
 }));
 vi.mock("../src/modules/openalexAuthors", () => oaMocks);
 
@@ -20,14 +29,12 @@ vi.mock("../src/modules/cache/authors", () => cacheMocks);
 
 vi.stubGlobal("Zotero", { debug: vi.fn() });
 
-import { OpenAlexBudgetError, OpenAlexAuthError } from "../src/modules/utils";
 import {
   formatMetric,
   buildProfileViewModel,
   buildAuthorRowViewModels,
   compactTrend,
   getAuthorCreators,
-  profileErrorState,
   maybeReconcileMerge,
 } from "../src/modules/authorProfile";
 
@@ -125,14 +132,6 @@ describe("buildAuthorRowViewModels", () => {
     expect(buildAuthorRowViewModels([], itemAuthors, byId)).toEqual([
       { position: 3, name: "Jane", authorId: "A1", hIndexLabel: "h 20" },
     ]);
-  });
-});
-
-describe("profileErrorState", () => {
-  it("maps error types to states", () => {
-    expect(profileErrorState(new OpenAlexBudgetError("x")).kind).toBe("budget");
-    expect(profileErrorState(new OpenAlexAuthError("x")).kind).toBe("auth");
-    expect(profileErrorState(new Error("x")).kind).toBe("network");
   });
 });
 

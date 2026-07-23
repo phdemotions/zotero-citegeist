@@ -21,9 +21,11 @@ import {
   canResolveWork,
   resolveAuthorsForItems,
   type AuthorBackfillResult,
+  type FetchBatchResult,
 } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import { showCitationNetwork } from "./citationNetwork";
+import { bindGuarded, guard } from "./diagnostics";
 import { logError } from "./utils";
 
 const MENU_IDS = {
@@ -42,9 +44,6 @@ const MM_ITEM_MENU_ID = "citegeist-item-menu";
 const MM_COLLECTION_MENU_ID = "citegeist-collection-menu";
 
 type NetworkMode = "citing" | "references";
-
-/** Shape shared by both batch-fetch handlers. */
-type BatchResult = { fresh: number; cached: number; suggestion: number; errors: number };
 
 // ── Zotero.MenuManager surface (Zotero 8+; absent in typings/7.0.x) ──────────
 
@@ -78,6 +77,31 @@ interface MenuManagerOptions {
   menus: MenuManagerMenuData[];
 }
 
+/**
+ * Wrap every handler in a menu tree with an error boundary, recursing into
+ * submenus.
+ *
+ * Applied once at the `registerMenu` call rather than at each handler, so a
+ * menu item added later is protected without anyone remembering to wrap it.
+ * A throwing `onCommand` does nothing at all from the user's side — the menu
+ * closes and no work happens — and a throwing `onShowing` can break the whole
+ * popup, so neither can be left bare.
+ */
+function guardMenus(menus: MenuManagerMenuData[]): MenuManagerMenuData[] {
+  return menus.map((menu) => ({
+    ...menu,
+    onShowing: menu.onShowing
+      ? (e: Event, ctx: MenuManagerContext) =>
+          guard(`menu onShowing ${menu.l10nID ?? menu.menuType}`, () => menu.onShowing?.(e, ctx))
+      : undefined,
+    onCommand: menu.onCommand
+      ? (e: Event, ctx: MenuManagerContext) =>
+          guard(`menu onCommand ${menu.l10nID ?? menu.menuType}`, () => menu.onCommand?.(e, ctx))
+      : undefined,
+    menus: menu.menus ? guardMenus(menu.menus) : undefined,
+  }));
+}
+
 interface ZoteroMenuManager {
   registerMenu(options: MenuManagerOptions): string | false;
   unregisterMenu(menuID: string): boolean;
@@ -87,6 +111,21 @@ interface ZoteroMenuManager {
 let menuPluginID: string | null = null;
 export function setMenuPluginID(id: string): void {
   menuPluginID = id;
+}
+
+/**
+ * Plugin rootURI, set once at startup. Menu/progress icons are built off it as
+ * `jar:` URLs — `chrome://citegeist/…` is unregistered on some Zotero 9 installs
+ * ("No chrome package registered"), which made the menu-item icons fail to load
+ * and, with them, the right-click menu itself.
+ */
+let menuRootURI = "";
+export function setMenuRootURI(uri: string): void {
+  menuRootURI = uri;
+}
+/** Build a plugin-icon URL that always resolves (jar: via rootURI). */
+function iconURL(name: string): string {
+  return `${menuRootURI}content/icons/${name}`;
 }
 
 /**
@@ -121,12 +160,13 @@ function getMenuManager(): ZoteroMenuManager | null {
  * so the counter showed 0 even though the columns now displayed real data. New
  * copy distinguishes fresh / cached / suggestion / errors.
  */
-function summarizeBatch(r: BatchResult, total: number): string {
+function summarizeBatch(r: FetchBatchResult, total: number): string {
   const parts: string[] = [];
   if (r.fresh > 0) parts.push(`${r.fresh} updated`);
   if (r.cached > 0) parts.push(`${r.cached} already up to date`);
   if (r.suggestion > 0) parts.push(`${r.suggestion} need confirmation`);
   if (r.errors > 0) parts.push(`${r.errors} couldn't be matched`);
+  if (r.budgetStopped > 0) parts.push(`${r.budgetStopped} skipped (daily budget spent)`);
   if (parts.length === 0) parts.push(`${total} processed`);
   return `Done — ${parts.join(", ")}`;
 }
@@ -200,12 +240,18 @@ async function runFetchSelected(win: Window): Promise<void> {
   // keyword fails to resolve there and Zotero falls back to its default red
   // loading curve, which clashes with the sage brand and reads as an error.
   const progress = new progressWin.ItemProgress(
-    "chrome://citegeist/content/icons/icon-16-color.png",
+    iconURL("icon-16-color.png"),
     `Fetching ${eligible.length} item${eligible.length !== 1 ? "s" : ""}…`,
   );
   progressWin.show();
 
-  let result: BatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0 };
+  let result: FetchBatchResult = {
+    fresh: 0,
+    cached: 0,
+    suggestion: 0,
+    errors: 0,
+    budgetStopped: 0,
+  };
   try {
     result = await fetchAndCacheItems(
       eligible,
@@ -290,12 +336,18 @@ async function runFetchCollection(win: Window): Promise<void> {
   const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
   progressWin.changeHeadline("Citegeist: Fetching Citations");
   const progress = new progressWin.ItemProgress(
-    "chrome://citegeist/content/icons/icon-16-color.png",
+    iconURL("icon-16-color.png"),
     `Fetching ${eligible.length} item${eligible.length === 1 ? "" : "s"}…`,
   );
   progressWin.show();
 
-  let result: BatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0 };
+  let result: FetchBatchResult = {
+    fresh: 0,
+    cached: 0,
+    suggestion: 0,
+    errors: 0,
+    budgetStopped: 0,
+  };
   try {
     result = await fetchAndCacheItems(
       eligible,
@@ -351,7 +403,7 @@ async function runResolveAuthorsSelected(win: Window): Promise<void> {
   const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
   progressWin.changeHeadline("Citegeist: Resolving Author Identities");
   const progress = new progressWin.ItemProgress(
-    "chrome://citegeist/content/icons/icon-16-color.png",
+    iconURL("icon-16-color.png"),
     `Resolving authors for ${eligible.length} item${eligible.length !== 1 ? "s" : ""}…`,
   );
   progressWin.show();
@@ -406,7 +458,7 @@ async function runResolveAuthorsCollection(win: Window): Promise<void> {
   const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
   progressWin.changeHeadline("Citegeist: Resolving Author Identities");
   const progress = new progressWin.ItemProgress(
-    "chrome://citegeist/content/icons/icon-16-color.png",
+    iconURL("icon-16-color.png"),
     `Resolving authors for ${eligible.length} item${eligible.length === 1 ? "" : "s"}…`,
   );
   progressWin.show();
@@ -442,11 +494,17 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
     menuID: MM_ITEM_MENU_ID,
     pluginID,
     target: "main/library/item",
-    menus: [
+    menus: guardMenus([
       {
         menuType: "menuitem",
+        // l10nID, NOT label: the MenuManager schema has no `label` field — it
+        // renders text ONLY from data-l10n-id, so a plain `label` string is
+        // silently dropped and the item shows blank ("right-click shows
+        // nothing"). Text + accesskey come from the FTL (citegeist-menu-*, in
+        // `.label`/`.accesskey` attribute syntax). The FTL is injected per
+        // window by hooks.ensureCitegeistFTL.
         l10nID: "citegeist-menu-fetch",
-        icon: "chrome://citegeist/content/icons/icon-16.svg",
+        icon: iconURL("icon-16.svg"),
         onShowing: (_e, ctx) =>
           // Use the supplied context items when present; only fall back to the
           // pane selection when ctx omits them — avoids a second eligibility
@@ -475,7 +533,7 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-resolve-authors",
-        icon: "chrome://citegeist/content/icons/icon-16.svg",
+        icon: iconURL("icon-16.svg"),
         onShowing: (_e, ctx) =>
           ctx.setVisible(
             ctx.items && ctx.items.length > 0
@@ -488,7 +546,7 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
           );
         },
       },
-    ],
+    ]),
   });
   if (itemResult === false) return false;
 
@@ -496,11 +554,11 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
     menuID: MM_COLLECTION_MENU_ID,
     pluginID,
     target: "main/library/collection",
-    menus: [
+    menus: guardMenus([
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-fetch-collection",
-        icon: "chrome://citegeist/content/icons/icon-16.svg",
+        icon: iconURL("icon-16.svg"),
         onCommand: () => {
           runFetchCollection(Zotero.getMainWindow()).catch((e) =>
             logError("menu fetch-collection", e),
@@ -510,14 +568,14 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-resolve-collection",
-        icon: "chrome://citegeist/content/icons/icon-16.svg",
+        icon: iconURL("icon-16.svg"),
         onCommand: () => {
           runResolveAuthorsCollection(Zotero.getMainWindow()).catch((e) =>
             logError("menu resolve-authors-collection", e),
           );
         },
       },
-    ],
+    ]),
   });
   if (collectionResult === false) {
     // Roll back the item menu so we don't leave a half-registered set, then
@@ -601,12 +659,12 @@ function registerViaDOM(win: Window): void {
     const fetchItem = (doc as XULDocument).createXULElement("menuitem");
     fetchItem.id = MENU_IDS.fetchCitations;
     fetchItem.setAttribute("label", "Fetch Citation Counts");
-    fetchItem.setAttribute("image", "chrome://citegeist/content/icons/icon-16.svg");
+    fetchItem.setAttribute("image", iconURL("icon-16.svg"));
     // Accesskeys audited against Zotero 7/8 default English item menu: F, R, I,
     // E, C are taken; G is unused — pick G for the "citeGeist" mnemonic. View
     // Citing/References get no accesskey (infrequent; Tab + Enter works).
     fetchItem.setAttribute("accesskey", "G");
-    fetchItem.addEventListener("command", () => {
+    bindGuarded(fetchItem, "command", "menu fetch item", () => {
       runFetchSelected(win).catch((e) => logError("menu fetch", e));
     });
     itemMenu.appendChild(fetchItem);
@@ -614,22 +672,22 @@ function registerViaDOM(win: Window): void {
     const citingItem = (doc as XULDocument).createXULElement("menuitem");
     citingItem.id = MENU_IDS.viewCiting;
     citingItem.setAttribute("label", "View Citing Works…");
-    citingItem.addEventListener("command", () => runViewNetwork("citing"));
+    bindGuarded(citingItem, "command", "menu view citing", () => runViewNetwork("citing"));
     itemMenu.appendChild(citingItem);
 
     const refsItem = (doc as XULDocument).createXULElement("menuitem");
     refsItem.id = MENU_IDS.viewRefs;
     refsItem.setAttribute("label", "View References…");
-    refsItem.addEventListener("command", () => runViewNetwork("references"));
+    bindGuarded(refsItem, "command", "menu view references", () => runViewNetwork("references"));
     itemMenu.appendChild(refsItem);
 
     const resolveItem = (doc as XULDocument).createXULElement("menuitem");
     resolveItem.id = MENU_IDS.resolveAuthors;
     resolveItem.setAttribute("label", "Resolve Author Identities (Citegeist)");
-    resolveItem.setAttribute("image", "chrome://citegeist/content/icons/icon-16.svg");
+    resolveItem.setAttribute("image", iconURL("icon-16.svg"));
     // 'A' (Authors) is free on the default item context menu alongside 'G'.
     resolveItem.setAttribute("accesskey", "A");
-    resolveItem.addEventListener("command", () => {
+    bindGuarded(resolveItem, "command", "menu resolve authors", () => {
       runResolveAuthorsSelected(win).catch((e) => logError("menu resolve-authors", e));
     });
     itemMenu.appendChild(resolveItem);
@@ -638,7 +696,7 @@ function registerViaDOM(win: Window): void {
     // no-op click never looks like the feature is broken and no stray empty
     // section is left behind (issue #72). Visibility rule lives in the pure,
     // tested itemMenuVisibility().
-    itemMenu.addEventListener("popupshowing", () => {
+    bindGuarded(itemMenu, "popupshowing", "menu item popupshowing", () => {
       const v = itemMenuVisibility(Zotero.getActiveZoteroPane().getSelectedItems());
       fetchItem.hidden = !v.fetch;
       resolveItem.hidden = !v.resolveAuthors;
@@ -656,11 +714,11 @@ function registerViaDOM(win: Window): void {
     const fetchAll = (doc as XULDocument).createXULElement("menuitem");
     fetchAll.id = MENU_IDS.fetchCollection;
     fetchAll.setAttribute("label", "Fetch All Citation Counts (Citegeist)");
-    fetchAll.setAttribute("image", "chrome://citegeist/content/icons/icon-16.svg");
+    fetchAll.setAttribute("image", iconURL("icon-16.svg"));
     // 'L' may collide with 'New Collection' on some builds; 'I' (citegeIst
     // mnemonic) is unused on the default collection context menu.
     fetchAll.setAttribute("accesskey", "I");
-    fetchAll.addEventListener("command", () => {
+    bindGuarded(fetchAll, "command", "menu fetch collection", () => {
       runFetchCollection(win).catch((e) => logError("menu fetch-collection", e));
     });
     collectionMenu.appendChild(fetchAll);
@@ -668,9 +726,9 @@ function registerViaDOM(win: Window): void {
     const resolveAll = (doc as XULDocument).createXULElement("menuitem");
     resolveAll.id = MENU_IDS.resolveCollection;
     resolveAll.setAttribute("label", "Resolve All Author Identities (Citegeist)");
-    resolveAll.setAttribute("image", "chrome://citegeist/content/icons/icon-16.svg");
+    resolveAll.setAttribute("image", iconURL("icon-16.svg"));
     resolveAll.setAttribute("accesskey", "A");
-    resolveAll.addEventListener("command", () => {
+    bindGuarded(resolveAll, "command", "menu resolve collection", () => {
       runResolveAuthorsCollection(win).catch((e) => logError("menu resolve-authors-collection", e));
     });
     collectionMenu.appendChild(resolveAll);

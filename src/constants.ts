@@ -70,6 +70,8 @@ export const DEFAULT_NETWORK_PAGE_SIZE = 25;
 export const SEARCH_DEBOUNCE_MS = 200;
 /** Infinite-scroll threshold in px from bottom. */
 export const INFINITE_SCROLL_THRESHOLD_PX = 100;
+/** Placeholder rows painted while the network/author dialog loads its first page. */
+export const SKELETON_ROW_COUNT = 6;
 
 // ── Abstract reconstruction safety ──
 /** Max position index we'll accept from an inverted index (sanity bound). */
@@ -103,14 +105,11 @@ export const CLOSE_CACHE_DRAIN_TIMEOUT_MS = 5_000;
 export const PREF_MIGRATION_COMPLETE = "extensions.zotero.citegeist.migrationV1Complete";
 export const PREF_LAST_BACKUP_PATH = "extensions.zotero.citegeist.lastBackupPath";
 export const PREF_LAST_ORPHAN_GC_AT = "extensions.zotero.citegeist.lastOrphanGcAt";
+// Set true once the one-time purge of sync-breaking `openalex:author` item
+// relations has completed successfully (v3.0.0). See cache purgeAllAuthorRelations.
+export const PREF_AUTHOR_RELATIONS_PURGED = "extensions.zotero.citegeist.authorRelationsPurgedV1";
 export const PREF_CACHE_LIFETIME_DAYS = "extensions.zotero.citegeist.cacheLifetimeDays";
 export const PREF_AUTO_FETCH = "extensions.zotero.citegeist.autoFetch";
-/**
- * @deprecated OpenAlex dropped the `mailto` polite pool (July 2026). The client
- * no longer sends it; use {@link PREF_OPENALEX_API_KEY} instead. The pref key is
- * retained only so the legacy preferences field has a home until U9 removes it.
- */
-export const PREF_MAILTO = "extensions.zotero.citegeist.mailto";
 /**
  * Optional, opt-in OpenAlex API key. OpenAlex is metered as of July 2026
  * ($0.10/day anonymous, $1/day with a free key). Stored locally; never synced;
@@ -142,3 +141,14 @@ export const TITLE_MATCH_MEDIUM_THRESHOLD = 0.72;
 export const TITLE_SEARCH_RESULTS = 5;
 /** Days before retrying a dismissed or no-match item. */
 export const NO_MATCH_RETRY_DAYS = 30;
+
+// ── Diagnostics ──
+/**
+ * How many recent failures the in-memory diagnostic ring buffer keeps.
+ *
+ * Sized for one debugging session's worth of context in a copy-pasted bug
+ * report: big enough that the failure *before* the visible one is still there
+ * (usually the real cause), small enough that the report stays readable in a
+ * GitHub comment.
+ */
+export const DIAGNOSTIC_RING_BUFFER_SIZE = 50;

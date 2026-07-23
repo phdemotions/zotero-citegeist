@@ -73,13 +73,53 @@ export function cgComponents(scope: string): string {
       text-transform: uppercase;
       padding: 2px var(--cg-space-2);
       border-radius: var(--cg-radius-pill);
-      background: var(--cg-sage-tint-12);
-      color: var(--cg-sage-accent);
+      border: 1px solid transparent;
+      background: var(--cg-neutral-tint);
+      color: var(--cg-text-secondary);
       white-space: nowrap;
     }
+    /* Evidence ladder. Proof-of-impact uses ONE hue at two intensities, never
+       the sage accent: sage means "you can act on this", so an evidence badge
+       borrowing it read as a button. Soft = notable, bordered = exceptional. */
     ${scope} .cg-chip--amber { background: var(--cg-amber-tint); color: var(--cg-amber-strong); }
-    ${scope} .cg-chip--quiet { background: var(--cg-sage-tint-12); color: var(--cg-text-secondary); }
+    ${scope} .cg-chip--amber-strong {
+      background: var(--cg-amber-tint);
+      color: var(--cg-amber-strong);
+      border-color: var(--cg-amber-border);
+    }
+    ${scope} .cg-chip--quiet { background: transparent; color: var(--cg-text-tertiary); border-color: var(--cg-hairline); }
     ${scope} .cg-chip--danger { background: var(--cg-danger-tint); color: var(--cg-danger); }
+
+    /* Hero metric + supporting line. Promoted out of the item pane so the
+       dialog's author header composes the SAME shapes instead of inventing its
+       own: one dominant number, then an inline dot-separated line of supporting
+       metrics. Boxed metric tiles are deliberately NOT a primitive here — a box
+       is earned by an interaction, not by a number. */
+    ${scope} .cg-hero {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: var(--cg-space-2);
+    }
+    ${scope} .cg-hero-value {
+      font-size: var(--cg-size-display);
+      font-weight: var(--cg-weight-bold);
+      letter-spacing: -0.025em;
+      color: var(--cg-text-primary);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.05;
+    }
+    ${scope} .cg-hero-label { font-size: var(--cg-size-subhead); color: var(--cg-text-secondary); }
+    ${scope} .cg-hero-chip { flex-shrink: 0; align-self: center; }
+    ${scope} .cg-metricline {
+      margin-top: var(--cg-space-2);
+      font-size: var(--cg-size-subhead);
+      color: var(--cg-text-secondary);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.4;
+    }
+    ${scope} .cg-metricline strong { color: var(--cg-text-primary); font-weight: var(--cg-weight-semibold); }
+    ${scope} .cg-metricline-sep { color: var(--cg-text-tertiary); margin: 0 var(--cg-space-2); }
 
     /* ── Card surface (bordered, elevated) — mirrors the gallery. Container
        only; the card's inner content keeps its surface-specific layout. ── */
@@ -115,6 +155,24 @@ export function cgComponents(scope: string): string {
       color: var(--cg-text-tertiary);
     }
 
+    /* Diagnostic block (coded failure state). Deliberately near-cardless: the
+       message reads as body copy, and the machine-facing detail sits behind a
+       divider, disclosed only on request. A failure should not shout with a
+       box and a colour when what the user needs is a sentence and, if they
+       want it, a code to quote. Neutral by design: sage means ACTION and amber
+       means EVIDENCE, so neither may be spent on an error. */
+    ${scope} .cg-diag { font-size: var(--cg-size-footnote); line-height: 1.5; color: var(--cg-text-secondary); }
+    ${scope} .cg-diag-msg { margin: 0 0 var(--cg-space-2) 0; }
+    ${scope} .cg-diag-disclosure { border-top: 1px solid var(--cg-hairline); padding-top: var(--cg-space-2); }
+    ${scope} .cg-diag-detail {
+      margin: var(--cg-space-2) 0 0 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: var(--cg-size-caption);
+      line-height: 1.6;
+      color: var(--cg-text-tertiary);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     @media (prefers-reduced-motion: reduce) {
       ${scope} .cg-btn { transition: none; }
       ${scope} .cg-btn:active { transform: none; }

@@ -45,16 +45,20 @@ export function cgDesignTokens(scope: string, opts: CgTokenOptions = {}): string
       --cg-text-secondary: var(--fill-secondary);
       --cg-text-tertiary: var(--fill-tertiary, light-dark(#63726A, #8A9A92));
       --cg-surface: transparent;
-      --cg-surface-elevated: light-dark(#FFFFFF, #222E28);
-      --cg-surface-sunken: light-dark(#F1F5F3, #1B2520);`
+      /* NEUTRAL, deliberately. Sage is the ACTION colour (buttons, links, focus);
+         when surfaces were also sage-tinted the accent stopped reading as an
+         accent — everything was faintly green. Grouping is carried by the fill +
+         hairline, not by hue. */
+      --cg-surface-elevated: light-dark(#FFFFFF, #222528);
+      --cg-surface-sunken: light-dark(#F1F2F1, #232629);`
     : `
       /* Modal owns the slate palette regardless of host theme. */
       --cg-text-primary: light-dark(#1A2820, #E7EEE9);
       --cg-text-secondary: light-dark(#46554C, #9CAAA3);
       --cg-text-tertiary: light-dark(#63726A, #8A9A92);
-      --cg-surface: light-dark(#F8FAF9, #141D18);
-      --cg-surface-elevated: light-dark(#FFFFFF, #1E2A24);
-      --cg-surface-sunken: light-dark(#EFF3F1, #1A2520);`;
+      --cg-surface: light-dark(#F7F8F8, #16181A);
+      --cg-surface-elevated: light-dark(#FFFFFF, #202326);
+      --cg-surface-sunken: light-dark(#F0F1F1, #1B1E20);`;
 
   return `
     ${scope} {
@@ -129,8 +133,14 @@ export function cgDesignTokens(scope: string, opts: CgTokenOptions = {}): string
       --cg-sage-tint-25: light-dark(rgba(47, 107, 90, 0.25), rgba(143, 173, 159, 0.27));
       --cg-sage-tint-35: light-dark(rgba(47, 107, 90, 0.35), rgba(143, 173, 159, 0.35));
 
-      /* Hairline border (cards, rows, plain buttons) — mirrors the gallery. */
-      --cg-hairline: light-dark(rgba(60, 110, 95, 0.12), rgba(143, 173, 159, 0.12));
+      /* Hairline border (cards, rows, plain buttons). NEUTRAL: a green hairline
+         on a green surface made every boundary read as brand rather than
+         structure. Structure is neutral; sage means "actionable". */
+      --cg-hairline: light-dark(rgba(20, 28, 24, 0.12), rgba(233, 238, 235, 0.11));
+
+      /* Neutral wash for non-semantic chips/labels — the counterpart to the sage
+         tints, which are now reserved for interactive surfaces. */
+      --cg-neutral-tint: light-dark(rgba(20, 28, 24, 0.07), rgba(233, 238, 235, 0.10));
 
       /* Fixed-green primary button — theme-AGNOSTIC on purpose: a pale-sage
          accent on white would be illegible in dark mode, so the filled button

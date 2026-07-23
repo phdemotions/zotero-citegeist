@@ -32,17 +32,32 @@ import {
   getCachedOpenAlexId,
   getItemAuthors,
   isNoMatchSuppressed,
-  syncItemAuthorRelations,
   writeNoMatch,
   writePendingSuggestion,
   getTitleMatchMeta,
 } from "./cache";
 import { searchByMetadata, type TitleMatchResult } from "./titleSearch";
-import { OpenAlexNetworkError, OpenAlexBudgetError, logError } from "./utils";
+import { OpenAlexNetworkError, OpenAlexBudgetError, codeForError, logError } from "./utils";
+import type { DiagnosticCode } from "./diagnostics";
 import { BULK_FETCH_DELAY_MS, NO_MATCH_RETRY_DAYS } from "../constants";
 
-/** Reason a fetch didn't produce a work. */
-export type FetchError = "no-identifier" | "not-found" | "network" | "invalid-item" | "no-match";
+/**
+ * Reason a fetch didn't produce a work.
+ *
+ * `"unexpected"` is the catch-all for anything the enumerated cases don't
+ * cover — a cache write failing (a Zotero data directory on Dropbox/iCloud/Box
+ * can lock the SQLite file), a budget/auth error, a bug. It exists so a fetch
+ * ALWAYS resolves to a rendered state: an unhandled throw used to escape into
+ * the pane's `onAsyncRender`, which has no error boundary, leaving the spinner
+ * up forever with nothing for the user to report.
+ */
+export type FetchError =
+  | "no-identifier"
+  | "not-found"
+  | "network"
+  | "invalid-item"
+  | "no-match"
+  | "unexpected";
 
 /**
  * Discriminated union for fetch results. Five states:
@@ -54,7 +69,17 @@ export type FetchError = "no-identifier" | "not-found" | "network" | "invalid-it
 export type FetchResult =
   | { status: "ok"; work: OpenAlexWork }
   | { status: "cached" }
-  | { status: "error"; error: FetchError }
+  | {
+      status: "error";
+      error: FetchError;
+      /**
+       * Diagnostic code for the underlying failure, when one is known. Lets the
+       * pane show the specific explanation — "today's OpenAlex budget is spent,
+       * add a key" — instead of a generic "something went wrong", and gives a
+       * bug report something to quote.
+       */
+      code?: DiagnosticCode;
+    }
   | { status: "suggestion"; candidate: OpenAlexWork; tier: "high" | "medium"; confidence: number };
 
 /** A resolved identifier ready for an OpenAlex lookup. */
@@ -198,7 +223,22 @@ export async function resolveWorkForItem(item: _ZoteroTypes.Item): Promise<OpenA
  * Fetch citation data for a single Zotero item and cache it.
  * Returns the work data on success so callers can use it without a second API call.
  */
+/**
+ * Fetch + cache one item's metrics. NEVER throws: every failure resolves to a
+ * `{ status: "error" }` result. The pane's `onAsyncRender` awaits this with no
+ * error boundary of its own, so a throw here leaves the loading spinner up
+ * permanently — the user sees an app that hung, with nothing to report.
+ */
 export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchResult> {
+  try {
+    return await fetchAndCacheItemInner(item);
+  } catch (e) {
+    logError(`fetchAndCacheItem(${item.id})`, e);
+    return { status: "error", error: "unexpected", code: codeForError(e) };
+  }
+}
+
+async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchResult> {
   if (!item.isRegularItem() || item.deleted) {
     return { status: "error", error: "invalid-item" };
   }
@@ -225,8 +265,11 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
       }
     } catch (e) {
       if (e instanceof OpenAlexNetworkError) {
-        logError(`fetchAndCacheItem(confirmed id ${matchMeta.confirmedOpenAlexId})`, e);
-        return { status: "error", error: "network" };
+        // Log the local rowid, never the OpenAlex work id: the id is a
+        // resolvable pointer to the paper, and this context is recorded into the
+        // shareable diagnostic report.
+        logError(`fetchAndCacheItem(confirmed, item ${item.id})`, e);
+        return { status: "error", error: "network", code: "CG-NET01" };
       }
       throw e;
     }
@@ -249,7 +292,7 @@ export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchR
   } catch (e) {
     if (e instanceof OpenAlexNetworkError) {
       logError(`fetchAndCacheItem(${item.id})`, e);
-      return { status: "error", error: "network" };
+      return { status: "error", error: "network", code: "CG-NET01" };
     }
     throw e;
   }
@@ -284,7 +327,7 @@ async function attemptTitleSearch(item: _ZoteroTypes.Item): Promise<FetchResult>
   } catch (e) {
     if (e instanceof OpenAlexNetworkError) {
       logError(`attemptTitleSearch(${item.id})`, e);
-      return { status: "error", error: "network" };
+      return { status: "error", error: "network", code: "CG-NET01" };
     }
     throw e;
   }
@@ -327,6 +370,14 @@ export interface FetchBatchResult {
   suggestion: number;
   /** Items the fetch attempt couldn't resolve (network / not-found / no-match). */
   errors: number;
+  /**
+   * Items skipped because the OpenAlex daily budget ran out mid-pass. Kept
+   * distinct from `errors` so a budget stop reads as "come back tomorrow", not
+   * "N papers couldn't be matched" — and so the pass stops issuing further
+   * metered calls the moment the budget is spent instead of 429-ing every
+   * remaining item.
+   */
+  budgetStopped: number;
 }
 
 /**
@@ -346,7 +397,7 @@ export async function fetchAndCacheItems(
 ): Promise<FetchBatchResult> {
   const eligible = items.filter((item) => item.isRegularItem());
 
-  const out: FetchBatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0 };
+  const out: FetchBatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0, budgetStopped: 0 };
 
   for (let i = 0; i < eligible.length; i++) {
     let status = "error";
@@ -356,7 +407,13 @@ export async function fetchAndCacheItems(
       if (result.status === "ok") out.fresh++;
       else if (result.status === "cached") out.cached++;
       else if (result.status === "suggestion") out.suggestion++;
-      else out.errors++;
+      else if (result.status === "error" && result.code === "CG-API42") {
+        // Daily budget spent. Stop the pass rather than 429-ing every remaining
+        // item; count this one and all that follow as skipped, not failed.
+        out.budgetStopped = eligible.length - i;
+        onItemDone?.(eligible[i].id, "budget");
+        break;
+      } else out.errors++;
     } catch (e) {
       out.errors++;
       logError(`fetchAndCacheItems item ${eligible[i].id}`, e);
@@ -379,12 +436,12 @@ export async function fetchAndCacheItems(
 export type AuthorResolveStatus = "resolved" | "already" | "unresolved" | "budget" | "error";
 
 /**
- * Ensure a single item's authors are resolved and its `openalex:author`
- * relation reflects them. Idempotent + resumable: an item that already has
- * resolved authors is skipped — but its relation is still synced, to populate
- * the handoff for rows that were background-resolved (which don't write
- * relations). Re-fetch is via `getWorkById` — a free OpenAlex singleton lookup —
- * so a whole-library pass costs no metered budget for identity.
+ * Ensure a single item's authors are resolved into the SQLite item_authors
+ * table. Idempotent + resumable: an item that already has resolved authors is
+ * skipped. Re-fetch is via `getWorkById` — a free OpenAlex singleton lookup — so
+ * a whole-library pass costs no metered budget for identity. Writes no native
+ * Zotero relation (the `openalex:author` predicate breaks Zotero sync — see the
+ * NOTE in the body and relations.ts).
  */
 export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<AuthorResolveStatus> {
   if (!item.isRegularItem() || item.deleted) return "unresolved";
@@ -394,28 +451,42 @@ export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<Au
     // throwing out of this function — the batch pass (resolveAuthorsForItems)
     // relies on the no-throw status contract to stay per-item isolated and
     // resumable; a bare throw here would abort the entire "Resolve all" pass.
+    // NOTE: authors are persisted ONLY to the SQLite item_authors table (the
+    // source of truth + the external/Obsidian handoff via citegeist.sqlite). We
+    // deliberately do NOT write a native Zotero `openalex:author` item relation:
+    // Zotero's sync SERVER rejects that custom predicate ("Error 400 ...
+    // Unsupported predicate 'openalex:author'") and halts the user's entire
+    // library sync ("Made no progress during upload"). The relation handoff is
+    // disabled until a sync-safe mechanism exists — see relations.ts.
     const existing = await getItemAuthors(item.libraryID, item.key);
-    if (existing.length > 0) {
-      await syncItemAuthorRelations(item).catch((e) => logError("syncItemAuthorRelations", e));
-      return "already";
-    }
+    if (existing.length > 0) return "already";
 
     const workId = getCachedOpenAlexId({ libraryID: item.libraryID, key: item.key });
     if (!workId) {
-      // Never resolved to a work — do the full fetch (free identifier lookups),
-      // which piggybacks author identity via the normal cacheWorkData path.
+      // Never resolved to a work — do the full fetch (free identifier lookups,
+      // then a metered title-search fallback), which piggybacks author identity
+      // via the normal cacheWorkData path.
       const r = await fetchAndCacheItem(item);
-      if (r.status === "ok") {
-        await syncItemAuthorRelations(item).catch((e) => logError("syncItemAuthorRelations", e));
-        return "resolved";
+      if (r.status === "ok") return "resolved";
+      // fetchAndCacheItem is total, so a budget-exhausted title search comes
+      // back as an error result carrying CG-API42 rather than throwing. Without
+      // this the outer `catch (OpenAlexBudgetError)` never fires on this path,
+      // the pass keeps issuing one metered call per remaining item, and the stop
+      // is miscounted as "unresolved" instead of "budget".
+      if (r.status === "error" && r.code === "CG-API42") return "budget";
+      if (r.status === "cached") return "already";
+      // A genuine failure (network, DB lock, auth, unexpected) is an ERROR, not
+      // "no author match" — reporting infrastructure trouble as a clean
+      // not-found sends the user looking at their library instead of the cause.
+      if (r.status === "error" && r.error !== "no-match" && r.error !== "no-identifier") {
+        return "error";
       }
-      return r.status === "cached" ? "already" : "unresolved";
+      return "unresolved";
     }
 
     const work = await getWorkById(workId);
     if (!work) return "unresolved";
     await cacheItemAuthors(item, work.authorships);
-    await syncItemAuthorRelations(item).catch((e) => logError("syncItemAuthorRelations", e));
     const after = await getItemAuthors(item.libraryID, item.key);
     return after.length > 0 ? "resolved" : "unresolved";
   } catch (e) {

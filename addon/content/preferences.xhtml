@@ -5,13 +5,14 @@
     <label><html:h2>Citegeist Settings</html:h2></label>
 
     <hbox align="center">
-      <label value="Email for OpenAlex polite pool:" />
-      <html:input type="email" id="citegeist-pref-mailto"
-        preference="extensions.zotero.citegeist.mailto"
+      <label value="OpenAlex API key (optional):" />
+      <html:input type="password" id="citegeist-pref-apikey"
+        preference="extensions.zotero.citegeist.openAlexApiKey"
+        placeholder="Leave blank to use the free anonymous quota"
         style="flex: 1; margin-left: 8px;" />
     </hbox>
     <description style="font-size: 11px; opacity: 0.6; margin-top: 4px;">
-      OpenAlex is the free citation database Citegeist uses. Adding your email gives you faster speeds via their "polite pool." Your email is only sent to OpenAlex, never to us. Optional but recommended.
+      OpenAlex is the citation database Citegeist reads from. It has been metered since July 2026: without a key you get a free daily allowance, which is enough for normal use but can run out during a large library scan (error CG-API42). A free key from openalex.org raises it. The key is stored on this computer only — never synced, never logged, and only ever sent to OpenAlex.
     </description>
 
     <separator class="thin" />
@@ -52,6 +53,24 @@
     <description id="citegeist-update-status"
       role="status" aria-live="polite" aria-atomic="true"
       style="font-size: 11px; margin-top: 6px; display: none;" />
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>Troubleshooting</html:h2></label>
+
+    <description style="font-size: 11px; opacity: 0.7;">
+      If something isn't working, copy the diagnostic report and paste it into your GitHub issue. It contains your Citegeist build, your Zotero version, and the problems recorded this session. It carries no titles, DOIs, or other library content, no API key, and no personal details such as your username.
+    </description>
+
+    <hbox align="center" style="margin-top: 8px;">
+      <html:button id="citegeist-copy-report-btn">Copy diagnostic report</html:button>
+      <html:button id="citegeist-clear-report-btn" style="margin-left: 8px;">Clear</html:button>
+      <spacer flex="1" />
+      <label id="citegeist-report-status" style="font-size: 11px; opacity: 0.7;" />
+    </hbox>
+
+    <html:pre id="citegeist-report-preview"
+      style="font-size: 11px; line-height: 1.5; max-height: 180px; overflow: auto; margin-top: 8px; white-space: pre-wrap; word-break: break-word; opacity: 0.8;" />
   </groupbox>
 
   <html:script><![CDATA[
@@ -107,6 +126,58 @@
 
         btn.disabled = false;
       });
+
+      /* Troubleshooting. Zotero.Citegeist is installed by hooks.onStartup.
+         This pane is a standalone document that cannot import from the
+         bundle, so it calls through that bridge rather than reimplementing
+         the report - one implementation, no drift. */
+      const copyBtn = document.getElementById("citegeist-copy-report-btn");
+      const clearBtn = document.getElementById("citegeist-clear-report-btn");
+      const preview = document.getElementById("citegeist-report-preview");
+      const reportStatus = document.getElementById("citegeist-report-status");
+
+      function diagnostics() {
+        return Zotero.Citegeist || null;
+      }
+
+      function refreshPreview() {
+        const cg = diagnostics();
+        if (!cg) {
+          preview.textContent =
+            "Diagnostics unavailable \u2014 restart Zotero so Citegeist can finish loading.";
+          copyBtn.disabled = true;
+          clearBtn.disabled = true;
+          return;
+        }
+        preview.textContent = cg.buildDiagnosticReport({});
+      }
+
+      function setReportStatus(msg) {
+        reportStatus.setAttribute("value", msg);
+        /* Cleared after a beat so the label does not read as permanent state. */
+        setTimeout(function () { reportStatus.setAttribute("value", ""); }, 4000);
+      }
+
+      copyBtn.addEventListener("click", () => {
+        const cg = diagnostics();
+        if (!cg) return;
+        try {
+          Zotero.Utilities.Internal.copyTextToClipboard(cg.buildDiagnosticReport({}));
+          setReportStatus("Copied to clipboard");
+        } catch {
+          setReportStatus("Couldn\u2019t copy \u2014 select the text below instead");
+        }
+      });
+
+      clearBtn.addEventListener("click", () => {
+        const cg = diagnostics();
+        if (!cg) return;
+        cg.clearDiagnostics();
+        refreshPreview();
+        setReportStatus("Cleared");
+      });
+
+      refreshPreview();
     })();
   ]]></html:script>
 

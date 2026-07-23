@@ -31,7 +31,6 @@ import {
   type OpenAlexListResponse,
 } from "./openalex";
 import { parseAuthorId } from "./cache/authors";
-import { logError } from "./utils";
 
 /** Fields fetched from the `/authors/{id}` singleton (identity + aggregates). */
 const AUTHOR_SELECT = "id,display_name,orcid,works_count,cited_by_count,summary_stats";
@@ -159,7 +158,7 @@ export async function fetchAuthorWorks(
     per_page: String(perPage),
     cursor,
   });
-  const resp = await rateLimitedFetch<OpenAlexListResponse>(url, `works by author ${shortId}`);
+  const resp = await rateLimitedFetch<OpenAlexListResponse>(url, "works by author");
   return { ...resp, results: (resp.results ?? []).map(normalizeWork) };
 }
 
@@ -217,7 +216,22 @@ async function metricsFromWorks(authorId: string): Promise<AuthorMetrics> {
  *          (404). Budget / auth / network failures propagate so the pane (U7)
  *          can render distinct states.
  */
-export async function fetchAuthorProfile(authorId: string): Promise<OpenAlexAuthorProfile | null> {
+export interface FetchAuthorProfileOptions {
+  /**
+   * Skip the metered works-derivation fallback when OpenAlex's author aggregates
+   * are zeroed (KTD2). The item pane sets this to fill in h-indexes for a WHOLE
+   * byline: the `/authors/{id}` singleton is free, but deriving from works pages
+   * metered `/works` queries, and doing that for a dozen authors on every item
+   * click would burn the daily budget. The dialog (one author, explicit user
+   * action) leaves it off and pays for the exact figure.
+   */
+  aggregatesOnly?: boolean;
+}
+
+export async function fetchAuthorProfile(
+  authorId: string,
+  opts: FetchAuthorProfileOptions = {},
+): Promise<OpenAlexAuthorProfile | null> {
   const shortId = parseAuthorId(authorId);
   if (!shortId) return null;
 
@@ -228,11 +242,35 @@ export async function fetchAuthorProfile(authorId: string): Promise<OpenAlexAuth
 
   try {
     const url = buildUrl(`/authors/${encodeURIComponent(shortId)}`, { select: AUTHOR_SELECT });
-    const body = await rateLimitedFetch<AuthorApiResponse>(url, `author ${shortId}`);
+    const body = await rateLimitedFetch<AuthorApiResponse>(url, "author lookup");
 
     const canonicalId = resolveCanonicalId(body) ?? shortId;
     // Aggregates are trustworthy only when non-zero (KTD2 degradation guard).
     const useAggregates = typeof body.works_count === "number" && body.works_count > 0;
+
+    if (!useAggregates && opts.aggregatesOnly) {
+      // Aggregates are zeroed and the caller has opted out of paying for the
+      // metered derivation. Return identity with null metrics (the pane simply
+      // shows no h-index for this author) and deliberately DO NOT populate the
+      // session cache — a later dialog call must still be able to derive the
+      // real numbers rather than inherit these nulls.
+      return withRedirect(
+        {
+          id: canonicalId,
+          displayName: body.display_name ?? null,
+          orcid: body.orcid ?? null,
+          worksCount: null,
+          citedByCount: null,
+          hIndex: null,
+          i10Index: null,
+          metricsAreLowerBound: false,
+          metricsSource: "aggregates",
+          redirectedFrom: null,
+        },
+        shortId,
+      );
+    }
+
     const metrics = useAggregates
       ? metricsFromAggregates(body)
       : await metricsFromWorks(canonicalId);
@@ -254,7 +292,8 @@ export async function fetchAuthorProfile(authorId: string): Promise<OpenAlexAuth
       return null;
     }
     // Budget / auth / network — don't poison the cache; let the pane retry.
-    logError(`fetchAuthorProfile(${shortId})`, e);
+    // Rethrow only (no log here): the single awaiting caller records it once,
+    // and the OpenAlex author id must not reach the shareable diagnostic report.
     throw e;
   }
 }

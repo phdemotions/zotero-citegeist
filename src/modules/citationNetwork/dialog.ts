@@ -16,11 +16,16 @@
 
 import { resolveWorkForItem, canResolveWork } from "../citationService";
 import { getAllCachedOpenAlexIds } from "../cache";
-import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../utils";
-import { SEARCH_DEBOUNCE_MS, INFINITE_SCROLL_THRESHOLD_PX } from "../../constants";
+import { escapeHTML, safeInnerHTML, codeForError, logError } from "../utils";
+import { bindGuarded, describeCode } from "../diagnostics";
+import {
+  SEARCH_DEBOUNCE_MS,
+  INFINITE_SCROLL_THRESHOLD_PX,
+  SKELETON_ROW_COUNT,
+} from "../../constants";
 import type { NetworkMode, NetworkSortKey, NetworkState } from "./types";
 import { getDialogCSS } from "./styles";
-import { loadResults, renderResults, toggleExpanded } from "./results";
+import { loadResults, renderResults, renderDialogDiagnostic, toggleExpanded } from "./results";
 import { handleAdd, handleUndo, getExistingDOIs } from "./actions";
 import {
   toggleItemPicker,
@@ -33,7 +38,8 @@ import { resolveHostScheme } from "../ui/theme";
 import { fetchAuthorProfile, type OpenAlexAuthorProfile } from "../openalexAuthors";
 import {
   buildProfileViewModel,
-  profileErrorState,
+  getAuthorTypeID,
+  isAuthorCreator,
   persistProfileMetrics,
   maybeReconcileMerge,
   type ProfileViewModel,
@@ -154,6 +160,25 @@ function createDialogShell(
 // Entry point
 // ────────────────────────────────────────────────────────
 
+/**
+ * Paint the loading skeleton into the dialog body. Shared by both entry points
+ * (citation network and author works) so the row markup lives in one place.
+ */
+function renderSkeletonRows(body: HTMLElement): void {
+  let skeleton = "";
+  for (let i = 0; i < SKELETON_ROW_COUNT; i++) {
+    skeleton += `<div class="cg-skeleton-row">
+        <div class="cg-skeleton-content">
+          <div class="cg-skeleton-bar cg-skeleton-title"></div>
+          <div class="cg-skeleton-bar cg-skeleton-meta"></div>
+          <div class="cg-skeleton-bar cg-skeleton-meta2"></div>
+        </div>
+        <div class="cg-skeleton-bar cg-skeleton-right"></div>
+      </div>`;
+  }
+  safeInnerHTML(body, skeleton);
+}
+
 export async function showCitationNetwork(
   item: _ZoteroTypes.Item,
   mode: NetworkMode,
@@ -189,20 +214,7 @@ export async function showCitationNetwork(
 
   // Show skeleton in body while loading
   const body = dialog.querySelector(".cg-dialog-body") as HTMLElement;
-  if (body) {
-    let skeleton = "";
-    for (let i = 0; i < 6; i++) {
-      skeleton += `<div class="cg-skeleton-row">
-        <div class="cg-skeleton-content">
-          <div class="cg-skeleton-bar cg-skeleton-title"></div>
-          <div class="cg-skeleton-bar cg-skeleton-meta"></div>
-          <div class="cg-skeleton-bar cg-skeleton-meta2"></div>
-        </div>
-        <div class="cg-skeleton-bar cg-skeleton-right"></div>
-      </div>`;
-    }
-    safeInnerHTML(body, skeleton);
-  }
+  if (body) renderSkeletonRows(body);
 
   // Close on Escape/backdrop while loading. We flip `phase` to "closed"
   // BEFORE the DOM removal so any awaiter that resumes between this handler
@@ -221,6 +233,9 @@ export async function showCitationNetwork(
       if (activeDialog === overlay) activeDialog = null;
     }
   };
+  // Raw listeners on purpose: earlyClose is removed by identity below, and a
+  // wrapper would make removeEventListener silently no-op. The handler itself
+  // only closes the dialog, so there is nothing here that can fail.
   overlay.addEventListener("keydown", earlyClose);
   overlay.addEventListener("click", earlyClose);
 
@@ -253,17 +268,10 @@ export async function showCitationNetwork(
     if (closedBeforeReady()) return;
     logError(`showCitationNetwork load (item ${item.id}, ${mode})`, e);
     if (body) {
-      const msg =
-        e instanceof OpenAlexNetworkError
-          ? `<div class="cg-empty">
-            <div class="cg-empty-title">OpenAlex is unavailable</div>
-            Could not reach the citation service. Try again in a few minutes.
-          </div>`
-          : `<div class="cg-empty">
-            <div class="cg-empty-title">Something went wrong</div>
-            An unexpected error occurred while loading citations.
-          </div>`;
-      safeInnerHTML(body, msg);
+      // Coded state, built by the shared renderer. The dialog used to
+      // hand-write its own generic failure copy, which told the user nothing
+      // and gave a bug report nothing to quote.
+      renderDialogDiagnostic(body, codeForError(e), `network dialog load (${mode})`);
     }
     return;
   }
@@ -293,7 +301,12 @@ export async function showCitationNetwork(
   overlay.removeEventListener("keydown", earlyClose);
   overlay.removeEventListener("click", earlyClose);
   // Ensure close handlers update the phase variable the closures above use.
-  overlay.addEventListener("citegeist:dialog-closed", markClosed as EventListener);
+  bindGuarded(
+    overlay,
+    "citegeist:dialog-closed",
+    "network dialog overlay citegeist:dialog-closed",
+    markClosed as EventListener,
+  );
 
   phase = "ready";
 
@@ -379,17 +392,12 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
     [profile, existingDOIs] = await Promise.all([fetchAuthorProfile(authorId), getExistingDOIs()]);
   } catch (e) {
     if (myOpen !== dialogOpenSeq) return; // superseded mid-fetch — newer open owns the UI
-    logError(`showAuthorWorks(${authorId})`, e);
-    const st = profileErrorState(e);
-    Services.prompt.alert(
-      null,
-      "Citegeist",
-      st.kind === "budget"
-        ? "Today's OpenAlex budget is used up. It resets tomorrow — add a free API key in Settings → Citegeist to raise it."
-        : st.kind === "auth"
-          ? "OpenAlex rejected the API key. Check it in Settings → Citegeist."
-          : "Couldn't reach OpenAlex. Try again in a few minutes.",
-    );
+    logError("showAuthorWorks", e);
+    // This path is a modal alert (no dialog body to render into yet), so the
+    // code is appended to the message — a user reporting "the author view
+    // won't open" still has something to quote.
+    const code = codeForError(e);
+    Services.prompt.alert(null, "Citegeist", `${describeCode(code).message}\n\n${code}`);
     return;
   }
 
@@ -417,20 +425,7 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
 
   // Skeleton while the first works page loads.
   const body = dialog.querySelector(".cg-dialog-body") as HTMLElement;
-  if (body) {
-    let skeleton = "";
-    for (let i = 0; i < 6; i++) {
-      skeleton += `<div class="cg-skeleton-row">
-        <div class="cg-skeleton-content">
-          <div class="cg-skeleton-bar cg-skeleton-title"></div>
-          <div class="cg-skeleton-bar cg-skeleton-meta"></div>
-          <div class="cg-skeleton-bar cg-skeleton-meta2"></div>
-        </div>
-        <div class="cg-skeleton-bar cg-skeleton-right"></div>
-      </div>`;
-    }
-    safeInnerHTML(body, skeleton);
-  }
+  if (body) renderSkeletonRows(body);
 
   const defaultCollectionIds = new Set<number>();
   try {
@@ -498,23 +493,14 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
 export function getItemSourceMetaLine(item: _ZoteroTypes.Item): string {
   const parts: string[] = [];
 
-  let authorTypeID: number | undefined;
-  try {
-    const creatorTypes = (Zotero as { CreatorTypes?: { getID?: (name: string) => number } })
-      .CreatorTypes;
-    authorTypeID = creatorTypes?.getID?.("author");
-  } catch {
-    authorTypeID = undefined;
-  }
+  const authorTypeID = getAuthorTypeID();
   const creators = (item.getCreators?.() ?? []) as Array<{
     creatorTypeID?: number;
     lastName?: string;
     name?: string;
   }>;
   const surnames = creators
-    .filter(
-      (c) => authorTypeID == null || c.creatorTypeID == null || c.creatorTypeID === authorTypeID,
-    )
+    .filter((c) => isAuthorCreator(c, authorTypeID))
     .map((c) => (c.lastName || c.name || "").trim())
     .filter(Boolean);
 
@@ -631,29 +617,28 @@ export function buildDialogHTML(title: string, sourceMetaLine: string): string {
 }
 
 /**
- * Author-mode header: identity line + a hero-metrics stack (concept B \u2014 h-index
- * prominent, i10/works/cited alongside). No citing/references tabs. Reuses the
- * work-mode `.cg-dialog-top` / `.cg-stat` layout so the two headers stay
- * visually consistent.
+ * Author-mode header. Composes the SHARED `.cg-metricline` primitive rather than
+ * a row of boxed stat tiles: four bordered, equal-weight tiles flattened the
+ * hierarchy and looked nothing like the item pane's Impact card, which does the
+ * identical job (one dominant figure, then supporting metrics inline). A box is
+ * earned by an interaction, not by a number.
  */
 export function buildAuthorDialogHTML(vm: ProfileViewModel): string {
   const ids = [vm.orcid ? `ORCID ${vm.orcid}` : "", "OpenAlex"].filter(Boolean).join(" \u00B7 ");
-  const stat = (value: string, label: string, hero = false): string =>
-    `<div class="cg-stat${hero ? " cg-stat--hero" : ""}">` +
-    `<strong class="cg-stat-value">${escapeHTML(value)}</strong>` +
-    `<span class="cg-stat-label">${escapeHTML(label)}</span></div>`;
+  const sep = `<span class="cg-metricline-sep">\u00B7</span>`;
+  const metrics = [
+    `<strong>h-index ${escapeHTML(vm.hIndex)}</strong>`,
+    `i10 ${escapeHTML(vm.i10Index)}`,
+    `${escapeHTML(vm.worksCount)} works`,
+    `${escapeHTML(vm.citedByCount)} cited`,
+  ].join(sep);
   const header = `
-    <div class="cg-dialog-top">
+    <div class="cg-dialog-top cg-dialog-top--author">
       <div class="cg-header-text">
         <div class="cg-eyebrow">Author</div>
         <div class="cg-dialog-title" title="${escapeHTML(vm.name)}">${escapeHTML(vm.name)}</div>
+        <div class="cg-metricline">${metrics}</div>
         <div class="cg-source-authors">${escapeHTML(ids)}</div>
-      </div>
-      <div class="cg-count-stack cg-author-metrics">
-        ${stat(vm.hIndex, "h-index", true)}
-        ${stat(vm.i10Index, "i10")}
-        ${stat(vm.worksCount, "works")}
-        ${stat(vm.citedByCount, "cited")}
       </div>
     </div>`;
   return DIALOG_CHROME_HTML + header + commandBarHTML("") + BODY_FOOTER_HTML;
@@ -691,10 +676,12 @@ export function bindDialogEvents(state: NetworkState): void {
   const { dialog, overlay } = state;
 
   // Close button
-  dialog.querySelector("#cg-btn-close")?.addEventListener("click", () => closeDialog(state));
+  bindGuarded(dialog.querySelector("#cg-btn-close"), "click", "network dialog close button", () =>
+    closeDialog(state),
+  );
 
   // Escape
-  overlay.addEventListener("keydown", (e: Event) => {
+  bindGuarded(overlay, "keydown", "network dialog overlay keydown", (e: Event) => {
     if ((e as KeyboardEvent).key === "Escape") {
       // Close any open picker first, then dialog
       const openPicker = dialog.querySelector(".cg-item-picker:not([hidden])") as HTMLElement;
@@ -711,7 +698,7 @@ export function bindDialogEvents(state: NetworkState): void {
   });
 
   // Overlay backdrop click
-  overlay.addEventListener("click", (e: Event) => {
+  bindGuarded(overlay, "click", "network dialog overlay click", (e: Event) => {
     if (e.target === overlay) closeDialog(state);
   });
 
@@ -730,7 +717,8 @@ export function bindDialogEvents(state: NetworkState): void {
     // flight so focus + aria-selected + tabindex stay in sync (C2: the
     // click handler short-circuits on `state.loading`, but focus had
     // already moved, desyncing roving-tabindex from the active tab).
-    tabEl.addEventListener("keydown", (e: KeyboardEvent) => {
+    bindGuarded(tabEl, "keydown", "network dialog tabEl keydown", (evt: Event) => {
+      const e = evt as KeyboardEvent;
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
       if (state.loading) return;
       e.preventDefault();
@@ -739,7 +727,7 @@ export function bindDialogEvents(state: NetworkState): void {
       next.focus();
       (next as HTMLElement).click();
     });
-    tabEl.addEventListener("click", async () => {
+    bindGuarded(tabEl, "click", "network dialog tabEl click", async () => {
       const newMode = tabEl.dataset.mode as NetworkMode;
       if (newMode === state.mode || state.loading) return;
       // Cancel any pending debounced search — without this, a mid-typing
@@ -770,7 +758,7 @@ export function bindDialogEvents(state: NetworkState): void {
 
   // Search (debounced)
   const searchInput = dialog.querySelector(".cg-search-input") as HTMLInputElement;
-  searchInput?.addEventListener("input", () => {
+  bindGuarded(searchInput, "input", "network dialog searchInput input", () => {
     if (state.searchTimeout) clearTimeout(state.searchTimeout);
     state.searchTimeout = setTimeout(() => {
       state.searchTimeout = null;
@@ -780,24 +768,26 @@ export function bindDialogEvents(state: NetworkState): void {
 
   // Sort
   const sortSelect = dialog.querySelector(".cg-sort-select") as HTMLSelectElement;
-  sortSelect?.addEventListener("change", () => {
+  bindGuarded(sortSelect, "change", "network dialog sortSelect change", () => {
     state.sortBy = sortSelect.value as NetworkSortKey;
     renderResults(state, searchInput?.value || "");
   });
 
   // Hide-in-library filter toggle
   const hideToggle = dialog.querySelector("#cg-hide-in-library") as HTMLButtonElement | null;
-  hideToggle?.addEventListener("click", () => {
-    state.hideInLibrary = !state.hideInLibrary;
-    hideToggle.setAttribute("aria-checked", state.hideInLibrary ? "true" : "false");
-    hideToggle.classList.toggle("cg-switch-on", state.hideInLibrary);
-    renderResults(state, searchInput?.value || "");
-  });
+  if (hideToggle) {
+    bindGuarded(hideToggle, "click", "network dialog hideToggle click", () => {
+      state.hideInLibrary = !state.hideInLibrary;
+      hideToggle.setAttribute("aria-checked", state.hideInLibrary ? "true" : "false");
+      hideToggle.classList.toggle("cg-switch-on", state.hideInLibrary);
+      renderResults(state, searchInput?.value || "");
+    });
+  }
 
   // ── Body event delegation (survives re-renders) ──
   const body = dialog.querySelector(".cg-dialog-body") as HTMLElement;
 
-  body?.addEventListener("click", (e: Event) => {
+  bindGuarded(body, "click", "network dialog body click", (e: Event) => {
     const target = e.target as HTMLElement;
 
     // Close any open per-item picker if clicking outside it
@@ -871,7 +861,7 @@ export function bindDialogEvents(state: NetworkState): void {
   });
 
   // Keyboard on body -- buttons + row navigation
-  body?.addEventListener("keydown", (e: Event) => {
+  bindGuarded(body, "keydown", "network dialog body keydown", (e: Event) => {
     const ke = e as KeyboardEvent;
     const target = ke.target as HTMLElement;
 
@@ -947,7 +937,7 @@ export function bindDialogEvents(state: NetworkState): void {
       ? win.requestAnimationFrame.bind(win)
       : (cb) => setTimeout(() => cb(0), 16);
   let scrollScheduled = false;
-  body?.addEventListener("scroll", () => {
+  bindGuarded(body, "scroll", "network dialog body scroll", () => {
     if (scrollScheduled) return;
     scrollScheduled = true;
     schedule(async () => {
@@ -963,7 +953,7 @@ export function bindDialogEvents(state: NetworkState): void {
   // are picked up live. Filters out hidden elements explicitly so the
   // trap doesn't park focus on `cg-picker-option[hidden]` nodes that
   // surrounding CSS keeps reachable in the DOM. (P3.1)
-  dialog.addEventListener("keydown", (e: Event) => {
+  bindGuarded(dialog, "keydown", "network dialog dialog keydown", (e: Event) => {
     const ke = e as KeyboardEvent;
     if (ke.key !== "Tab") return;
     const all = dialog.querySelectorAll<HTMLElement>(
