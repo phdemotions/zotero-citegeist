@@ -265,7 +265,10 @@ async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchRes
       }
     } catch (e) {
       if (e instanceof OpenAlexNetworkError) {
-        logError(`fetchAndCacheItem(confirmed id ${matchMeta.confirmedOpenAlexId})`, e);
+        // Log the local rowid, never the OpenAlex work id: the id is a
+        // resolvable pointer to the paper, and this context is recorded into the
+        // shareable diagnostic report.
+        logError(`fetchAndCacheItem(confirmed, item ${item.id})`, e);
         return { status: "error", error: "network" };
       }
       throw e;

@@ -6,7 +6,7 @@
  * metric formatting (the ≥ lower-bound labels), the profile + author-row
  * view-models ({@link buildProfileViewModel}, {@link buildAuthorRowViewModels}),
  * the pane's trend + creator helpers ({@link compactTrend},
- * {@link getAuthorCreators}), and the fetch-error to render-state mapping.
+ * {@link getAuthorCreators}).
  *
  * The dialog's "author works" mode calls fetchAuthorProfile + buildProfileViewModel
  * directly for its hero; this module surfaces the pure pieces it composes.
@@ -209,15 +209,35 @@ export function compactTrend(work?: OpenAlexWork): string | null {
  * the wrong resolved row. When `Zotero.CreatorTypes.getID` is unavailable, every
  * creator is treated as an author (best-effort).
  */
-export function getAuthorCreators(item: _ZoteroTypes.Item): AuthorCreator[] {
-  let authorTypeID: number | undefined;
+/**
+ * The Zotero creator-type id for "author", or undefined when the API is
+ * unavailable (best-effort — callers then treat every creator as an author).
+ */
+export function getAuthorTypeID(): number | undefined {
   try {
-    authorTypeID = (
-      Zotero as { CreatorTypes?: { getID?: (n: string) => number } }
-    ).CreatorTypes?.getID?.("author");
+    return (Zotero as { CreatorTypes?: { getID?: (n: string) => number } }).CreatorTypes?.getID?.(
+      "author",
+    );
   } catch {
-    authorTypeID = undefined;
+    return undefined;
   }
+}
+
+/**
+ * Whether a creator counts as an author. Non-authors (editors, translators) are
+ * skipped; an unknown creator type (or an unavailable CreatorTypes API) is
+ * treated as an author. Shared by the pane's row builder and the dialog's
+ * source-meta line so the "which creators are authors" rule lives in one place.
+ */
+export function isAuthorCreator(
+  c: { creatorTypeID?: number },
+  authorTypeID: number | undefined,
+): boolean {
+  return authorTypeID == null || c.creatorTypeID == null || c.creatorTypeID === authorTypeID;
+}
+
+export function getAuthorCreators(item: _ZoteroTypes.Item): AuthorCreator[] {
+  const authorTypeID = getAuthorTypeID();
   const creators = (item.getCreators?.() ?? []) as Array<{
     creatorTypeID?: number;
     lastName?: string;
@@ -227,9 +247,7 @@ export function getAuthorCreators(item: _ZoteroTypes.Item): AuthorCreator[] {
   const out: AuthorCreator[] = [];
   let authorIdx = 0;
   for (const c of creators) {
-    const isAuthor =
-      authorTypeID == null || c.creatorTypeID == null || c.creatorTypeID === authorTypeID;
-    if (!isAuthor) continue;
+    if (!isAuthorCreator(c, authorTypeID)) continue;
     out.push({ name: creatorName(c) || `Author ${authorIdx + 1}`, position: authorIdx });
     authorIdx++;
   }

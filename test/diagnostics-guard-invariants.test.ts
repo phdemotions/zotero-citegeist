@@ -33,6 +33,7 @@ import {
   bindGuarded,
 } from "../src/modules/diagnostics";
 import { DIAGNOSTIC_RING_BUFFER_SIZE } from "../src/constants";
+import { logError } from "../src/modules/utils";
 
 function src(relative: string): string {
   return readFileSync(fileURLToPath(new URL(`../${relative}`, import.meta.url)), "utf8");
@@ -202,6 +203,23 @@ describe("guard", () => {
   it("bindGuarded is a no-op on a null target", () => {
     expect(() => bindGuarded(null, "click", "unit bind null", () => {})).not.toThrow();
   });
+
+  // The context redaction is a privacy gate, not cosmetics: a live call site
+  // (cache/migration.ts) feeds a username-bearing absolute path into the
+  // context, and logError records redactSensitive(context) into the shareable
+  // ring buffer. Assert on the recorded context, distinct from the detail scrub.
+  it("logError scrubs a username-bearing path AND api key from the recorded context", () => {
+    logError("prune failed for /Users/janedoe/Zotero/x.sqlite api_key=sk-SECRET", new Error("x"));
+    const entry = recentDiagnostics().at(-1);
+    expect(entry?.context).not.toContain("janedoe");
+    expect(entry?.context).not.toContain("/Users/");
+    expect(entry?.context).not.toContain("sk-SECRET");
+  });
+
+  it("logError scrubs a resolvable OpenAlex id from the recorded context", () => {
+    logError("fetchAndCacheItem(confirmed id W2741809807)", new Error("x"));
+    expect(recentDiagnostics().at(-1)?.context).not.toContain("W2741809807");
+  });
 });
 
 /**
@@ -220,6 +238,27 @@ describe("host entry points are guarded", () => {
       ["sectionButtons settings", "pane settings button"],
     ]) {
       expect(pane, `${callback} is not guarded`).toContain(`"${wrapper}"`);
+    }
+    // Structural, not just presence: EVERY on<X> handler the pane registers must
+    // hand off to guard/guardAsync as its first act, so a NEW callback added
+    // unguarded fails here rather than shipping — the guard.ts contract literally
+    // promises "a new entry point cannot ship unguarded".
+    const handlers = [
+      ...pane.matchAll(
+        /\bon(?:Render|AsyncRender|ItemChange|Click):\s*(?:async\s*)?\([^)]*\)\s*=>\s*(\w+)/g,
+      ),
+    ];
+    // onAsyncRender is guarded by its own internal try/catch boundary rather
+    // than a head guard() call, so it's excluded from this head-of-handler scan;
+    // the four head-guarded handlers (onItemChange, onRender, two onClick) are.
+    expect(
+      handlers.length,
+      "expected to find the pane's head-guarded handlers",
+    ).toBeGreaterThanOrEqual(4);
+    for (const m of handlers) {
+      expect(["guard", "guardAsync"], `an on-handler starts with ${m[1]}, not a guard`).toContain(
+        m[1],
+      );
     }
   });
 
@@ -263,10 +302,16 @@ describe("host entry points are guarded", () => {
 
   it("the dialog renders coded failure states instead of hand-written copy", () => {
     const dialog = src("src/modules/citationNetwork/dialog.ts");
+    const results = src("src/modules/citationNetwork/results.ts");
+    // Both dialog entry points and the results fetch route failures through the
+    // shared coded renderer, which composes buildDiagnosticElement in results.ts.
     expect(dialog).toContain("renderDialogDiagnostic");
-    expect(dialog).toContain("buildDiagnosticElement");
-    // The old copy told the user nothing and gave a report nothing to quote.
+    expect(results).toContain("renderDialogDiagnostic");
+    expect(results).toContain("buildDiagnosticElement");
+    // The old hand-written copy told the user nothing and gave a report nothing
+    // to quote. Neither the generic dialog string nor the results one survives.
     expect(dialog).not.toContain("An unexpected error occurred");
+    expect(results).not.toContain("Error loading results");
   });
 
   it("there is exactly one error classifier — codeForError, not a parallel mapper", () => {

@@ -17,12 +17,7 @@
 import { resolveWorkForItem, canResolveWork } from "../citationService";
 import { getAllCachedOpenAlexIds } from "../cache";
 import { escapeHTML, safeInnerHTML, codeForError, logError } from "../utils";
-import {
-  bindGuarded,
-  buildDiagnosticElement,
-  describeCode,
-  type DiagnosticCode,
-} from "../diagnostics";
+import { bindGuarded, describeCode } from "../diagnostics";
 import {
   SEARCH_DEBOUNCE_MS,
   INFINITE_SCROLL_THRESHOLD_PX,
@@ -30,7 +25,7 @@ import {
 } from "../../constants";
 import type { NetworkMode, NetworkSortKey, NetworkState } from "./types";
 import { getDialogCSS } from "./styles";
-import { loadResults, renderResults, toggleExpanded } from "./results";
+import { loadResults, renderResults, renderDialogDiagnostic, toggleExpanded } from "./results";
 import { handleAdd, handleUndo, getExistingDOIs } from "./actions";
 import {
   toggleItemPicker,
@@ -43,6 +38,8 @@ import { resolveHostScheme } from "../ui/theme";
 import { fetchAuthorProfile, type OpenAlexAuthorProfile } from "../openalexAuthors";
 import {
   buildProfileViewModel,
+  getAuthorTypeID,
+  isAuthorCreator,
   persistProfileMetrics,
   maybeReconcileMerge,
   type ProfileViewModel,
@@ -180,23 +177,6 @@ function renderSkeletonRows(body: HTMLElement): void {
       </div>`;
   }
   safeInnerHTML(body, skeleton);
-}
-
-/**
- * Render the coded failure block into the dialog body.
- *
- * The block itself comes from the shared renderer so the dialog and the item
- * pane present a failure identically; only the surrounding layout is
- * dialog-specific (left-aligned and measure-capped, unlike the centred
- * one-line empty states).
- */
-function renderDialogDiagnostic(body: HTMLElement, code: DiagnosticCode, context: string): void {
-  const doc = body.ownerDocument;
-  body.innerHTML = "";
-  const wrap = doc.createElement("div");
-  wrap.className = "cg-empty cg-empty--diag";
-  wrap.appendChild(buildDiagnosticElement(doc, code, context));
-  body.appendChild(wrap);
 }
 
 export async function showCitationNetwork(
@@ -412,7 +392,7 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
     [profile, existingDOIs] = await Promise.all([fetchAuthorProfile(authorId), getExistingDOIs()]);
   } catch (e) {
     if (myOpen !== dialogOpenSeq) return; // superseded mid-fetch — newer open owns the UI
-    logError(`showAuthorWorks(${authorId})`, e);
+    logError("showAuthorWorks", e);
     // This path is a modal alert (no dialog body to render into yet), so the
     // code is appended to the message — a user reporting "the author view
     // won't open" still has something to quote.
@@ -513,23 +493,14 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
 export function getItemSourceMetaLine(item: _ZoteroTypes.Item): string {
   const parts: string[] = [];
 
-  let authorTypeID: number | undefined;
-  try {
-    const creatorTypes = (Zotero as { CreatorTypes?: { getID?: (name: string) => number } })
-      .CreatorTypes;
-    authorTypeID = creatorTypes?.getID?.("author");
-  } catch {
-    authorTypeID = undefined;
-  }
+  const authorTypeID = getAuthorTypeID();
   const creators = (item.getCreators?.() ?? []) as Array<{
     creatorTypeID?: number;
     lastName?: string;
     name?: string;
   }>;
   const surnames = creators
-    .filter(
-      (c) => authorTypeID == null || c.creatorTypeID == null || c.creatorTypeID === authorTypeID,
-    )
+    .filter((c) => isAuthorCreator(c, authorTypeID))
     .map((c) => (c.lastName || c.name || "").trim())
     .filter(Boolean);
 

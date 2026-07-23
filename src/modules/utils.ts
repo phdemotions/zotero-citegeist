@@ -111,7 +111,19 @@ export function redactPaths(s: string): string {
  * redactions compose, so a new sink can't pick up one and miss the other.
  */
 export function redactSensitive(s: string): string {
-  return redactPaths(redactApiKey(s));
+  return redactOpenAlexIds(redactPaths(redactApiKey(s)));
+}
+
+/**
+ * Replace resolvable OpenAlex work/author ids (`W…`/`A…`) with `<id>`.
+ *
+ * A W- or A-id resolves 1:1 via one unauthenticated GET to a paper's title and
+ * authors, so it is a pointer to library content. Call sites are supposed to
+ * keep ids out of a recorded context, but this is the net that keeps the
+ * "no library content" promise true if a future one forgets.
+ */
+export function redactOpenAlexIds(s: string): string {
+  return s.replace(/\b[WA]\d{4,}\b/g, "<id>");
 }
 
 /**

@@ -36,6 +36,7 @@ import {
   buildAuthorRowViewModels,
   compactTrend,
   getAuthorCreators,
+  maybeReconcileMerge,
   persistProfileMetrics,
   type AuthorRowViewModel,
 } from "./authorProfile";
@@ -135,11 +136,6 @@ const EMPTY_STATES = {
   },
   loading: { html: "Fetching citation data…", summary: "Loading…", cls: "cg-loading" },
   refreshing: { html: "Refreshing…", summary: "Refreshing…", cls: "cg-loading" },
-  unavailable: {
-    html: "OpenAlex is currently unavailable. Try again in a few minutes.",
-    summary: "Unavailable",
-    cls: "cg-no-identifier",
-  },
   notFoundTitle: {
     html: "Not found on OpenAlex. We also searched by title and found no confident match.",
     summary: "Not found",
@@ -617,12 +613,19 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
               renderPane(container, freshData, item, result.work);
               setSectionSummary(citationSummary(freshData.citedByCount, item));
               invalidateColumnCache(item.id);
+            } else {
+              // Fetch said "ok" but the cache read came back empty (a write that
+              // early-returned). Without this the spinner would stay up forever —
+              // the exact silent-hang this handler's boundary exists to prevent.
+              renderEmptyState(container, setSectionSummary, "matchSaved");
             }
           } else if (result.status === "suggestion") {
             const suggestion = getPendingSuggestion(item);
             if (suggestion) {
               renderSuggestion(container, suggestion, item, setSectionSummary);
               invalidateColumnCache(item.id);
+            } else {
+              renderEmptyState(container, setSectionSummary, "matchSaved");
             }
           } else if (result.status === "error" && !alreadyCached) {
             // "Not on OpenAlex" and "no identifier" are outcomes, not failures —
@@ -991,12 +994,12 @@ function renderSuggestion(
 }
 
 /**
- * Build the pane content using DOM API (not innerHTML for interactive elements).
+ * Build the pane content entirely through the DOM API.
  *
- * Zotero's item pane renders in a mixed XUL/XHTML context where <button>
- * elements set via innerHTML can fail silently. We build the static parts
- * with innerHTML (fast), then create interactive elements via createElement
- * and attach listeners directly.
+ * Zotero's item pane renders in a mixed XUL/XHTML context where a `<button>`
+ * set via innerHTML can fail silently, so every node here is built with
+ * createElement + textContent (the container is cleared with textContent, never
+ * innerHTML). That also keeps hostile author names and titles inert.
  */
 function renderPane(
   container: HTMLElement,
@@ -1253,6 +1256,10 @@ async function fillAuthorMetrics(
       // for the session but its h-index was thrown away, leaving that author
       // permanently blank until restart.
       persistProfileMetrics(profile);
+      // Heal a 301 author-id merge (KTD3): the metrics land under the canonical
+      // id, so item_authors must be repointed too, or the next render reads the
+      // stale id and re-fetches. Cheap SQLite-only rewrite, no metered cost.
+      maybeReconcileMerge(profile);
       if (gen !== paneGeneration) return;
       const span = hSpans.get(vm.authorId);
       if (span) span.textContent = `h ${profile.hIndex.toLocaleString("en-US")}`;

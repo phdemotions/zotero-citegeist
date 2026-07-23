@@ -31,7 +31,6 @@ import {
   type OpenAlexListResponse,
 } from "./openalex";
 import { parseAuthorId } from "./cache/authors";
-import { logError } from "./utils";
 
 /** Fields fetched from the `/authors/{id}` singleton (identity + aggregates). */
 const AUTHOR_SELECT = "id,display_name,orcid,works_count,cited_by_count,summary_stats";
@@ -293,7 +292,8 @@ export async function fetchAuthorProfile(
       return null;
     }
     // Budget / auth / network — don't poison the cache; let the pane retry.
-    logError(`fetchAuthorProfile(${shortId})`, e);
+    // Rethrow only (no log here): the single awaiting caller records it once,
+    // and the OpenAlex author id must not reach the shareable diagnostic report.
     throw e;
   }
 }

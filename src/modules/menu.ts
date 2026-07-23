@@ -21,6 +21,7 @@ import {
   canResolveWork,
   resolveAuthorsForItems,
   type AuthorBackfillResult,
+  type FetchBatchResult,
 } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import { showCitationNetwork } from "./citationNetwork";
@@ -45,13 +46,6 @@ const MM_COLLECTION_MENU_ID = "citegeist-collection-menu";
 type NetworkMode = "citing" | "references";
 
 /** Shape shared by both batch-fetch handlers. */
-type BatchResult = {
-  fresh: number;
-  cached: number;
-  suggestion: number;
-  errors: number;
-  budgetStopped: number;
-};
 
 // ── Zotero.MenuManager surface (Zotero 8+; absent in typings/7.0.x) ──────────
 
@@ -169,7 +163,7 @@ function getMenuManager(): ZoteroMenuManager | null {
  * so the counter showed 0 even though the columns now displayed real data. New
  * copy distinguishes fresh / cached / suggestion / errors.
  */
-function summarizeBatch(r: BatchResult, total: number): string {
+function summarizeBatch(r: FetchBatchResult, total: number): string {
   const parts: string[] = [];
   if (r.fresh > 0) parts.push(`${r.fresh} updated`);
   if (r.cached > 0) parts.push(`${r.cached} already up to date`);
@@ -254,7 +248,13 @@ async function runFetchSelected(win: Window): Promise<void> {
   );
   progressWin.show();
 
-  let result: BatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0, budgetStopped: 0 };
+  let result: FetchBatchResult = {
+    fresh: 0,
+    cached: 0,
+    suggestion: 0,
+    errors: 0,
+    budgetStopped: 0,
+  };
   try {
     result = await fetchAndCacheItems(
       eligible,
@@ -344,7 +344,13 @@ async function runFetchCollection(win: Window): Promise<void> {
   );
   progressWin.show();
 
-  let result: BatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0, budgetStopped: 0 };
+  let result: FetchBatchResult = {
+    fresh: 0,
+    cached: 0,
+    suggestion: 0,
+    errors: 0,
+    budgetStopped: 0,
+  };
   try {
     result = await fetchAndCacheItems(
       eligible,
