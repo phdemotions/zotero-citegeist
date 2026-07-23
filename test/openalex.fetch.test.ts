@@ -4,6 +4,8 @@
  * redaction. Exercises the real fetch path (getWorkById) against a mocked
  * Zotero.HTTP so the retry/discriminator branches are covered end to end.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   OpenAlexBudgetError,
@@ -63,6 +65,37 @@ describe("redactApiKey", () => {
     const msg = normalizeError(e);
     expect(msg).not.toContain("LEAK");
     expect(msg).toContain("api_key=REDACTED");
+  });
+
+  // The diagnostic report is copy-pasted into public GitHub issues and promises
+  // "no personal details", so a username-bearing path must not survive
+  // normalizeError into the ring buffer.
+  it("normalizeError strips absolute paths that carry the OS username", () => {
+    const posix = normalizeError(
+      new Error("locked: /Users/janedoe/Library/CloudStorage/Box/Zotero/citegeist.sqlite"),
+    );
+    expect(posix).not.toContain("janedoe");
+    expect(posix).not.toContain("/Users/");
+    const win = normalizeError(new Error("locked: C:\\Users\\janedoe\\Zotero\\citegeist.sqlite"));
+    expect(win).not.toContain("janedoe");
+  });
+
+  // The P1 that this branch's review caught: fetch labels became the recorded
+  // diagnostic detail, so a raw DOI/PMID/arXiv/ISBN/title in a label leaked
+  // library content into the shareable report. Labels must carry only the
+  // identifier TYPE.
+  it("no OpenAlex fetch label interpolates a library identifier or title", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("../src/modules/openalex.ts", import.meta.url)),
+      "utf8",
+    );
+    const labels = [...source.matchAll(/rateLimitedFetch<[^>]*>\([^,]+,\s*([^)]+?)\)/g)].map((m) =>
+      m[1].trim(),
+    );
+    const leaky = labels.filter((l) => l.includes("${"));
+    expect(leaky, `these labels interpolate a value into the recorded detail: ${leaky}`).toEqual(
+      [],
+    );
   });
 });
 

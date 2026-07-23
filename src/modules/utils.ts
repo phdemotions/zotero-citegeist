@@ -90,6 +90,31 @@ export function redactApiKey(s: string): string {
 }
 
 /**
+ * Strip absolute filesystem paths, which carry the OS username.
+ *
+ * The diagnostic report is copy-pasted into public GitHub issues and promises
+ * "no personal details", so a `/Users/<name>/…` or `C:\Users\<name>\…` path
+ * (from, e.g., a backup-prune error carrying the file it touched) must not
+ * survive into the ring buffer. Anchored on the home root so it never mangles a
+ * URL (those start with a scheme, not `/Users`). The local Zotero debug log is
+ * left untouched — only what reaches the shareable buffer is scrubbed.
+ */
+export function redactPaths(s: string): string {
+  return s
+    .replace(/\/(?:Users|home)\/[^\s"')]+/g, "~")
+    .replace(/[A-Za-z]:\\Users\\[^\s"')]+/gi, "~");
+}
+
+/**
+ * The full scrub applied to anything bound for the diagnostic ring buffer:
+ * the opt-in API key and any username-bearing path. The single place both
+ * redactions compose, so a new sink can't pick up one and miss the other.
+ */
+export function redactSensitive(s: string): string {
+  return redactPaths(redactApiKey(s));
+}
+
+/**
  * Normalize an unknown caught value into a string suitable for logging.
  *
  * Zotero.debug(msg + e) coerces objects to "[object Object]" and drops
@@ -98,7 +123,7 @@ export function redactApiKey(s: string): string {
  * URL-bearing error can never leak the user's OpenAlex key into the debug log.
  */
 export function normalizeError(e: unknown): string {
-  return redactApiKey(rawNormalizeError(e));
+  return redactSensitive(rawNormalizeError(e));
 }
 
 function rawNormalizeError(e: unknown): string {
@@ -129,7 +154,10 @@ function rawNormalizeError(e: unknown): string {
 export function logError(context: string, e: unknown): void {
   const detail = normalizeError(e);
   Zotero.debug(`[Citegeist] ERROR ${context}: ${detail}`);
-  recordDiagnostic(codeForError(e), context, detail);
+  // `context` is a call-site label, but a few carry a path (a backup filename,
+  // for one), so it goes through the same scrub as `detail` before it can reach
+  // the shareable buffer. `detail` is already scrubbed by normalizeError.
+  recordDiagnostic(codeForError(e), redactSensitive(context), detail);
 }
 
 /**

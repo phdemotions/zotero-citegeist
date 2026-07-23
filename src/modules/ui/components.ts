@@ -173,15 +173,6 @@ export function cgComponents(scope: string): string {
       white-space: pre-wrap;
       word-break: break-word;
     }
-    ${scope} .cg-diag-code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: var(--cg-size-caption);
-      color: var(--cg-text-tertiary);
-      background: var(--cg-neutral-tint);
-      border-radius: var(--cg-radius-sm);
-      padding: 1px 5px;
-    }
-
     @media (prefers-reduced-motion: reduce) {
       ${scope} .cg-btn { transition: none; }
       ${scope} .cg-btn:active { transform: none; }

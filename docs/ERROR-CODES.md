@@ -16,8 +16,9 @@ questions.
 and in the citation-network browser whenever a load fails. For anything else — a
 blank column, a menu that did nothing — open **Settings → Citegeist →
 Troubleshooting** and click **Copy diagnostic report**. That report carries your Citegeist build, your Zotero
-version, and every problem recorded since Zotero started. It contains no library
-content, no file paths, and no personal details.
+version, and every problem recorded since Zotero started. It carries no titles,
+DOIs, or other content from your library, no API key, and no personal details
+such as your username.
 
 ## Codes
 

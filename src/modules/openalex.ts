@@ -356,7 +356,7 @@ export async function getWorkByDOI(doi: string): Promise<OpenAlexWork | null> {
   });
 
   try {
-    const work = await rateLimitedFetch<OpenAlexWork>(url, `work doi:${cleanDOI}`);
+    const work = await rateLimitedFetch<OpenAlexWork>(url, "work lookup (doi)");
     return normalizeWork(work);
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return null;
@@ -381,7 +381,7 @@ export async function getWorkByPMID(pmid: string): Promise<OpenAlexWork | null> 
   });
 
   try {
-    const work = await rateLimitedFetch<OpenAlexWork>(url, `work pmid:${clean}`);
+    const work = await rateLimitedFetch<OpenAlexWork>(url, "work lookup (pmid)");
     return normalizeWork(work);
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return null;
@@ -407,7 +407,7 @@ export async function getWorkByArxivId(id: string): Promise<OpenAlexWork | null>
   });
 
   try {
-    const work = await rateLimitedFetch<OpenAlexWork>(url, `work arxiv:${clean}`);
+    const work = await rateLimitedFetch<OpenAlexWork>(url, "work lookup (arxiv)");
     return normalizeWork(work);
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return null;
@@ -436,7 +436,7 @@ export async function getWorkByISBN(isbn: string): Promise<OpenAlexWork | null> 
   });
 
   try {
-    const work = await rateLimitedFetch<OpenAlexWork>(url, `work isbn:${clean}`);
+    const work = await rateLimitedFetch<OpenAlexWork>(url, "work lookup (isbn)");
     return normalizeWork(work);
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return null;
@@ -463,7 +463,7 @@ export async function getCitingWorks(
     cursor,
   });
 
-  return rateLimitedFetch<OpenAlexListResponse>(url, `citing works for ${shortId}`);
+  return rateLimitedFetch<OpenAlexListResponse>(url, "citing works");
 }
 
 /**
@@ -489,7 +489,7 @@ export async function getReferencedWorks(
     cursor,
   });
 
-  return rateLimitedFetch<OpenAlexListResponse>(url, `references for ${shortId}`);
+  return rateLimitedFetch<OpenAlexListResponse>(url, "references");
 }
 
 /**
@@ -558,11 +558,13 @@ export async function getWorkById(openAlexId: string): Promise<OpenAlexWork | nu
   });
 
   try {
-    const work = await rateLimitedFetch<OpenAlexWork>(url, `work ${shortId}`);
+    const work = await rateLimitedFetch<OpenAlexWork>(url, "work lookup (id)");
     return normalizeWork(work);
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return null;
-    logError(`getWorkById(${shortId})`, e);
+    // Rethrow only, matching the sibling getWorkBy* lookups. Every caller logs
+    // on catch, so logging here too would record one failure twice in the
+    // 50-slot diagnostic ring buffer.
     throw e;
   }
 }
@@ -610,7 +612,7 @@ export async function getSourceStats(sourceId: string): Promise<OpenAlexSourceSt
         h_index: number;
         i10_index: number;
       } | null;
-    }>(url, `source ${shortId}`);
+    }>(url, "source lookup");
 
     if (!data.summary_stats) {
       sourceStatsCache.set(shortId, null);
@@ -660,7 +662,7 @@ export async function searchWorksByTitle(
   });
 
   try {
-    const resp = await rateLimitedFetch<OpenAlexListResponse>(url, `title search: ${title}`);
+    const resp = await rateLimitedFetch<OpenAlexListResponse>(url, "title search");
     return (resp.results || []).map(normalizeWork);
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return [];

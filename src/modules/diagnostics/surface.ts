@@ -102,13 +102,3 @@ export function buildDiagnosticElement(
   wrap.appendChild(disclosure);
   return wrap;
 }
-
-/** Replace `container`'s contents with the coded failure block. */
-export function renderDiagnosticInto(
-  container: HTMLElement,
-  code: DiagnosticCode,
-  context: string,
-): void {
-  container.innerHTML = "";
-  container.appendChild(buildDiagnosticElement(container.ownerDocument, code, context));
-}

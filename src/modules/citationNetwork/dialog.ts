@@ -23,7 +23,11 @@ import {
   describeCode,
   type DiagnosticCode,
 } from "../diagnostics";
-import { SEARCH_DEBOUNCE_MS, INFINITE_SCROLL_THRESHOLD_PX } from "../../constants";
+import {
+  SEARCH_DEBOUNCE_MS,
+  INFINITE_SCROLL_THRESHOLD_PX,
+  SKELETON_ROW_COUNT,
+} from "../../constants";
 import type { NetworkMode, NetworkSortKey, NetworkState } from "./types";
 import { getDialogCSS } from "./styles";
 import { loadResults, renderResults, toggleExpanded } from "./results";
@@ -160,6 +164,25 @@ function createDialogShell(
 // ────────────────────────────────────────────────────────
 
 /**
+ * Paint the loading skeleton into the dialog body. Shared by both entry points
+ * (citation network and author works) so the row markup lives in one place.
+ */
+function renderSkeletonRows(body: HTMLElement): void {
+  let skeleton = "";
+  for (let i = 0; i < SKELETON_ROW_COUNT; i++) {
+    skeleton += `<div class="cg-skeleton-row">
+        <div class="cg-skeleton-content">
+          <div class="cg-skeleton-bar cg-skeleton-title"></div>
+          <div class="cg-skeleton-bar cg-skeleton-meta"></div>
+          <div class="cg-skeleton-bar cg-skeleton-meta2"></div>
+        </div>
+        <div class="cg-skeleton-bar cg-skeleton-right"></div>
+      </div>`;
+  }
+  safeInnerHTML(body, skeleton);
+}
+
+/**
  * Render the coded failure block into the dialog body.
  *
  * The block itself comes from the shared renderer so the dialog and the item
@@ -211,20 +234,7 @@ export async function showCitationNetwork(
 
   // Show skeleton in body while loading
   const body = dialog.querySelector(".cg-dialog-body") as HTMLElement;
-  if (body) {
-    let skeleton = "";
-    for (let i = 0; i < 6; i++) {
-      skeleton += `<div class="cg-skeleton-row">
-        <div class="cg-skeleton-content">
-          <div class="cg-skeleton-bar cg-skeleton-title"></div>
-          <div class="cg-skeleton-bar cg-skeleton-meta"></div>
-          <div class="cg-skeleton-bar cg-skeleton-meta2"></div>
-        </div>
-        <div class="cg-skeleton-bar cg-skeleton-right"></div>
-      </div>`;
-    }
-    safeInnerHTML(body, skeleton);
-  }
+  if (body) renderSkeletonRows(body);
 
   // Close on Escape/backdrop while loading. We flip `phase` to "closed"
   // BEFORE the DOM removal so any awaiter that resumes between this handler
@@ -435,20 +445,7 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
 
   // Skeleton while the first works page loads.
   const body = dialog.querySelector(".cg-dialog-body") as HTMLElement;
-  if (body) {
-    let skeleton = "";
-    for (let i = 0; i < 6; i++) {
-      skeleton += `<div class="cg-skeleton-row">
-        <div class="cg-skeleton-content">
-          <div class="cg-skeleton-bar cg-skeleton-title"></div>
-          <div class="cg-skeleton-bar cg-skeleton-meta"></div>
-          <div class="cg-skeleton-bar cg-skeleton-meta2"></div>
-        </div>
-        <div class="cg-skeleton-bar cg-skeleton-right"></div>
-      </div>`;
-    }
-    safeInnerHTML(body, skeleton);
-  }
+  if (body) renderSkeletonRows(body);
 
   const defaultCollectionIds = new Set<number>();
   try {

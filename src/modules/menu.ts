@@ -24,7 +24,7 @@ import {
 } from "./citationService";
 import { invalidateColumnCache } from "./citationColumn";
 import { showCitationNetwork } from "./citationNetwork";
-import { guard } from "./diagnostics";
+import { bindGuarded, guard } from "./diagnostics";
 import { logError } from "./utils";
 
 const MENU_IDS = {
@@ -45,7 +45,13 @@ const MM_COLLECTION_MENU_ID = "citegeist-collection-menu";
 type NetworkMode = "citing" | "references";
 
 /** Shape shared by both batch-fetch handlers. */
-type BatchResult = { fresh: number; cached: number; suggestion: number; errors: number };
+type BatchResult = {
+  fresh: number;
+  cached: number;
+  suggestion: number;
+  errors: number;
+  budgetStopped: number;
+};
 
 // ── Zotero.MenuManager surface (Zotero 8+; absent in typings/7.0.x) ──────────
 
@@ -169,6 +175,7 @@ function summarizeBatch(r: BatchResult, total: number): string {
   if (r.cached > 0) parts.push(`${r.cached} already up to date`);
   if (r.suggestion > 0) parts.push(`${r.suggestion} need confirmation`);
   if (r.errors > 0) parts.push(`${r.errors} couldn't be matched`);
+  if (r.budgetStopped > 0) parts.push(`${r.budgetStopped} skipped (daily budget spent)`);
   if (parts.length === 0) parts.push(`${total} processed`);
   return `Done — ${parts.join(", ")}`;
 }
@@ -247,7 +254,7 @@ async function runFetchSelected(win: Window): Promise<void> {
   );
   progressWin.show();
 
-  let result: BatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0 };
+  let result: BatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0, budgetStopped: 0 };
   try {
     result = await fetchAndCacheItems(
       eligible,
@@ -337,7 +344,7 @@ async function runFetchCollection(win: Window): Promise<void> {
   );
   progressWin.show();
 
-  let result: BatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0 };
+  let result: BatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0, budgetStopped: 0 };
   try {
     result = await fetchAndCacheItems(
       eligible,
@@ -654,7 +661,7 @@ function registerViaDOM(win: Window): void {
     // E, C are taken; G is unused — pick G for the "citeGeist" mnemonic. View
     // Citing/References get no accesskey (infrequent; Tab + Enter works).
     fetchItem.setAttribute("accesskey", "G");
-    fetchItem.addEventListener("command", () => {
+    bindGuarded(fetchItem, "command", "menu fetch item", () => {
       runFetchSelected(win).catch((e) => logError("menu fetch", e));
     });
     itemMenu.appendChild(fetchItem);
@@ -662,13 +669,13 @@ function registerViaDOM(win: Window): void {
     const citingItem = (doc as XULDocument).createXULElement("menuitem");
     citingItem.id = MENU_IDS.viewCiting;
     citingItem.setAttribute("label", "View Citing Works…");
-    citingItem.addEventListener("command", () => runViewNetwork("citing"));
+    bindGuarded(citingItem, "command", "menu view citing", () => runViewNetwork("citing"));
     itemMenu.appendChild(citingItem);
 
     const refsItem = (doc as XULDocument).createXULElement("menuitem");
     refsItem.id = MENU_IDS.viewRefs;
     refsItem.setAttribute("label", "View References…");
-    refsItem.addEventListener("command", () => runViewNetwork("references"));
+    bindGuarded(refsItem, "command", "menu view references", () => runViewNetwork("references"));
     itemMenu.appendChild(refsItem);
 
     const resolveItem = (doc as XULDocument).createXULElement("menuitem");
@@ -677,7 +684,7 @@ function registerViaDOM(win: Window): void {
     resolveItem.setAttribute("image", iconURL("icon-16.svg"));
     // 'A' (Authors) is free on the default item context menu alongside 'G'.
     resolveItem.setAttribute("accesskey", "A");
-    resolveItem.addEventListener("command", () => {
+    bindGuarded(resolveItem, "command", "menu resolve authors", () => {
       runResolveAuthorsSelected(win).catch((e) => logError("menu resolve-authors", e));
     });
     itemMenu.appendChild(resolveItem);
@@ -686,7 +693,7 @@ function registerViaDOM(win: Window): void {
     // no-op click never looks like the feature is broken and no stray empty
     // section is left behind (issue #72). Visibility rule lives in the pure,
     // tested itemMenuVisibility().
-    itemMenu.addEventListener("popupshowing", () => {
+    bindGuarded(itemMenu, "popupshowing", "menu item popupshowing", () => {
       const v = itemMenuVisibility(Zotero.getActiveZoteroPane().getSelectedItems());
       fetchItem.hidden = !v.fetch;
       resolveItem.hidden = !v.resolveAuthors;
@@ -708,7 +715,7 @@ function registerViaDOM(win: Window): void {
     // 'L' may collide with 'New Collection' on some builds; 'I' (citegeIst
     // mnemonic) is unused on the default collection context menu.
     fetchAll.setAttribute("accesskey", "I");
-    fetchAll.addEventListener("command", () => {
+    bindGuarded(fetchAll, "command", "menu fetch collection", () => {
       runFetchCollection(win).catch((e) => logError("menu fetch-collection", e));
     });
     collectionMenu.appendChild(fetchAll);
@@ -718,7 +725,7 @@ function registerViaDOM(win: Window): void {
     resolveAll.setAttribute("label", "Resolve All Author Identities (Citegeist)");
     resolveAll.setAttribute("image", iconURL("icon-16.svg"));
     resolveAll.setAttribute("accesskey", "A");
-    resolveAll.addEventListener("command", () => {
+    bindGuarded(resolveAll, "command", "menu resolve collection", () => {
       runResolveAuthorsCollection(win).catch((e) => logError("menu resolve-authors-collection", e));
     });
     collectionMenu.appendChild(resolveAll);

@@ -47,11 +47,6 @@ export function recentDiagnostics(): DiagnosticEntry[] {
   return [...buffer];
 }
 
-/** The most recent entry, or null when nothing has failed this session. */
-export function lastDiagnostic(): DiagnosticEntry | null {
-  return buffer.length ? buffer[buffer.length - 1] : null;
-}
-
 /** Drop everything. Exported for the settings pane and for test isolation. */
 export function clearDiagnostics(): void {
   buffer = [];

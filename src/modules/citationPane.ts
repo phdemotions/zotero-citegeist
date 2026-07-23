@@ -155,11 +155,6 @@ const EMPTY_STATES = {
     summary: "Not found",
     cls: "cg-no-identifier",
   },
-  // Something failed that isn't "offline" and isn't "not on OpenAlex" — a cache
-  // write, a budget/auth rejection, a bug. Says so honestly rather than
-  // borrowing "not found", which sends the user hunting for a data problem that
-  // isn't there. See docs/ISSUES.md — the user-facing error-code surface that
-  // makes this self-diagnosable is designed separately.
   confirmLoading: { html: "Loading…", summary: "Loading…", cls: "cg-loading" },
   matchSaved: {
     html: "Match confirmed — the metrics didn’t load just yet. Use the refresh button to try again.",
@@ -1251,9 +1246,14 @@ async function fillAuthorMetrics(
     authorMetricsAttempted.add(vm.authorId);
     try {
       const profile = await fetchAuthorProfile(vm.authorId, { aggregatesOnly: true });
-      if (gen !== paneGeneration) return;
       if (!profile || profile.hIndex === null) continue;
+      // Persist BEFORE the generation gate. The write is item-scoped and always
+      // correct, so a fetch that resolves after the user switched items must
+      // still land in the cache — otherwise the author is marked "attempted"
+      // for the session but its h-index was thrown away, leaving that author
+      // permanently blank until restart.
       persistProfileMetrics(profile);
+      if (gen !== paneGeneration) return;
       const span = hSpans.get(vm.authorId);
       if (span) span.textContent = `h ${profile.hIndex.toLocaleString("en-US")}`;
     } catch (e) {

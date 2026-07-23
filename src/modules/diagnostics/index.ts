@@ -24,10 +24,9 @@ export {
 export {
   recordDiagnostic,
   recentDiagnostics,
-  lastDiagnostic,
   clearDiagnostics,
   type DiagnosticEntry,
 } from "./record";
 export { guard, guardAsync, bindGuarded, type GuardFallback } from "./guard";
 export { buildDiagnosticReport, setPluginVersion, type ReportContext } from "./report";
-export { buildDiagnosticElement, renderDiagnosticInto, copyToClipboard } from "./surface";
+export { buildDiagnosticElement, copyToClipboard } from "./surface";

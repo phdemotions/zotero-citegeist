@@ -9,6 +9,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const oaMocks = vi.hoisted(() => ({
   fetchAuthorProfile: vi.fn(),
   fetchAuthorWorks: vi.fn(),
+  // Real implementation: buildProfileViewModel uses it to strip + validate the
+  // ORCID, so a stub that dropped validation would hide a regression.
+  parseOrcid: (raw: string): string | null => {
+    const s = (raw ?? "")
+      .replace(/^https?:\/\/orcid\.org\//i, "")
+      .trim()
+      .toUpperCase();
+    return /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(s) ? s : null;
+  },
 }));
 vi.mock("../src/modules/openalexAuthors", () => oaMocks);
 

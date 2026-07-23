@@ -18,7 +18,7 @@
  * Static source assertions, not behavioural ones — the point is that the
  * *shape of the code* can't drift, which no runtime test can observe.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import {
@@ -30,11 +30,24 @@ import {
   recordDiagnostic,
   guard,
   guardAsync,
+  bindGuarded,
 } from "../src/modules/diagnostics";
 import { DIAGNOSTIC_RING_BUFFER_SIZE } from "../src/constants";
 
 function src(relative: string): string {
   return readFileSync(fileURLToPath(new URL(`../${relative}`, import.meta.url)), "utf8");
+}
+
+/** Every `.ts` under `src/`, repo-relative — so an invariant covers new files automatically. */
+function allSrcFiles(dir = "src"): string[] {
+  const abs = fileURLToPath(new URL(`../${dir}`, import.meta.url));
+  const out: string[] = [];
+  for (const entry of readdirSync(abs, { withFileTypes: true })) {
+    const rel = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) out.push(...allSrcFiles(rel));
+    else if (entry.name.endsWith(".ts")) out.push(rel);
+  }
+  return out;
 }
 
 describe("diagnostic code registry", () => {
@@ -45,14 +58,15 @@ describe("diagnostic code registry", () => {
   });
 
   it("codes are unique and follow the CG-AREA## shape", () => {
-    const seen = new Set<string>();
+    // Assert uniqueness on the `code` FIELD. Asserting on the registry keys
+    // would be a tautology — object keys are unique by construction, so a
+    // duplicate literal is silently deduped at parse time and never observed.
+    const codes = ALL_DIAGNOSTIC_CODES.map((k) => DIAGNOSTIC_CODES[k].code);
+    expect(new Set(codes).size).toBe(codes.length);
     for (const key of ALL_DIAGNOSTIC_CODES) {
-      expect(key, `duplicate code ${key}`).not.toBe([...seen].find((s) => s === key));
-      seen.add(key);
       expect(key).toMatch(/^CG-[A-Z]+\d{2}$/);
       expect(key.startsWith(`CG-${DIAGNOSTIC_CODES[key].area}`)).toBe(true);
     }
-    expect(seen.size).toBe(ALL_DIAGNOSTIC_CODES.length);
   });
 
   it("every message is plain user-facing copy — no exception text, no 'Error:' prefix", () => {
@@ -164,6 +178,30 @@ describe("guard", () => {
     ).resolves.toBeUndefined();
     expect(fallback).toHaveBeenCalledWith("CG-BUG01");
   });
+
+  // bindGuarded is the guard whose failure mode — an async handler rejection
+  // freezing a modal — motivated the whole diagnostics layer, so it earns
+  // behavioral coverage, not just the static "no raw listener" source checks.
+  it("bindGuarded catches a throwing sync handler and records it", () => {
+    const target = new EventTarget();
+    bindGuarded(target, "click", "unit bind sync", () => {
+      throw new Error("boom");
+    });
+    expect(() => target.dispatchEvent(new Event("click"))).not.toThrow();
+    expect(recentDiagnostics().some((d) => d.context === "unit bind sync")).toBe(true);
+  });
+
+  it("bindGuarded catches an async handler rejection — the load-bearing branch", async () => {
+    const target = new EventTarget();
+    bindGuarded(target, "click", "unit bind async", () => Promise.reject(new Error("boom")));
+    target.dispatchEvent(new Event("click"));
+    await new Promise((r) => setTimeout(r, 0)); // let the promise .catch run
+    expect(recentDiagnostics().some((d) => d.context === "unit bind async")).toBe(true);
+  });
+
+  it("bindGuarded is a no-op on a null target", () => {
+    expect(() => bindGuarded(null, "click", "unit bind null", () => {})).not.toThrow();
+  });
 });
 
 /**
@@ -193,11 +231,16 @@ describe("host entry points are guarded", () => {
     expect(column).toMatch(/const safeRegister[\s\S]{0,600}guard\(/);
   });
 
-  it("menu handlers are guarded at the registration choke point", () => {
+  it("menu handlers are guarded — MenuManager via guardMenus, DOM via bindGuarded", () => {
     const menu = src("src/modules/menu.ts");
     expect(menu).toContain("function guardMenus");
-    // Both registered menu trees pass through the wrapper.
+    // Both registered MenuManager trees pass through the wrapper.
     expect(menu.match(/menus: guardMenus\(\[/g) ?? []).toHaveLength(2);
+    // The Zotero-7 DOM-fallback path must be guarded too: a null ZoteroPane in a
+    // command/popupshowing handler throws synchronously past the host, and that
+    // path only ran on Zotero 7 where the MenuManager guard never applies.
+    const raw = [...menu.matchAll(/\.addEventListener\(\s*"[^"]+"\s*,\s*(\S+)/g)].map((m) => m[1]);
+    expect(raw, "menu.ts has raw DOM listeners").toEqual([]);
   });
 
   it("the network dialog binds every listener through bindGuarded", () => {
@@ -236,19 +279,20 @@ describe("host entry points are guarded", () => {
     }
   });
 
-  it("logError is the single funnel that records — no module records directly", () => {
-    const utils = src("src/modules/utils.ts");
-    expect(utils).toContain("recordDiagnostic(codeForError(e), context, detail)");
-    // A direct recordDiagnostic call elsewhere would bypass API-key redaction,
-    // which only happens inside normalizeError.
-    for (const file of [
-      "src/modules/citationPane.ts",
-      "src/modules/citationService.ts",
-      "src/modules/openalex.ts",
-      "src/modules/citationColumn.ts",
-      "src/modules/menu.ts",
-    ]) {
-      expect(src(file), `${file} records diagnostics directly`).not.toContain("recordDiagnostic(");
-    }
+  it("logError is the single funnel that records — no module calls recordDiagnostic directly", () => {
+    // The funnel scrubs the API key AND username-bearing paths before anything
+    // reaches the shareable ring buffer; a direct recordDiagnostic call anywhere
+    // else would bypass that. Derived from a glob of every src file (minus the
+    // legitimate definers) so a NEW module is covered without editing this list.
+    expect(src("src/modules/utils.ts")).toContain("recordDiagnostic(codeForError(e)");
+    const allowed = new Set([
+      "src/modules/utils.ts", // the funnel itself
+      "src/modules/diagnostics/record.ts", // defines recordDiagnostic
+      "src/modules/diagnostics/index.ts", // re-exports it
+    ]);
+    const offenders = allSrcFiles().filter(
+      (f) => !allowed.has(f) && src(f).includes("recordDiagnostic("),
+    );
+    expect(offenders, "these modules bypass the logError funnel").toEqual([]);
   });
 });

@@ -159,7 +159,7 @@ export async function fetchAuthorWorks(
     per_page: String(perPage),
     cursor,
   });
-  const resp = await rateLimitedFetch<OpenAlexListResponse>(url, `works by author ${shortId}`);
+  const resp = await rateLimitedFetch<OpenAlexListResponse>(url, "works by author");
   return { ...resp, results: (resp.results ?? []).map(normalizeWork) };
 }
 
@@ -243,7 +243,7 @@ export async function fetchAuthorProfile(
 
   try {
     const url = buildUrl(`/authors/${encodeURIComponent(shortId)}`, { select: AUTHOR_SELECT });
-    const body = await rateLimitedFetch<AuthorApiResponse>(url, `author ${shortId}`);
+    const body = await rateLimitedFetch<AuthorApiResponse>(url, "author lookup");
 
     const canonicalId = resolveCanonicalId(body) ?? shortId;
     // Aggregates are trustworthy only when non-zero (KTD2 degradation guard).

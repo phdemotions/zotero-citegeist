@@ -125,33 +125,28 @@ function bindPickerOptionEvents(
 ): void {
   // Bind chevron toggles
   container.querySelectorAll(".cg-picker-chevron").forEach((chev) => {
-    bindGuarded(
-      chev as HTMLElement,
-      "click",
-      "collection picker chevasHTMLElement click",
-      (e: Event) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const parentId = Number((chev as HTMLElement).dataset.parentId);
-        if (expanded.has(parentId)) {
-          expanded.delete(parentId);
-          chev.classList.remove("expanded");
-        } else {
-          expanded.add(parentId);
-          chev.classList.add("expanded");
+    bindGuarded(chev as HTMLElement, "click", "collection picker chevron click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const parentId = Number((chev as HTMLElement).dataset.parentId);
+      if (expanded.has(parentId)) {
+        expanded.delete(parentId);
+        chev.classList.remove("expanded");
+      } else {
+        expanded.add(parentId);
+        chev.classList.add("expanded");
+      }
+      // Show/hide children based on expanded state
+      container.querySelectorAll(".cg-picker-option").forEach((opt) => {
+        const optEl = opt as HTMLElement;
+        const depth = Number(optEl.dataset.depth);
+        if (depth > 0) {
+          const visible = isAncestorExpandedDOM(optEl, container, expanded);
+          if (visible) optEl.removeAttribute("hidden");
+          else optEl.setAttribute("hidden", "");
         }
-        // Show/hide children based on expanded state
-        container.querySelectorAll(".cg-picker-option").forEach((opt) => {
-          const optEl = opt as HTMLElement;
-          const depth = Number(optEl.dataset.depth);
-          if (depth > 0) {
-            const visible = isAncestorExpandedDOM(optEl, container, expanded);
-            if (visible) optEl.removeAttribute("hidden");
-            else optEl.setAttribute("hidden", "");
-          }
-        });
-      },
-    );
+      });
+    });
   });
 
   // Bind option selection + keyboard nav

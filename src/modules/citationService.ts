@@ -367,6 +367,14 @@ export interface FetchBatchResult {
   suggestion: number;
   /** Items the fetch attempt couldn't resolve (network / not-found / no-match). */
   errors: number;
+  /**
+   * Items skipped because the OpenAlex daily budget ran out mid-pass. Kept
+   * distinct from `errors` so a budget stop reads as "come back tomorrow", not
+   * "N papers couldn't be matched" — and so the pass stops issuing further
+   * metered calls the moment the budget is spent instead of 429-ing every
+   * remaining item.
+   */
+  budgetStopped: number;
 }
 
 /**
@@ -386,7 +394,7 @@ export async function fetchAndCacheItems(
 ): Promise<FetchBatchResult> {
   const eligible = items.filter((item) => item.isRegularItem());
 
-  const out: FetchBatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0 };
+  const out: FetchBatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0, budgetStopped: 0 };
 
   for (let i = 0; i < eligible.length; i++) {
     let status = "error";
@@ -396,7 +404,13 @@ export async function fetchAndCacheItems(
       if (result.status === "ok") out.fresh++;
       else if (result.status === "cached") out.cached++;
       else if (result.status === "suggestion") out.suggestion++;
-      else out.errors++;
+      else if (result.status === "error" && result.code === "CG-API42") {
+        // Daily budget spent. Stop the pass rather than 429-ing every remaining
+        // item; count this one and all that follow as skipped, not failed.
+        out.budgetStopped = eligible.length - i;
+        onItemDone?.(eligible[i].id, "budget");
+        break;
+      } else out.errors++;
     } catch (e) {
       out.errors++;
       logError(`fetchAndCacheItems item ${eligible[i].id}`, e);
@@ -446,10 +460,17 @@ export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<Au
 
     const workId = getCachedOpenAlexId({ libraryID: item.libraryID, key: item.key });
     if (!workId) {
-      // Never resolved to a work — do the full fetch (free identifier lookups),
-      // which piggybacks author identity via the normal cacheWorkData path.
+      // Never resolved to a work — do the full fetch (free identifier lookups,
+      // then a metered title-search fallback), which piggybacks author identity
+      // via the normal cacheWorkData path.
       const r = await fetchAndCacheItem(item);
       if (r.status === "ok") return "resolved";
+      // fetchAndCacheItem is total, so a budget-exhausted title search comes
+      // back as an error result carrying CG-API42 rather than throwing. Without
+      // this the outer `catch (OpenAlexBudgetError)` never fires on this path,
+      // the pass keeps issuing one metered call per remaining item, and the stop
+      // is miscounted as "unresolved" instead of "budget".
+      if (r.status === "error" && r.code === "CG-API42") return "budget";
       return r.status === "cached" ? "already" : "unresolved";
     }
 

@@ -230,10 +230,17 @@ export async function onStartup(data: PluginData): Promise<void> {
 async function purgeAuthorRelationsOnce(): Promise<void> {
   try {
     if (Zotero.Prefs.get(PREF_AUTHOR_RELATIONS_PURGED)) return;
-    const cleaned = await purgeAllAuthorRelations();
-    Zotero.Prefs.set(PREF_AUTHOR_RELATIONS_PURGED, true);
+    const { cleaned, failures } = await purgeAllAuthorRelations();
     if (cleaned > 0) {
       Zotero.debug(`[Citegeist] Purged openalex:author relations from ${cleaned} item(s)`);
+    }
+    // Only mark the purge done when the pass left nothing behind. A single stray
+    // relation keeps the whole library's sync stuck, so a partial pass (a locked
+    // item, a library that wouldn't enumerate) must retry on the next launch.
+    if (failures === 0) {
+      Zotero.Prefs.set(PREF_AUTHOR_RELATIONS_PURGED, true);
+    } else {
+      Zotero.debug(`[Citegeist] Author-relation purge incomplete (${failures} left); will retry`);
     }
   } catch (e) {
     logError("purgeAuthorRelationsOnce", e);

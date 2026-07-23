@@ -70,6 +70,8 @@ export const DEFAULT_NETWORK_PAGE_SIZE = 25;
 export const SEARCH_DEBOUNCE_MS = 200;
 /** Infinite-scroll threshold in px from bottom. */
 export const INFINITE_SCROLL_THRESHOLD_PX = 100;
+/** Placeholder rows painted while the network/author dialog loads its first page. */
+export const SKELETON_ROW_COUNT = 6;
 
 // ── Abstract reconstruction safety ──
 /** Max position index we'll accept from an inverted index (sanity bound). */

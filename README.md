@@ -260,7 +260,7 @@ No, Zotero 7 or later is required. Zotero is a [free upgrade](https://www.zotero
 
 Every failure carries a short code, like `CG-NET01`, `CG-DB01`, or `CG-API42`. When a fetch fails, the code sits under **Details** in the pane and in the network browser. For anything else, a blank column or a menu that did nothing, open **Settings → Citegeist → Troubleshooting** and click **Copy diagnostic report**.
 
-That report holds your Citegeist build, your Zotero version, and every problem since Zotero started, with no library content and no personal details in it. Pasting it into a [GitHub issue](https://github.com/phdemotions/zotero-citegeist/issues) is usually enough to pin down the cause on the first reply.
+That report holds your Citegeist build, your Zotero version, and every problem since Zotero started. It carries no titles, DOIs, or other library content, no API key, and no personal details such as your username. Pasting it into a [GitHub issue](https://github.com/phdemotions/zotero-citegeist/issues) is usually enough to pin down the cause on the first reply.
 
 Every code and what it means is listed in [`docs/ERROR-CODES.md`](docs/ERROR-CODES.md).
 

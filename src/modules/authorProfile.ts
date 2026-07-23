@@ -15,7 +15,7 @@
  * requested author id merged into a survivor; {@link maybeReconcileMerge}
  * rewrites the stored refs to the canonical survivor at the next fetch.
  */
-import { type OpenAlexAuthorProfile } from "./openalexAuthors";
+import { parseOrcid, type OpenAlexAuthorProfile } from "./openalexAuthors";
 import type { OpenAlexWork } from "./openalex";
 import {
   updateAuthorMetrics,
@@ -59,7 +59,9 @@ export interface ProfileViewModel {
 
 /** Map an OpenAlex profile to display strings (≥ labels applied per KTD2). */
 export function buildProfileViewModel(p: OpenAlexAuthorProfile): ProfileViewModel {
-  const orcid = p.orcid ? p.orcid.replace(/^https?:\/\/orcid\.org\//i, "") : null;
+  // parseOrcid strips the URL prefix AND validates the checksum shape, so a
+  // malformed value nulls out instead of rendering a broken "ORCID …" line.
+  const orcid = p.orcid ? parseOrcid(p.orcid) : null;
   return {
     name: p.displayName ?? "Unknown author",
     orcid,
