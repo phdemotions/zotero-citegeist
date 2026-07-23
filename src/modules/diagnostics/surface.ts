@@ -77,7 +77,12 @@ export function buildDiagnosticElement(
   detail.textContent = buildDiagnosticReport({ code, context });
 
   const copy = doc.createElement("button");
-  copy.className = "cg-btn cg-btn--sm";
+  // --plain (neutral, hairline) matches the adjacent Details button. A bare
+  // .cg-btn has no background of its own — every other button in the app carries
+  // a variant — so without one this rendered with the browser's default chrome.
+  // Neutral, not the sage --filled/--tinted: the colour-role invariant reserves
+  // sage for ACTION, and an error surface may spend neither sage nor amber.
+  copy.className = "cg-btn cg-btn--plain cg-btn--sm";
   copy.textContent = "Copy report";
   copy.style.display = "none";
   copy.style.marginTop = "8px";

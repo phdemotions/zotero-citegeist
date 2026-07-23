@@ -21,6 +21,7 @@ function stubZotero(dataDir: string): void {
 
 import {
   buildDiagnosticReport,
+  copyToClipboard,
   setPluginVersion,
   recordDiagnostic,
   clearDiagnostics,
@@ -53,6 +54,9 @@ describe("buildDiagnosticReport", () => {
     expect(report).toContain("3.0.0");
     expect(report).toContain("9.0.1");
     expect(report).toContain("MacIntel");
+    // __BUILD_ID__ is injected as "test" by vitest.config.ts — assert the
+    // build-stamp line so a regression in it is caught.
+    expect(report).toContain("build test");
   });
 
   it("renders the current code's message and lists recent problems", () => {
@@ -74,5 +78,23 @@ describe("buildDiagnosticReport", () => {
     });
     expect(() => buildDiagnosticReport({})).not.toThrow();
     expect(typeof buildDiagnosticReport({})).toBe("string");
+  });
+});
+
+describe("copyToClipboard", () => {
+  it("copies via Zotero and returns true when the clipboard API is available", () => {
+    const copy = vi.fn();
+    vi.stubGlobal("Zotero", {
+      debug: vi.fn(),
+      Utilities: { Internal: { copyTextToClipboard: copy } },
+    });
+    expect(copyToClipboard("hello")).toBe(true);
+    expect(copy).toHaveBeenCalledWith("hello");
+  });
+
+  it("returns false instead of throwing when the clipboard API is missing", () => {
+    // A failed copy must not take out the error panel it lives in.
+    vi.stubGlobal("Zotero", { debug: vi.fn() });
+    expect(copyToClipboard("x")).toBe(false);
   });
 });

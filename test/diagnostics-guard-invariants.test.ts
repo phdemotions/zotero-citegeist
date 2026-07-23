@@ -220,6 +220,11 @@ describe("guard", () => {
     logError("fetchAndCacheItem(confirmed id W2741809807)", new Error("x"));
     expect(recentDiagnostics().at(-1)?.context).not.toContain("W2741809807");
   });
+
+  it("scrubs an OpenAlex source id too — S-ids resolve to a journal name", () => {
+    logError("getSourceStats(S2764375690)", new Error("x"));
+    expect(recentDiagnostics().at(-1)?.context).not.toContain("S2764375690");
+  });
 });
 
 /**
@@ -239,26 +244,26 @@ describe("host entry points are guarded", () => {
     ]) {
       expect(pane, `${callback} is not guarded`).toContain(`"${wrapper}"`);
     }
-    // Structural, not just presence: EVERY on<X> handler the pane registers must
-    // hand off to guard/guardAsync as its first act, so a NEW callback added
-    // unguarded fails here rather than shipping — the guard.ts contract literally
-    // promises "a new entry point cannot ship unguarded".
+    // Structural, and body-style agnostic: EVERY `on<X>` handler the pane
+    // registers — expression body OR block body, whatever its name — must hand
+    // off to a guard as its first act, so a NEW callback added unguarded fails
+    // here rather than shipping. A name-whitelisted expression-only regex let a
+    // block-body `onClick: () => { doStuff() }` slip through, so match every
+    // `on[A-Z]…:` and inspect the first token after `=>` (past an optional `{`
+    // or `return`). Allowed: guard, guardAsync, or `try` (onAsyncRender's
+    // boundary is an internal try/catch, not a head guard call).
     const handlers = [
-      ...pane.matchAll(
-        /\bon(?:Render|AsyncRender|ItemChange|Click):\s*(?:async\s*)?\([^)]*\)\s*=>\s*(\w+)/g,
-      ),
+      ...pane.matchAll(/\bon[A-Z]\w*:\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{?\s*(?:return\s+)?(\w+)/g),
     ];
-    // onAsyncRender is guarded by its own internal try/catch boundary rather
-    // than a head guard() call, so it's excluded from this head-of-handler scan;
-    // the four head-guarded handlers (onItemChange, onRender, two onClick) are.
     expect(
       handlers.length,
-      "expected to find the pane's head-guarded handlers",
-    ).toBeGreaterThanOrEqual(4);
+      "expected to find the pane's registered handlers",
+    ).toBeGreaterThanOrEqual(5);
     for (const m of handlers) {
-      expect(["guard", "guardAsync"], `an on-handler starts with ${m[1]}, not a guard`).toContain(
-        m[1],
-      );
+      expect(
+        ["guard", "guardAsync", "try"],
+        `an on-handler's first act is ${m[1]}, not a guard`,
+      ).toContain(m[1]);
     }
   });
 

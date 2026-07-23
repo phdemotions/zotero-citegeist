@@ -45,8 +45,6 @@ const MM_COLLECTION_MENU_ID = "citegeist-collection-menu";
 
 type NetworkMode = "citing" | "references";
 
-/** Shape shared by both batch-fetch handlers. */
-
 // ── Zotero.MenuManager surface (Zotero 8+; absent in typings/7.0.x) ──────────
 
 interface MenuManagerContext {
@@ -66,7 +64,6 @@ interface MenuManagerContext {
 interface MenuManagerMenuData {
   menuType: "menuitem" | "submenu" | "separator";
   l10nID?: string;
-  label?: string;
   icon?: string;
   onShowing?: (event: Event, context: MenuManagerContext) => void;
   onCommand?: (event: Event, context: MenuManagerContext) => void;

@@ -633,7 +633,7 @@ export async function getSourceStats(sourceId: string): Promise<OpenAlexSourceSt
       return null;
     }
     // For network issues, don't poison the cache — let the next call retry.
-    logError(`getSourceStats(${shortId})`, e);
+    logError("getSourceStats", e);
     return null;
   }
 }

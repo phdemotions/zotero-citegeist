@@ -40,12 +40,12 @@ import {
   persistProfileMetrics,
   type AuthorRowViewModel,
 } from "./authorProfile";
-import { codeForError, logError, isBookType, toOrdinal } from "./utils";
+import { logError, isBookType, toOrdinal } from "./utils";
 import { buildDiagnosticElement, guard, guardAsync, type DiagnosticCode } from "./diagnostics";
 import { cgDesignTokens } from "./ui/tokens";
 import { cgComponents } from "./ui/components";
 import { resolveHostScheme } from "./ui/theme";
-import { SETTINGS_PANE_ID } from "../constants";
+import { MAX_ATTEMPTED_FETCH_CACHE, SETTINGS_PANE_ID } from "../constants";
 
 /**
  * Force `color-scheme` on the pane root to Zotero's actual theme — the same
@@ -104,10 +104,18 @@ let paneGeneration = 0;
 /**
  * Per-session attempt guards. An item with no resolvable authors, or an author
  * whose metrics fetch fails, must not re-hit the API on every single pane
- * render — record the attempt and move on.
+ * render — record the attempt and move on. Bounded like the column's
+ * `fetchAttempted`: a very large library shouldn't grow these without limit for
+ * the whole session, and dropping the guard just means a re-attempt, not a bug.
  */
 const authorResolveAttempted = new Set<string>();
 const authorMetricsAttempted = new Set<string>();
+
+/** Record an attempt, clearing the set first if it has grown past the cap. */
+function noteAttempt(set: Set<string>, key: string): void {
+  if (set.size >= MAX_ATTEMPTED_FETCH_CACHE) set.clear();
+  set.add(key);
+}
 
 const PANE_ID = "citegeist-citation-details";
 
@@ -567,86 +575,80 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
               renderDiagnosticState(container, setSectionSummary, code, "pane onRender");
           },
         ),
-      onAsyncRender: async ({ body, item, setSectionSummary }) => {
-        applyHostScheme(body);
-        const container = body.querySelector("#citegeist-content") as HTMLElement;
-        if (!container) return;
+      // Head guard covers the WHOLE handler, including the applyHostScheme /
+      // querySelector setup — anything escaping leaves the "Fetching citation
+      // data…" spinner up forever, an app that looks hung with nothing to
+      // report. The fallback renders a coded state so the user always ends up
+      // with something to quote.
+      onAsyncRender: ({ body, item, setSectionSummary }) =>
+        guardAsync(
+          "pane onAsyncRender",
+          async () => {
+            applyHostScheme(body);
+            const container = body.querySelector("#citegeist-content") as HTMLElement;
+            if (!container) return;
 
-        // Snapshot the generation BEFORE any await so a mid-fetch item change
-        // is detected on resume. Without this, Zotero's body-element reuse
-        // would have us writing item A's data into item B's pane.
-        const gen = paneGeneration;
+            // Snapshot the generation BEFORE any await so a mid-fetch item change
+            // is detected on resume. Without this, Zotero's body-element reuse
+            // would have us writing item A's data into item B's pane.
+            const gen = paneGeneration;
 
-        // Error boundary. Zotero does nothing with a rejected onAsyncRender, so
-        // anything escaping this handler leaves the "Fetching citation data…"
-        // spinner up forever — an app that looks hung, with nothing for the
-        // user to report. Every exit path must render a state.
-        try {
-          await renderAsync();
-        } catch (e) {
-          logError("pane onAsyncRender", e);
-          if (gen === paneGeneration && !getCachedData(item)) {
-            renderDiagnosticState(
-              container,
-              setSectionSummary,
-              codeForError(e),
-              "pane onAsyncRender",
-            );
-          }
-        }
-        return;
+            // If we already rendered cached data in onRender and it's fresh, skip
+            const alreadyCached = getCachedData(item);
+            if (alreadyCached && !isCacheStale(item)) return;
 
-        async function renderAsync(): Promise<void> {
-          // If we already rendered cached data in onRender and it's fresh, skip
-          const alreadyCached = getCachedData(item);
-          if (alreadyCached && !isCacheStale(item)) return;
+            // If a suggestion is already rendered (from a prior fetch stored in Extra), skip
+            if (!alreadyCached && getPendingSuggestion(item)) return;
 
-          // If a suggestion is already rendered (from a prior fetch stored in Extra), skip
-          if (!alreadyCached && getPendingSuggestion(item)) return;
+            const result = await fetchAndCacheItem(item);
+            if (gen !== paneGeneration) return;
 
-          const result = await fetchAndCacheItem(item);
-          if (gen !== paneGeneration) return;
-
-          if (result.status === "ok") {
-            const freshData = getCachedData(item);
-            if (freshData) {
-              renderPane(container, freshData, item, result.work);
-              setSectionSummary(citationSummary(freshData.citedByCount, item));
-              invalidateColumnCache(item.id);
-            } else {
-              // Fetch said "ok" but the cache read came back empty (a write that
-              // early-returned). Without this the spinner would stay up forever —
-              // the exact silent-hang this handler's boundary exists to prevent.
-              renderEmptyState(container, setSectionSummary, "matchSaved");
+            if (result.status === "ok") {
+              const freshData = getCachedData(item);
+              if (freshData) {
+                renderPane(container, freshData, item, result.work);
+                setSectionSummary(citationSummary(freshData.citedByCount, item));
+                invalidateColumnCache(item.id);
+              } else {
+                // Fetch said "ok" but the cache read came back empty (a write that
+                // early-returned). Without this the spinner would stay up forever —
+                // the exact silent-hang this handler's boundary exists to prevent.
+                renderEmptyState(container, setSectionSummary, "matchSaved");
+              }
+            } else if (result.status === "suggestion") {
+              const suggestion = getPendingSuggestion(item);
+              if (suggestion) {
+                renderSuggestion(container, suggestion, item, setSectionSummary);
+                invalidateColumnCache(item.id);
+              } else {
+                renderEmptyState(container, setSectionSummary, "matchSaved");
+              }
+            } else if (result.status === "error" && !alreadyCached) {
+              // "Not on OpenAlex" and "no identifier" are outcomes, not failures —
+              // plain copy, no diagnostic affordance, so the pane stays quiet when
+              // nothing is actually broken. A network or unexpected failure gets
+              // the coded state, because that is what a user ends up reporting.
+              if (result.error === "no-match") {
+                renderEmptyState(container, setSectionSummary, "notFoundTitle");
+              } else if (result.error === "not-found" || result.error === "no-identifier") {
+                renderEmptyState(container, setSectionSummary, "notFound");
+              } else {
+                renderDiagnosticState(
+                  container,
+                  setSectionSummary,
+                  result.code ?? (result.error === "network" ? "CG-NET01" : "CG-BUG01"),
+                  `pane fetch (item ${item.id})`,
+                );
+              }
             }
-          } else if (result.status === "suggestion") {
-            const suggestion = getPendingSuggestion(item);
-            if (suggestion) {
-              renderSuggestion(container, suggestion, item, setSectionSummary);
-              invalidateColumnCache(item.id);
-            } else {
-              renderEmptyState(container, setSectionSummary, "matchSaved");
+          },
+          (code) => {
+            const container = body.querySelector("#citegeist-content") as HTMLElement;
+            if (container && !getCachedData(item)) {
+              renderDiagnosticState(container, setSectionSummary, code, "pane onAsyncRender");
             }
-          } else if (result.status === "error" && !alreadyCached) {
-            // "Not on OpenAlex" and "no identifier" are outcomes, not failures —
-            // plain copy, no diagnostic affordance, so the pane stays quiet when
-            // nothing is actually broken. A network or unexpected failure gets
-            // the coded state, because that is what a user ends up reporting.
-            if (result.error === "no-match") {
-              renderEmptyState(container, setSectionSummary, "notFoundTitle");
-            } else if (result.error === "not-found" || result.error === "no-identifier") {
-              renderEmptyState(container, setSectionSummary, "notFound");
-            } else {
-              renderDiagnosticState(
-                container,
-                setSectionSummary,
-                result.code ?? (result.error === "network" ? "CG-NET01" : "CG-BUG01"),
-                `pane fetch (item ${item.id})`,
-              );
-            }
-          }
-        }
-      },
+          },
+        ),
       sectionButtons: [
         {
           type: "refresh",
@@ -691,6 +693,10 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
                       if (suggestion) {
                         renderSuggestion(container, suggestion, item, setSectionSummary);
                         invalidateColumnCache(item.id);
+                      } else {
+                        // Suggestion result but nothing pending to render: fall
+                        // back to a terminal state, never leave "Refreshing…" up.
+                        renderEmptyState(container, setSectionSummary, "notFound");
                       }
                     } else if (
                       result.status === "error" &&
@@ -852,12 +858,12 @@ function renderSuggestion(
       if (fresh) {
         renderPane(container, fresh, item, result.status === "ok" ? result.work : undefined);
         setSectionSummary(citationSummary(fresh.citedByCount, item));
-      } else if (result.status === "error") {
-        // Confirmation persisted in SQLite (confirmed_open_alex_id is set), but
-        // the follow-up fetch failed (network blip, transient 5xx). Show a
-        // POSITIVE "match saved" state — NOT "Not found", which made a
-        // successful confirmation read as a failure (W2). Metrics retry on the
-        // next refresh / auto-fetch.
+      } else {
+        // Any non-fresh outcome (error, or a "suggestion"/"cached" result whose
+        // cache read came back empty): show the positive "match saved" state
+        // rather than leave the confirmLoading spinner up forever. NOT "Not
+        // found", which made a successful confirmation read as a failure (W2).
+        // Metrics retry on the next refresh / auto-fetch.
         renderEmptyState(container, setSectionSummary, "matchSaved");
       }
       invalidateColumnCache(item.id);
@@ -1178,7 +1184,7 @@ async function renderAuthorRows(
     if (itemAuthors.length === 0) {
       const attemptKey = `${item.libraryID}/${item.key}`;
       if (!authorResolveAttempted.has(attemptKey)) {
-        authorResolveAttempted.add(attemptKey);
+        noteAttempt(authorResolveAttempted, attemptKey);
         await resolveAuthorsForItem(item);
         if (gen !== paneGeneration) return;
         itemAuthors = await getItemAuthors(item.libraryID, item.key);
@@ -1246,7 +1252,7 @@ async function fillAuthorMetrics(
   for (const vm of vms) {
     if (!vm.authorId || vm.hIndexLabel) continue;
     if (authorMetricsAttempted.has(vm.authorId)) continue;
-    authorMetricsAttempted.add(vm.authorId);
+    noteAttempt(authorMetricsAttempted, vm.authorId);
     try {
       const profile = await fetchAuthorProfile(vm.authorId, { aggregatesOnly: true });
       if (!profile || profile.hIndex === null) continue;
@@ -1315,4 +1321,6 @@ export function unregisterCitationPane(): void {
     paneRegisteredPluginID = null;
   }
   paneRegistered = false;
+  authorResolveAttempted.clear();
+  authorMetricsAttempted.clear();
 }

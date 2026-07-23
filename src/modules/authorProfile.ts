@@ -202,14 +202,6 @@ export function compactTrend(work?: OpenAlexWork): string | null {
 }
 
 /**
- * The item's author-type creators, each carrying its 0-based index AMONG authors
- * (the position that aligns to OpenAlex `author_position` / the `item_authors`
- * write key). Non-author creators (editors, translators) are skipped WITHOUT
- * advancing the index, so an interleaved editor never shifts later authors onto
- * the wrong resolved row. When `Zotero.CreatorTypes.getID` is unavailable, every
- * creator is treated as an author (best-effort).
- */
-/**
  * The Zotero creator-type id for "author", or undefined when the API is
  * unavailable (best-effort — callers then treat every creator as an author).
  */
@@ -236,6 +228,14 @@ export function isAuthorCreator(
   return authorTypeID == null || c.creatorTypeID == null || c.creatorTypeID === authorTypeID;
 }
 
+/**
+ * The item's author-type creators, each carrying its 0-based index AMONG authors
+ * (the position that aligns to OpenAlex `author_position` / the `item_authors`
+ * write key). Non-author creators (editors, translators) are skipped WITHOUT
+ * advancing the index, so an interleaved editor never shifts later authors onto
+ * the wrong resolved row. When `Zotero.CreatorTypes.getID` is unavailable, every
+ * creator is treated as an author (best-effort).
+ */
 export function getAuthorCreators(item: _ZoteroTypes.Item): AuthorCreator[] {
   const authorTypeID = getAuthorTypeID();
   const creators = (item.getCreators?.() ?? []) as Array<{

@@ -106,24 +106,26 @@ export function redactPaths(s: string): string {
 }
 
 /**
- * The full scrub applied to anything bound for the diagnostic ring buffer:
- * the opt-in API key and any username-bearing path. The single place both
- * redactions compose, so a new sink can't pick up one and miss the other.
+ * The full scrub applied to anything bound for the diagnostic ring buffer: the
+ * opt-in API key, any username-bearing path, and any resolvable OpenAlex id.
+ * The single place all three compose, so a new sink can't pick up one and miss
+ * the others.
  */
 export function redactSensitive(s: string): string {
   return redactOpenAlexIds(redactPaths(redactApiKey(s)));
 }
 
 /**
- * Replace resolvable OpenAlex work/author ids (`W…`/`A…`) with `<id>`.
+ * Replace a resolvable OpenAlex entity id with `<id>`.
  *
- * A W- or A-id resolves 1:1 via one unauthenticated GET to a paper's title and
- * authors, so it is a pointer to library content. Call sites are supposed to
- * keep ids out of a recorded context, but this is the net that keeps the
- * "no library content" promise true if a future one forgets.
+ * Any OpenAlex id (a work `W…`, author `A…`, or source/journal `S…`, plus the
+ * other entity prefixes) resolves 1:1 via one unauthenticated GET to a paper's
+ * title, a person, or a journal — a pointer to library content. Call sites are
+ * supposed to keep ids out of a recorded context, but this is the net that
+ * keeps the "no library content" promise true if a future one forgets.
  */
 export function redactOpenAlexIds(s: string): string {
-  return s.replace(/\b[WA]\d{4,}\b/g, "<id>");
+  return s.replace(/\b[WASIPFCTL]\d{4,}\b/g, "<id>");
 }
 
 /**
