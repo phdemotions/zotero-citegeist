@@ -87,6 +87,16 @@ export function buildDiagnosticElement(
   copy.textContent = "Copy report";
   copy.style.display = "none";
 
+  // Visually-hidden live region so the copy result is announced to screen
+  // readers: a change to a focused button's own label (below) isn't reliably
+  // spoken. Mirrors the settings pane's role=status pattern; clipped so it adds
+  // nothing visual to the error block.
+  const liveStatus = doc.createElement("span");
+  liveStatus.setAttribute("role", "status");
+  liveStatus.setAttribute("aria-live", "polite");
+  liveStatus.style.cssText =
+    "position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;";
+
   toggle.addEventListener("click", () => {
     const open = detail.style.display === "none";
     detail.style.display = open ? "" : "none";
@@ -96,9 +106,9 @@ export function buildDiagnosticElement(
   copy.addEventListener("click", () => {
     // Rebuilt on copy rather than reusing the disclosure's text: anything that
     // failed while the panel sat open belongs in what the user pastes.
-    copy.textContent = copyToClipboard(buildDiagnosticReport({ code, context }))
-      ? "Copied"
-      : "Couldn't copy";
+    const ok = copyToClipboard(buildDiagnosticReport({ code, context }));
+    copy.textContent = ok ? "Copied" : "Couldn't copy";
+    liveStatus.textContent = ok ? "Report copied to clipboard" : "Couldn't copy the report";
     // Revert so a second copy re-signals (otherwise the label sticks on
     // "Copied" and a repeat click gives no feedback).
     const win = copy.ownerDocument?.defaultView;
@@ -110,6 +120,7 @@ export function buildDiagnosticElement(
   disclosure.appendChild(toggle);
   disclosure.appendChild(detail);
   disclosure.appendChild(copy);
+  disclosure.appendChild(liveStatus);
   wrap.appendChild(disclosure);
   return wrap;
 }

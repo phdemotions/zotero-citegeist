@@ -501,7 +501,14 @@ export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<Au
       // then a metered title-search fallback), which piggybacks author identity
       // via the normal cacheWorkData path.
       const r = await fetchAndCacheItem(item);
-      if (r.status === "ok") return "resolved";
+      if (r.status === "ok") {
+        // Confirm an author actually landed — a work with empty authorships
+        // (editorial, erratum, dataset) fetches "ok" yet resolves no identity.
+        // Re-read so it's counted "unresolved", matching the cached-work-id
+        // branch below rather than reporting a bare fetch as "resolved".
+        const after = await getItemAuthors(item.libraryID, item.key);
+        return after.length > 0 ? "resolved" : "unresolved";
+      }
       // fetchAndCacheItem is total, so a budget-exhausted title search comes
       // back as an error result carrying CG-API42 rather than throwing. Without
       // this the outer `catch (OpenAlexBudgetError)` never fires on this path,

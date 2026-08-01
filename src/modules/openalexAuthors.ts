@@ -49,13 +49,10 @@ interface AuthorApiResponse {
   } | null;
 }
 
-/** How an author profile's metrics were obtained. */
-export type AuthorMetricsSource = "aggregates" | "derived";
-
 /** The metric fields of a profile, shared by both derivation paths. */
 type AuthorMetrics = Pick<
   OpenAlexAuthorProfile,
-  "worksCount" | "citedByCount" | "hIndex" | "i10Index" | "metricsAreLowerBound" | "metricsSource"
+  "worksCount" | "citedByCount" | "hIndex" | "i10Index" | "metricsAreLowerBound"
 >;
 
 /** A resolved OpenAlex author: identity + metrics, with provenance flags. */
@@ -74,8 +71,6 @@ export interface OpenAlexAuthorProfile {
    * the affected values with a "≥" prefix. Always false for aggregate metrics.
    */
   metricsAreLowerBound: boolean;
-  /** Whether metrics came from the free aggregates or were derived from works. */
-  metricsSource: AuthorMetricsSource;
   /**
    * Set to the REQUESTED id when it differed from the canonical `id` — i.e. the
    * lookup 301-redirected to a merged survivor (KTD3). The caller (U7/U8) is
@@ -129,7 +124,6 @@ function metricsFromAggregates(body: AuthorApiResponse): AuthorMetrics {
     hIndex: body.summary_stats?.h_index ?? null,
     i10Index: body.summary_stats?.i10_index ?? null,
     metricsAreLowerBound: false,
-    metricsSource: "aggregates",
   };
 }
 
@@ -202,7 +196,6 @@ async function metricsFromWorks(authorId: string): Promise<AuthorMetrics> {
     hIndex,
     i10Index,
     metricsAreLowerBound: !(hExact && i10Exact),
-    metricsSource: "derived",
   };
 }
 
@@ -264,7 +257,6 @@ export async function fetchAuthorProfile(
           hIndex: null,
           i10Index: null,
           metricsAreLowerBound: false,
-          metricsSource: "aggregates",
           redirectedFrom: null,
         },
         shortId,

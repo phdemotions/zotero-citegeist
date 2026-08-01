@@ -20,7 +20,7 @@ tags: [citegeist, issues]
 | P0 (Blocker) | 0    |
 | P1 (High)    | 0    |
 | P2 (Medium)  | 2    |
-| P3 (Low)     | 7    |
+| P3 (Low)     | 8    |
 
 ---
 
@@ -77,6 +77,12 @@ _None currently._
 **Impact:** `results.ts` and `actions.ts` build the citation-network "+ Add to _Collection_" button via `safeInnerHTML`, and the visible label escapes the collection name (`escapeHTML(defaultName)`) but the sibling `aria-label` interpolates it raw. A collection named with `<`/`&`/quotes yields a malformed attribute; low XSS risk (attribute context, DOMParser-parsed) but an inconsistency. Pre-existing on `main` (predates this branch) — surfaced by the multi-round review, carved out to keep the review PR single-concern.
 **Fix:** wrap the `defaultName` interpolation in the aria-label with `escapeHTML`, both sites.
 **Effort:** Trivial.
+
+### DEBT-014: Menu batch-runners duplicate a ~30-line skeleton four ways
+
+**Impact:** `menu.ts` has four near-identical batch handlers — `runFetchSelected`, `runFetchCollection` (pre-existing on `main`) and `runResolveAuthorsSelected`, `runResolveAuthorsCollection` (added this branch) — each repeating the ProgressWindow + ItemProgress setup, empty-eligible alert, try/batch/catch "…failed — see Debug Output", and setProgress(100)+summary+close-timer. A later fix to the boilerplate in one silently misses the other three (the same drift class the "Done — 0 updated" summary fix already had to chase). The branch widened it 2→4.
+**Fix:** extract one `runBatchOverItems(win, { gather, headline, itemLabel, run, summarize })` helper and route all four actions through it. Deferred out of the review PR: it also refactors two pre-existing `main` functions, so it belongs in its own single-concern change, not the diagnostics branch.
+**Effort:** Small–medium.
 
 ### DEBT-013: Preferences update-check status colours are hardcoded hex
 

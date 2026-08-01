@@ -348,8 +348,10 @@ export const LIST_SELECT =
  *            {@link normalizeDOI} for accepted forms.
  * @returns The OpenAlex work, or `null` if the DOI is blank or the work
  *          is not indexed on OpenAlex (404).
- * @throws {@link OpenAlexNetworkError} when OpenAlex is unreachable,
- *         rate-limiting persists past retries, or returns invalid JSON.
+ * @throws {@link OpenAlexResponseError} on a non-200 status (incl. persistent
+ *         5xx/429 after retries) or a non-JSON body, {@link OpenAlexNetworkError}
+ *         when unreachable, or {@link OpenAlexBudgetError}/{@link OpenAlexAuthError}
+ *         on a spent budget / rejected key.
  */
 export async function getWorkByDOI(doi: string): Promise<OpenAlexWork | null> {
   const cleanDOI = normalizeDOI(doi);
@@ -452,7 +454,10 @@ export async function getWorkByISBN(isbn: string): Promise<OpenAlexWork | null> 
 /**
  * Fetch works that cite a given work (pagination via OpenAlex cursor).
  *
- * @throws {@link OpenAlexNetworkError} on unreachable/5xx/invalid responses.
+ * @throws {@link OpenAlexResponseError} on a non-200 status or non-JSON body,
+ *         {@link OpenAlexNetworkError} when unreachable after retries, or
+ *         {@link OpenAlexBudgetError}/{@link OpenAlexAuthError} on a spent
+ *         budget / rejected key.
  */
 export async function getCitingWorks(
   openAlexId: string,
@@ -478,7 +483,10 @@ export async function getCitingWorks(
  * which returns X's references with cursor pagination — reliable even
  * when the reference list is very long.
  *
- * @throws {@link OpenAlexNetworkError} on unreachable/5xx/invalid responses.
+ * @throws {@link OpenAlexResponseError} on a non-200 status or non-JSON body,
+ *         {@link OpenAlexNetworkError} when unreachable after retries, or
+ *         {@link OpenAlexBudgetError}/{@link OpenAlexAuthError} on a spent
+ *         budget / rejected key.
  */
 export async function getReferencedWorks(
   parentOpenAlexId: string,
@@ -554,7 +562,10 @@ export function normalizeWork(work: OpenAlexWork): OpenAlexWork {
  * Returns full data including the inverted-index abstract.
  *
  * @returns The work, or `null` if not found (404).
- * @throws {@link OpenAlexNetworkError} on unreachable/5xx/invalid responses.
+ * @throws {@link OpenAlexResponseError} on a non-200 status or non-JSON body,
+ *         {@link OpenAlexNetworkError} when unreachable after retries, or
+ *         {@link OpenAlexBudgetError}/{@link OpenAlexAuthError} on a spent
+ *         budget / rejected key.
  */
 export async function getWorkById(openAlexId: string): Promise<OpenAlexWork | null> {
   const shortId = openAlexId.replace("https://openalex.org/", "");

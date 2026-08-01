@@ -50,7 +50,6 @@ function profile(over: Partial<AnyProfile> = {}): AnyProfile {
     hIndex: 20,
     i10Index: 15,
     metricsAreLowerBound: false,
-    metricsSource: "aggregates",
     redirectedFrom: null,
     ...over,
   } as AnyProfile;
