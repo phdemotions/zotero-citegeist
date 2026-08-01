@@ -932,11 +932,16 @@ function renderSuggestion(
   };
 
   const onDismiss = async (): Promise<void> => {
+    // Generation snapshot, symmetric with onConfirm: a mid-dismiss item change
+    // must not paint this item's "dismissed" state into the newly-selected
+    // item's pane (Zotero reuses the body element across selections).
+    const gen = paneGeneration;
     try {
       // Atomic clear+no-match: prevents a concurrent fetch from landing
       // work data between the two writes and producing a row with both
       // real metrics AND no_match=1 (contradictory state).
       await dismissAsNoMatch(item);
+      if (gen !== paneGeneration) return;
       renderEmptyState(container, setSectionSummary, "dismissed");
       invalidateColumnCache(item.id);
     } catch (e) {
