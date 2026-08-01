@@ -260,6 +260,13 @@ export class OpenAlexNetworkError extends CitegeistError {
  * connection" when the service replied is misleading, and it sends them
  * debugging the wrong thing.
  */
+export class DatabaseOpenError extends CitegeistError {
+  constructor(message: string, cause?: unknown) {
+    super(message, "CG-DB02", cause);
+    this.name = "DatabaseOpenError";
+  }
+}
+
 export class OpenAlexResponseError extends CitegeistError {
   constructor(message: string, cause?: unknown) {
     super(message, "CG-API50", cause);

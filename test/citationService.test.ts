@@ -104,6 +104,7 @@ vi.mock("../src/modules/openalex", () => ({
 
 import {
   fetchAndCacheItem,
+  fetchAndCacheItems,
   extractIdentifier,
   canResolveWork,
   resolveWorkForItem,
@@ -372,6 +373,13 @@ describe("fetchAndCacheItem", () => {
     // CG-API42, not a generic failure: the pane can then say "today's OpenAlex
     // budget is spent, add a key" instead of "something went wrong".
     expect(result).toEqual({ status: "error", error: "unexpected", code: "CG-API42" });
+  });
+
+  it("carries CG-NET01 on a network error result so the UI need not re-derive it", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    mockedGetWorkByDOI.mockRejectedValue(new OpenAlexNetworkError("offline"));
+    const result = await fetchAndCacheItem(item);
+    expect(result).toEqual({ status: "error", error: "network", code: "CG-NET01" });
   });
 
   it("piggybacks author identity onto a successful fetch (U3)", async () => {
@@ -726,6 +734,15 @@ describe("resolveAuthorsForItems (U4)", () => {
     expect(await resolveAuthorsForItem(item)).toBe("already");
   });
 
+  it("reports an infra failure as 'error', not 'unresolved' (no-work-id path)", async () => {
+    // A network/DB failure during the piggyback fetch is trouble to surface, not
+    // a clean "no author match" — otherwise the backfill count sends the user
+    // looking at their library instead of the cause.
+    const item = mockItem({ doi: "10.1234/test" });
+    mockedGetWorkByDOI.mockRejectedValue(new OpenAlexNetworkError("offline"));
+    expect(await resolveAuthorsForItem(item)).toBe("error");
+  });
+
   it("stops on budget exhaustion and counts the remaining items as not attempted", async () => {
     const items = [mockItem({ doi: "10.1234/a" }), mockItem({ doi: "10.1234/b" })];
     await cacheWorkData(items[0], makeFakeWork());
@@ -733,6 +750,17 @@ describe("resolveAuthorsForItems (U4)", () => {
     const result = await resolveAuthorsForItems(items);
     expect(result.budgetStopped).toBe(2);
     expect(result.resolved).toBe(0);
+  });
+
+  it("fetchAndCacheItems stops the pass on the first budget-exhausted item", async () => {
+    const items = [mockItem({ doi: "10.1234/a" }), mockItem({ doi: "10.1234/b" })];
+    // First item's fetch hits the daily budget; the pass must stop rather than
+    // 429 every remaining item, and count them as budgetStopped, not errors.
+    mockedGetWorkByDOI.mockRejectedValue(new OpenAlexBudgetError());
+    const result = await fetchAndCacheItems(items);
+    expect(result.budgetStopped).toBe(2);
+    expect(result.errors).toBe(0);
+    expect(mockedGetWorkByDOI).toHaveBeenCalledTimes(1);
   });
 
   it("honors a cancel request before any work is done", async () => {

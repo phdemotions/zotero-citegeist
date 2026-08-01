@@ -30,9 +30,6 @@ such as your username.
 | `CG-API50` | OpenAlex returned an unexpected response. | Try again in a few minutes. If it repeats, file an issue with the report. |
 | `CG-DB01` | Couldn't save to Citegeist's local database. | Most often a cloud-sync client holding the file. If your Zotero data folder is inside Dropbox, iCloud Drive, OneDrive or Box, pause sync and retry. |
 | `CG-DB02` | Citegeist's local database couldn't be opened. | Restart Zotero. If it persists, quit Zotero and check that `citegeist.sqlite` in your data folder isn't quarantined by antivirus. |
-| `CG-MATCH01` | The work isn't in OpenAlex. | Not an error — OpenAlex has no record of it. Nothing to fix. |
-| `CG-MATCH02` | Not found by identifier, and no confident title match. | Add a DOI to the item; it's by far the most reliable identifier. |
-| `CG-ID01` | The item has no recognized identifier. | Add a DOI, PMID, arXiv ID, or ISBN. |
 | `CG-UI01` | Something went wrong drawing a panel. | Switch items and back, or restart Zotero. Worth reporting. |
 | `CG-BUG01` | An unexpected problem — Citegeist couldn't classify it. | Always worth reporting. Copy the diagnostic report into a [new issue](https://github.com/phdemotions/zotero-citegeist/issues/new). |
 

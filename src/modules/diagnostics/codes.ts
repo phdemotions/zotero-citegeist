@@ -40,6 +40,14 @@ export interface DiagnosticCodeEntry {
   readonly message: string;
   /** True when repeating the same action might succeed shortly. */
   readonly retryable: boolean;
+  /**
+   * A code that was reserved but is intentionally not produced — the situation
+   * it named turned out to be a calm outcome shown as plain copy, not a coded
+   * error. Kept in the registry (append-only: a code is never deleted or
+   * reused) but absent from the user-facing `docs/ERROR-CODES.md`. Every
+   * NON-retired code must have a producer.
+   */
+  readonly retired?: boolean;
 }
 
 /**
@@ -95,6 +103,7 @@ export const DIAGNOSTIC_CODES = {
     area: "MATCH",
     message: "This work isn't in OpenAlex, so there are no citation metrics to show.",
     retryable: false,
+    retired: true,
   },
   "CG-MATCH02": {
     code: "CG-MATCH02",
@@ -102,6 +111,7 @@ export const DIAGNOSTIC_CODES = {
     message:
       "Not found by identifier, and a title search found no confident match. Adding a DOI is the most reliable fix.",
     retryable: false,
+    retired: true,
   },
   "CG-ID01": {
     code: "CG-ID01",
@@ -109,6 +119,7 @@ export const DIAGNOSTIC_CODES = {
     message:
       "No recognized identifier on this item. Add a DOI, PMID, arXiv ID, or ISBN to enable citation data.",
     retryable: false,
+    retired: true,
   },
   "CG-UI01": {
     code: "CG-UI01",

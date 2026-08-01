@@ -85,7 +85,6 @@ export function buildDiagnosticElement(
   copy.className = "cg-btn cg-btn--plain cg-btn--sm";
   copy.textContent = "Copy report";
   copy.style.display = "none";
-  copy.style.marginTop = "8px";
 
   toggle.addEventListener("click", () => {
     const open = detail.style.display === "none";

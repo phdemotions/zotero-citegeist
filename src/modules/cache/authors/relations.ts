@@ -40,6 +40,11 @@ export async function purgeAllAuthorRelations(): Promise<PurgeResult> {
   let cleaned = 0;
   let failures = 0;
   for (const lib of Zotero.Libraries.getAll()) {
+    // Skip read-only libraries: we can't write to them (saveTx would throw on
+    // every item), so counting them as failures would block the purge from ever
+    // completing and re-scan every library on every launch. A read-only group
+    // library's sync is the server's concern, not ours.
+    if (lib.editable === false) continue;
     let items: _ZoteroTypes.Item[];
     try {
       items = await Zotero.Items.getAll(lib.libraryID);

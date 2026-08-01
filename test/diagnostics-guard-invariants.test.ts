@@ -109,6 +109,27 @@ describe("diagnostic code registry", () => {
   it("describeCode falls back to CG-BUG01 rather than throwing on an unknown code", () => {
     expect(describeCode("CG-NOPE99").code).toBe("CG-BUG01");
   });
+
+  it("every non-retired code has a producer; retired codes stay in the registry but out of the docs", () => {
+    // A code with no producer is a lie in the docs (a user can never see or
+    // quote it). The honest states are: produced (its literal appears in some
+    // src file — a CitegeistError subclass, an explicit pane code, or the
+    // codeForError default), or retired (kept for append-only, absent from the
+    // user-facing ERROR-CODES.md).
+    const producers = allSrcFiles()
+      .filter((f) => !f.endsWith("diagnostics/codes.ts"))
+      .map((f) => src(f))
+      .join("\n");
+    const doc = src("docs/ERROR-CODES.md");
+    for (const key of ALL_DIAGNOSTIC_CODES) {
+      if (DIAGNOSTIC_CODES[key].retired) {
+        expect(doc, `retired ${key} is still offered in ERROR-CODES.md`).not.toContain(key);
+      } else {
+        expect(producers.includes(key), `${key} has no producer in src/`).toBe(true);
+        expect(doc, `${key} is missing from ERROR-CODES.md`).toContain(key);
+      }
+    }
+  });
 });
 
 describe("ring buffer", () => {

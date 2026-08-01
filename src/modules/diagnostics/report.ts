@@ -77,7 +77,7 @@ function hostFacts(): string[] {
     () => {
       const dir = String(Zotero.DataDirectory?.dir ?? "");
       if (!dir) return "unknown";
-      return /Dropbox|iCloud|CloudStorage|OneDrive|Google ?Drive|Box/i.test(dir)
+      return /Dropbox|iCloud|CloudStorage|OneDrive|Google ?Drive|\bBox\b/i.test(dir)
         ? "inside a cloud-sync folder"
         : "local";
     },

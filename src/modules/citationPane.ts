@@ -572,7 +572,12 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
           (code) => {
             const container = body.querySelector("#citegeist-content") as HTMLElement;
             if (container)
-              renderDiagnosticState(container, setSectionSummary, code, "pane onRender");
+              renderDiagnosticState(
+                container,
+                setSectionSummary,
+                code === "CG-BUG01" ? "CG-UI01" : code,
+                "pane onRender",
+              );
           },
         ),
       // Head guard covers the WHOLE handler, including the applyHostScheme /
@@ -645,7 +650,12 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
           (code) => {
             const container = body.querySelector("#citegeist-content") as HTMLElement;
             if (container && !getCachedData(item)) {
-              renderDiagnosticState(container, setSectionSummary, code, "pane onAsyncRender");
+              renderDiagnosticState(
+                container,
+                setSectionSummary,
+                code === "CG-BUG01" ? "CG-UI01" : code,
+                "pane onAsyncRender",
+              );
             }
           },
         ),

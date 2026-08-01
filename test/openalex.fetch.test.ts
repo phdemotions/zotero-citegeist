@@ -173,6 +173,17 @@ describe("error discrimination", () => {
     httpRequest.mockResolvedValue(httpResponse(404));
     expect(await getWorkById("W1")).toBeNull();
   });
+
+  it("maps a 200 with an unparseable body to OpenAlexResponseError (CG-API50)", async () => {
+    // The service answered, just not with JSON — a response error, not a network
+    // one, so the user isn't told to check a connection that's fine.
+    httpRequest.mockResolvedValue({
+      status: 200,
+      responseText: "<html>not json</html>",
+      getResponseHeader: () => null,
+    });
+    await expect(getWorkById("W1")).rejects.toBeInstanceOf(OpenAlexResponseError);
+  });
 });
 
 /**

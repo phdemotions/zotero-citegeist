@@ -163,9 +163,20 @@ export function cgComponents(scope: string): string {
        means EVIDENCE, so neither may be spent on an error. */
     ${scope} .cg-diag { font-size: var(--cg-size-footnote); line-height: 1.5; color: var(--cg-text-secondary); }
     ${scope} .cg-diag-msg { margin: 0 0 var(--cg-space-2) 0; }
-    ${scope} .cg-diag-disclosure { border-top: 1px solid var(--cg-hairline); padding-top: var(--cg-space-2); }
+    ${scope} .cg-diag-disclosure {
+      border-top: 1px solid var(--cg-hairline);
+      padding-top: var(--cg-space-2);
+      /* Column flex with a start alignment so the Details / Copy buttons size to
+         their content instead of stretching full-width: .cg-btn is display:flex
+         (a block-level flex box), which fills a plain block parent. The gap
+         supplies the inter-button rhythm, so no per-button margin is needed. */
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--cg-space-2);
+    }
     ${scope} .cg-diag-detail {
-      margin: var(--cg-space-2) 0 0 0;
+      margin: 0;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: var(--cg-size-caption);
       line-height: 1.6;

@@ -393,9 +393,7 @@ async function runResolveAuthorsSelected(win: Window): Promise<void> {
     Services.prompt.alert(
       win,
       "Citegeist: Nothing to resolve",
-      items.length === 0
-        ? "No items selected."
-        : `None of the ${items.length} selected item${items.length === 1 ? "" : "s"} has a recognized identifier to resolve authors from.`,
+      `None of the ${items.length} selected item${items.length === 1 ? "" : "s"} has a recognized identifier to resolve authors from.`,
     );
     return;
   }

@@ -17,7 +17,7 @@
  */
 
 import { CLOSE_CACHE_DRAIN_TIMEOUT_MS } from "../../constants";
-import { CacheError } from "../utils";
+import { CacheError, DatabaseOpenError } from "../utils";
 import { COLUMNS, type ItemCacheRow, mirrorKey, rowToParams } from "./types";
 import { createAuthorSchema } from "./authors/db";
 
@@ -99,12 +99,20 @@ async function doInit(): Promise<void> {
   // Build the connection in a local. Don't assign to the module's `db`
   // until schema + mirror load have all succeeded, so a `closeCache()`
   // racing against init can't null-out a half-initialized connection.
-  const conn = new Zotero.DBConnection("citegeist");
-  await conn.queryAsync(SCHEMA);
-  await conn.queryAsync(CREATE_PROGRESS_TABLE);
-  // Author identity tables (additive, idempotent — plan KTD4). No mirror is
-  // loaded for them: author reads query SQLite async in the pane.
-  await createAuthorSchema(conn);
+  let conn: _ZoteroTypes.DBConnection;
+  try {
+    // A corrupt/quarantined citegeist.sqlite fails here — code it CG-DB02 so
+    // the startup path records the actionable "couldn't open the database"
+    // guidance rather than the generic CG-BUG01.
+    conn = new Zotero.DBConnection("citegeist");
+    await conn.queryAsync(SCHEMA);
+    await conn.queryAsync(CREATE_PROGRESS_TABLE);
+    // Author identity tables (additive, idempotent — plan KTD4). No mirror is
+    // loaded for them: author reads query SQLite async in the pane.
+    await createAuthorSchema(conn);
+  } catch (e) {
+    throw new DatabaseOpenError("could not open the Citegeist database", e);
+  }
 
   const rows = await conn.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
   const nextMirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
@@ -279,7 +287,7 @@ export async function withKeyLock<T>(
  * debuggable locally while nothing library-derived reaches the shareable
  * buffer. This is also what finally gives CG-DB01 a producer.
  */
-async function runQuery<T = unknown>(
+export async function runQuery<T = unknown>(
   conn: _ZoteroTypes.DBConnection,
   sql: string,
   params?: unknown[],
