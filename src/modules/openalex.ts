@@ -10,10 +10,12 @@
  * requests still work at the lower daily budget.
  *
  * Error semantics: lookup helpers return `null` when a work is not found
- * (404). Otherwise the fetch layer throws one of three distinct errors so UI
+ * (404). Otherwise the fetch layer throws one of four distinct errors so UI
  * can respond appropriately: {@link OpenAlexBudgetError} (daily budget spent —
- * prompt for a key), {@link OpenAlexAuthError} (key rejected), or
- * {@link OpenAlexNetworkError} (unreachable / non-200 after retries).
+ * prompt for a key), {@link OpenAlexAuthError} (key rejected, 401/403),
+ * {@link OpenAlexResponseError} (the service answered with an unusable status or
+ * body — e.g. 400/422 or non-JSON), or {@link OpenAlexNetworkError}
+ * (unreachable / request failed after retries).
  */
 
 import {

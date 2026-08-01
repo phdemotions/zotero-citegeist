@@ -39,6 +39,17 @@ function src(relative: string): string {
   return readFileSync(fileURLToPath(new URL(`../${relative}`, import.meta.url)), "utf8");
 }
 
+/**
+ * Remove block comments (incl. JSDoc) and whole-line `//` comments. Deliberately
+ * leaves trailing inline comments alone — stripping to EOL would truncate string
+ * literals containing `//` (e.g. `https://…`), and no producer lives in a
+ * trailing comment. Used so a code literal that appears only in prose isn't
+ * miscounted as a code path that emits it.
+ */
+function stripComments(code: string): string {
+  return code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
 /** Every `.ts` under `src/`, repo-relative — so an invariant covers new files automatically. */
 function allSrcFiles(dir = "src"): string[] {
   const abs = fileURLToPath(new URL(`../${dir}`, import.meta.url));
@@ -112,13 +123,18 @@ describe("diagnostic code registry", () => {
 
   it("every non-retired code has a producer; retired codes stay in the registry but out of the docs", () => {
     // A code with no producer is a lie in the docs (a user can never see or
-    // quote it). The honest states are: produced (its literal appears in some
-    // src file — a CitegeistError subclass, an explicit pane code, or the
+    // quote it). The honest states are: produced (its literal appears in real
+    // src code — a CitegeistError subclass, an explicit pane code, or the
     // codeForError default), or retired (kept for append-only, absent from the
     // user-facing ERROR-CODES.md).
+    //
+    // Comments are stripped first: a code mentioned only in prose (a JSDoc
+    // block or a `//` line documenting where it *used* to be produced) must not
+    // pass as a producer, or the guard would green-light a code that no code
+    // path actually emits.
     const producers = allSrcFiles()
       .filter((f) => !f.endsWith("diagnostics/codes.ts"))
-      .map((f) => src(f))
+      .map((f) => stripComments(src(f)))
       .join("\n");
     const doc = src("docs/ERROR-CODES.md");
     for (const key of ALL_DIAGNOSTIC_CODES) {

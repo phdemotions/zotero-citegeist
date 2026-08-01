@@ -14,7 +14,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeDocument, makeItem, flushAsync } from "./_helpers/menuHarness";
 
 const mocks = vi.hoisted(() => ({
-  fetchAndCacheItems: vi.fn(async () => ({ fresh: 1, cached: 0, suggestion: 0, errors: 0 })),
+  fetchAndCacheItems: vi.fn(async () => ({
+    fresh: 1,
+    cached: 0,
+    suggestion: 0,
+    errors: 0,
+    budgetStopped: 0,
+    authStopped: 0,
+  })),
   canResolveWork: vi.fn(
     (item: { isRegularItem?: () => boolean; hasIdentifier?: boolean }) =>
       item.isRegularItem?.() !== false && item.hasIdentifier !== false,
@@ -24,6 +31,7 @@ const mocks = vi.hoisted(() => ({
     already: 0,
     unresolved: 0,
     budgetStopped: 0,
+    authStopped: 0,
     errors: 0,
     cancelled: false,
   })),

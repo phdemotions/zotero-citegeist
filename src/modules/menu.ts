@@ -27,6 +27,7 @@ import { invalidateColumnCache } from "./citationColumn";
 import { showCitationNetwork } from "./citationNetwork";
 import { bindGuarded, guard } from "./diagnostics";
 import { logError } from "./utils";
+import { PROGRESS_WINDOW_ERROR_CLOSE_MS, PROGRESS_WINDOW_DONE_CLOSE_MS } from "../constants";
 
 const MENU_IDS = {
   fetchCitations: "citegeist-menu-fetch",
@@ -167,6 +168,7 @@ function summarizeBatch(r: FetchBatchResult, total: number): string {
   if (r.suggestion > 0) parts.push(`${r.suggestion} need confirmation`);
   if (r.errors > 0) parts.push(`${r.errors} couldn't be matched`);
   if (r.budgetStopped > 0) parts.push(`${r.budgetStopped} skipped (daily budget spent)`);
+  if (r.authStopped > 0) parts.push(`${r.authStopped} skipped (check your API key in settings)`);
   if (parts.length === 0) parts.push(`${total} processed`);
   return `Done — ${parts.join(", ")}`;
 }
@@ -182,6 +184,7 @@ function summarizeAuthorBackfill(r: AuthorBackfillResult, total: number): string
   if (r.already > 0) parts.push(`${r.already} already linked`);
   if (r.unresolved > 0) parts.push(`${r.unresolved} no author match`);
   if (r.budgetStopped > 0) parts.push(`${r.budgetStopped} skipped (daily budget spent)`);
+  if (r.authStopped > 0) parts.push(`${r.authStopped} skipped (check your API key in settings)`);
   if (r.errors > 0) parts.push(`${r.errors} failed`);
   if (parts.length === 0) parts.push(`${total} processed`);
   const head = r.cancelled ? "Stopped" : "Done";
@@ -251,6 +254,7 @@ async function runFetchSelected(win: Window): Promise<void> {
     suggestion: 0,
     errors: 0,
     budgetStopped: 0,
+    authStopped: 0,
   };
   try {
     result = await fetchAndCacheItems(
@@ -272,13 +276,13 @@ async function runFetchSelected(win: Window): Promise<void> {
     logError("menu fetch batch", e);
     progress.setProgress(100);
     progress.setText("Citegeist: fetch failed — see Debug Output");
-    progressWin.startCloseTimer(5000);
+    progressWin.startCloseTimer(PROGRESS_WINDOW_ERROR_CLOSE_MS);
     return;
   }
 
   progress.setProgress(100);
   progress.setText(summarizeBatch(result, eligible.length));
-  progressWin.startCloseTimer(6000);
+  progressWin.startCloseTimer(PROGRESS_WINDOW_DONE_CLOSE_MS);
 
   // Targeted column repaint — pass the eligible item IDs so the Notifier event
   // tells Zotero's ItemTreeManager exactly which rows need re-rendering.
@@ -347,6 +351,7 @@ async function runFetchCollection(win: Window): Promise<void> {
     suggestion: 0,
     errors: 0,
     budgetStopped: 0,
+    authStopped: 0,
   };
   try {
     result = await fetchAndCacheItems(
@@ -368,13 +373,13 @@ async function runFetchCollection(win: Window): Promise<void> {
     logError("menu fetch-collection batch", e);
     progress.setProgress(100);
     progress.setText("Citegeist: fetch failed — see Debug Output");
-    progressWin.startCloseTimer(5000);
+    progressWin.startCloseTimer(PROGRESS_WINDOW_ERROR_CLOSE_MS);
     return;
   }
 
   progress.setProgress(100);
   progress.setText(summarizeBatch(result, eligible.length));
-  progressWin.startCloseTimer(6000);
+  progressWin.startCloseTimer(PROGRESS_WINDOW_DONE_CLOSE_MS);
 
   try {
     invalidateColumnCache(eligible.map((i) => i.id));
@@ -416,13 +421,13 @@ async function runResolveAuthorsSelected(win: Window): Promise<void> {
     logError("menu resolve-authors batch", e);
     progress.setProgress(100);
     progress.setText("Citegeist: resolve failed — see Debug Output");
-    progressWin.startCloseTimer(5000);
+    progressWin.startCloseTimer(PROGRESS_WINDOW_ERROR_CLOSE_MS);
     return;
   }
 
   progress.setProgress(100);
   progress.setText(summarizeAuthorBackfill(result, eligible.length));
-  progressWin.startCloseTimer(6000);
+  progressWin.startCloseTimer(PROGRESS_WINDOW_DONE_CLOSE_MS);
 }
 
 async function runResolveAuthorsCollection(win: Window): Promise<void> {
@@ -471,13 +476,13 @@ async function runResolveAuthorsCollection(win: Window): Promise<void> {
     logError("menu resolve-authors-collection batch", e);
     progress.setProgress(100);
     progress.setText("Citegeist: resolve failed — see Debug Output");
-    progressWin.startCloseTimer(5000);
+    progressWin.startCloseTimer(PROGRESS_WINDOW_ERROR_CLOSE_MS);
     return;
   }
 
   progress.setProgress(100);
   progress.setText(summarizeAuthorBackfill(result, eligible.length));
-  progressWin.startCloseTimer(6000);
+  progressWin.startCloseTimer(PROGRESS_WINDOW_DONE_CLOSE_MS);
 }
 
 // ── MenuManager path (Zotero 8+) ─────────────────────────────────────────────

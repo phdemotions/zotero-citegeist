@@ -126,7 +126,7 @@ import {
   confirmTitleMatch,
   getItemAuthors,
 } from "../src/modules/cache";
-import { OpenAlexNetworkError, OpenAlexBudgetError } from "../src/modules/utils";
+import { OpenAlexNetworkError, OpenAlexBudgetError, OpenAlexAuthError } from "../src/modules/utils";
 import { cacheItemAuthors } from "../src/modules/cache";
 
 const mockedGetWorkByDOI = vi.mocked(getWorkByDOI);
@@ -752,6 +752,42 @@ describe("resolveAuthorsForItems (U4)", () => {
     expect(await resolveAuthorsForItem(item)).toBe("budget");
   });
 
+  it("reports an infra failure as 'error' on the cached-work-id path (outer catch)", async () => {
+    // The cached-work-id branch (getWorkById) throwing a non-budget error must
+    // land in the outer catch as "error", not leak out or read as "unresolved".
+    // Distinct from the no-work-id 'error' test above, which never reaches the
+    // catch (fetchAndCacheItem is total there).
+    const item = mockItem({ doi: "10.1234/test" });
+    await cacheWorkData(item, makeFakeWork());
+    mockedGetWorkById.mockRejectedValue(new OpenAlexNetworkError("offline"));
+    expect(await resolveAuthorsForItem(item)).toBe("error");
+  });
+
+  it("returns 'auth' on the no-work-id path when the key is rejected", async () => {
+    // A rejected key rides every request, so it must stop the pass like budget —
+    // not be miscounted as a per-item no-match.
+    const item = mockItem({ doi: "10.1234/test" });
+    mockedGetWorkByDOI.mockRejectedValue(new OpenAlexAuthError());
+    expect(await resolveAuthorsForItem(item)).toBe("auth");
+  });
+
+  it("returns 'auth' on the cached-work-id path when the key is rejected", async () => {
+    const item = mockItem({ doi: "10.1234/test" });
+    await cacheWorkData(item, makeFakeWork());
+    mockedGetWorkById.mockRejectedValue(new OpenAlexAuthError());
+    expect(await resolveAuthorsForItem(item)).toBe("auth");
+  });
+
+  it("stops the backfill on a rejected key and counts the rest as authStopped", async () => {
+    const items = [mockItem({ doi: "10.1234/a" }), mockItem({ doi: "10.1234/b" })];
+    await cacheWorkData(items[0], makeFakeWork());
+    mockedGetWorkById.mockRejectedValue(new OpenAlexAuthError());
+    const result = await resolveAuthorsForItems(items);
+    expect(result.authStopped).toBe(2);
+    expect(result.errors).toBe(0);
+    expect(result.resolved).toBe(0);
+  });
+
   it("stops on budget exhaustion and counts the remaining items as not attempted", async () => {
     const items = [mockItem({ doi: "10.1234/a" }), mockItem({ doi: "10.1234/b" })];
     await cacheWorkData(items[0], makeFakeWork());
@@ -768,6 +804,17 @@ describe("resolveAuthorsForItems (U4)", () => {
     mockedGetWorkByDOI.mockRejectedValue(new OpenAlexBudgetError());
     const result = await fetchAndCacheItems(items);
     expect(result.budgetStopped).toBe(2);
+    expect(result.errors).toBe(0);
+    expect(mockedGetWorkByDOI).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetchAndCacheItems stops the pass on the first key-rejected item", async () => {
+    const items = [mockItem({ doi: "10.1234/a" }), mockItem({ doi: "10.1234/b" })];
+    // A bad key fails identically on every request — stop after the first 401
+    // rather than grind through the library, and count the rest as authStopped.
+    mockedGetWorkByDOI.mockRejectedValue(new OpenAlexAuthError());
+    const result = await fetchAndCacheItems(items);
+    expect(result.authStopped).toBe(2);
     expect(result.errors).toBe(0);
     expect(mockedGetWorkByDOI).toHaveBeenCalledTimes(1);
   });

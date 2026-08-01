@@ -391,14 +391,14 @@ export function getDialogCSS(): string {
       cursor: progress;
     }
 
-    /* Inline error banner shown under a row when Add fails (read-only
-       library, network drop, validation throw). Auto-dismisses in 5s. */
+    /* Inline error banner shown under a row when an Add fails to save.
+       Auto-dismisses in 5s. The role=alert lives on the element (set in
+       showRowError), not here — ARIA roles can't be set from CSS. */
     .cg-row-error {
       margin-top: 6px; padding: 6px 10px; border-radius: var(--cg-radius-md);
       background: var(--cg-danger-tint);
       color: var(--cg-danger); font-size: 12px; line-height: 1.4;
       border: 1px solid var(--cg-danger-tint-strong);
-      role: alert;
     }
 
     /* ── Skeleton loading ── */

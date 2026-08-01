@@ -90,14 +90,11 @@ export async function addItemToLibrary(
     logError("addItemToLibrary", e);
     // Surface to the user so they don't assume the click missed and spam
     // it. Without this banner the only signal was the button reverting,
-    // which looks identical to a no-op.
-    showRowError(
-      state,
-      workId,
-      e instanceof Error && /readOnly|read-only|permission/i.test(e.message)
-        ? "Can't add: this library is read-only."
-        : "Add failed — check your connection and try again.",
-    );
+    // which looks identical to a no-op. The add always targets My Library
+    // (never a read-only group — the collection picker only offers the user
+    // library), and it's a local item write with no network step, so the one
+    // honest failure here is a save that didn't land.
+    showRowError(state, workId, "Add failed — please try again.");
     // Restore button
     if (mainBtn) {
       mainBtn.disabled = false;
@@ -128,6 +125,11 @@ function showRowError(state: NetworkState, workId: string, message: string): voi
   if (!banner) {
     banner = state.dialog.ownerDocument.createElement("div");
     banner.className = "cg-row-error";
+    // role=alert so a screen reader announces the failure — the banner appears
+    // silently below a row otherwise. (An ARIA role is a DOM attribute; it can't
+    // be set from CSS, which is why the old `role: alert` style declaration was
+    // a no-op.)
+    banner.setAttribute("role", "alert");
     row.appendChild(banner);
   } else {
     // Existing banner being repurposed for a new message — cancel its

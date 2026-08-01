@@ -20,7 +20,7 @@ tags: [citegeist, issues]
 | P0 (Blocker) | 0    |
 | P1 (High)    | 0    |
 | P2 (Medium)  | 2    |
-| P3 (Low)     | 5    |
+| P3 (Low)     | 7    |
 
 ---
 
@@ -78,9 +78,21 @@ _None currently._
 **Fix:** wrap the `defaultName` interpolation in the aria-label with `escapeHTML`, both sites.
 **Effort:** Trivial.
 
+### DEBT-013: Preferences update-check status colours are hardcoded hex
+
+**Impact:** `addon/content/preferences.xhtml`'s `showStatus()` sets the update-check status line colour inline (`#c0392b` / `#27ae60` / `#e67e22`) rather than via `--cg-*` tokens, so those three states don't adapt to the Zotero light/dark theme — the same class of issue the component CSS is guarded against. Pre-existing on `main`; the pane is the legacy update-checker, not the diagnostics UI this branch touched. Surfaced by the multi-round review, carved out to keep the review PR single-concern.
+**Fix:** route the three states through theme-aware tokens (danger / success / warning) instead of inline hex.
+**Effort:** Small.
+
+### DEBT-012: Debounced column repaint can fire after column teardown
+
+**Impact:** `citationColumn.ts` `unregisterCitationColumn` clears `fetchTimer` but not `repaintTimer`, so a repaint debounced within `COLUMN_REPAINT_DEBOUNCE_MS` (150ms) of teardown still fires against a torn-down column. Blast radius is tiny (one `refreshAndMaintainSelection` on an unregistered column, already null-guarded) and it is pre-existing on `main`, so the review verifier ruled it a non-defect — but it is a real stray-timer leak worth tidying. Carved out to keep the review PR single-concern.
+**Fix:** clear `repaintTimer` in `unregisterCitationColumn` alongside `fetchTimer`.
+**Effort:** Trivial.
+
 ### DEBT-009: v3.0.0 review advisory residuals
 
-**Impact:** Minor, non-blocking items surfaced by the v3.0.0 code review (all verified non-defects): a dangling `aria-labelledby="cg-tab-citing"` on the author-mode dialog body, the duplicated 6-row skeleton loop in `dialog.ts`, two inline `ProgressWindow` dwell-timer literals (5000/6000) not in `constants.ts`, and `persistProfileMetrics` able to null-overwrite a cached exact metric.
+**Impact:** Minor, non-blocking items surfaced by the v3.0.0 code review (all verified non-defects): a dangling `aria-labelledby="cg-tab-citing"` on the author-mode dialog body, the duplicated 6-row skeleton loop in `dialog.ts`, and `persistProfileMetrics` able to null-overwrite a cached exact metric. (The inline `ProgressWindow` dwell-timer literals noted here previously are now extracted to `constants.ts`.)
 **Fix:** Address opportunistically; none affect correctness.
 **Effort:** Low
 

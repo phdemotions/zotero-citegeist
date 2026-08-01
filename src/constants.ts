@@ -51,6 +51,10 @@ export const FETCH_BATCH_SIZE = 2;
 export const FETCH_BATCH_DELAY_MS = 500;
 /** Delay between calls in a bulk batch fetch (menu-triggered). */
 export const BULK_FETCH_DELAY_MS = 100;
+/** How long the batch ProgressWindow lingers after a failure before auto-closing. */
+export const PROGRESS_WINDOW_ERROR_CLOSE_MS = 5000;
+/** How long the batch ProgressWindow lingers after a successful summary before auto-closing. */
+export const PROGRESS_WINDOW_DONE_CLOSE_MS = 6000;
 /**
  * Debounce for the coalesced column repaint. A burst of per-item cache
  * invalidations (a collection/library fetch resolving item by item) collapses

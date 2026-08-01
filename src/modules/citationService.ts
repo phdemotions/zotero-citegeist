@@ -37,7 +37,13 @@ import {
   getTitleMatchMeta,
 } from "./cache";
 import { searchByMetadata, type TitleMatchResult } from "./titleSearch";
-import { OpenAlexNetworkError, OpenAlexBudgetError, codeForError, logError } from "./utils";
+import {
+  OpenAlexNetworkError,
+  OpenAlexBudgetError,
+  OpenAlexAuthError,
+  codeForError,
+  logError,
+} from "./utils";
 import type { DiagnosticCode } from "./diagnostics";
 import { BULK_FETCH_DELAY_MS, NO_MATCH_RETRY_DAYS } from "../constants";
 
@@ -378,6 +384,14 @@ export interface FetchBatchResult {
    * remaining item.
    */
   budgetStopped: number;
+  /**
+   * Items skipped because OpenAlex rejected the API key mid-pass (CG-API01).
+   * The key rides every request, so the first 401 guarantees the rest — the
+   * pass stops instead of grinding through the whole library issuing calls that
+   * are already known to fail, and the summary points at the key, not the
+   * library. Kept distinct from `errors` for the same reason as `budgetStopped`.
+   */
+  authStopped: number;
 }
 
 /**
@@ -397,7 +411,14 @@ export async function fetchAndCacheItems(
 ): Promise<FetchBatchResult> {
   const eligible = items.filter((item) => item.isRegularItem());
 
-  const out: FetchBatchResult = { fresh: 0, cached: 0, suggestion: 0, errors: 0, budgetStopped: 0 };
+  const out: FetchBatchResult = {
+    fresh: 0,
+    cached: 0,
+    suggestion: 0,
+    errors: 0,
+    budgetStopped: 0,
+    authStopped: 0,
+  };
 
   for (let i = 0; i < eligible.length; i++) {
     let status = "error";
@@ -412,6 +433,13 @@ export async function fetchAndCacheItems(
         // item; count this one and all that follow as skipped, not failed.
         out.budgetStopped = eligible.length - i;
         onItemDone?.(eligible[i].id, "budget");
+        break;
+      } else if (result.status === "error" && result.code === "CG-API01") {
+        // Key rejected (401/403). It rides every request, so the next call
+        // fails identically — stop rather than issue N doomed requests, and let
+        // the summary say "check your key" instead of "N couldn't be matched".
+        out.authStopped = eligible.length - i;
+        onItemDone?.(eligible[i].id, "auth");
         break;
       } else out.errors++;
     } catch (e) {
@@ -433,7 +461,13 @@ export async function fetchAndCacheItems(
 // ── Author identity backfill (U4) ────────────────────────────────────────────
 
 /** Outcome of resolving one item's author identity in the backfill pass. */
-export type AuthorResolveStatus = "resolved" | "already" | "unresolved" | "budget" | "error";
+export type AuthorResolveStatus =
+  | "resolved"
+  | "already"
+  | "unresolved"
+  | "budget"
+  | "auth"
+  | "error";
 
 /**
  * Ensure a single item's authors are resolved into the SQLite item_authors
@@ -474,6 +508,9 @@ export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<Au
       // the pass keeps issuing one metered call per remaining item, and the stop
       // is miscounted as "unresolved" instead of "budget".
       if (r.status === "error" && r.code === "CG-API42") return "budget";
+      // Key rejected — same reasoning as budget: stop the pass, don't miscount
+      // an auth failure as a per-item no-match.
+      if (r.status === "error" && r.code === "CG-API01") return "auth";
       if (r.status === "cached") return "already";
       // A genuine failure (network, DB lock, auth, unexpected) is an ERROR, not
       // "no author match" — reporting infrastructure trouble as a clean
@@ -491,6 +528,7 @@ export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<Au
     return after.length > 0 ? "resolved" : "unresolved";
   } catch (e) {
     if (e instanceof OpenAlexBudgetError) return "budget";
+    if (e instanceof OpenAlexAuthError) return "auth";
     logError(`resolveAuthorsForItem(${item.id})`, e);
     return "error";
   }
@@ -506,6 +544,8 @@ export interface AuthorBackfillResult {
   already: number;
   unresolved: number;
   budgetStopped: number;
+  /** Items skipped after OpenAlex rejected the API key (CG-API01) — see FetchBatchResult.authStopped. */
+  authStopped: number;
   errors: number;
   cancelled: boolean;
 }
@@ -528,6 +568,7 @@ export async function resolveAuthorsForItems(
     already: 0,
     unresolved: 0,
     budgetStopped: 0,
+    authStopped: 0,
     errors: 0,
     cancelled: false,
   };
@@ -541,6 +582,10 @@ export async function resolveAuthorsForItems(
     const status = await resolveAuthorsForItem(eligible[i]);
     if (status === "budget") {
       out.budgetStopped = eligible.length - i;
+      break;
+    }
+    if (status === "auth") {
+      out.authStopped = eligible.length - i;
       break;
     }
 
