@@ -119,7 +119,7 @@ describe("report privacy net", () => {
     expect(report).toContain("<doi>");
   });
 
-  it("fully scrubs an Elsevier S-PII DOI (id-scrubber must not fragment it first)", () => {
+  it("fully scrubs an Elsevier S-PII DOI (suffix starts with an id-shaped token)", () => {
     stubZotero("/Users/x/Zotero");
     // The suffix starts with an id-shaped token (S0140); if redactOpenAlexIds ran
     // before redactDois it would leave "10.1016/<id>-6736(20)30154-9".

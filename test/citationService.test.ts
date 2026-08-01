@@ -743,6 +743,15 @@ describe("resolveAuthorsForItems (U4)", () => {
     expect(await resolveAuthorsForItem(item)).toBe("error");
   });
 
+  it("returns 'budget' on the no-work-id path when the piggyback fetch is budget-stopped", async () => {
+    // fetchAndCacheItem is total, so a budget-429 comes back as an error result
+    // carrying CG-API42, not a throw; the no-work-id branch must still recognize
+    // it and stop, not miscount it as "unresolved".
+    const item = mockItem({ doi: "10.1234/test" });
+    mockedGetWorkByDOI.mockRejectedValue(new OpenAlexBudgetError());
+    expect(await resolveAuthorsForItem(item)).toBe("budget");
+  });
+
   it("stops on budget exhaustion and counts the remaining items as not attempted", async () => {
     const items = [mockItem({ doi: "10.1234/a" }), mockItem({ doi: "10.1234/b" })];
     await cacheWorkData(items[0], makeFakeWork());

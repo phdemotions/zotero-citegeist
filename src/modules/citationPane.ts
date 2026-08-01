@@ -598,12 +598,27 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
             // would have us writing item A's data into item B's pane.
             const gen = paneGeneration;
 
-            // If we already rendered cached data in onRender and it's fresh, skip
+            // Fresh cache already present. onRender usually painted it, but a
+            // racing column auto-fetch can land the row in the window between
+            // onRender and here — and invalidateColumnCache only repaints
+            // columns, not this pane. So render it now rather than bare-return,
+            // which would strand the loading spinner. Idempotent and cheap.
             const alreadyCached = getCachedData(item);
-            if (alreadyCached && !isCacheStale(item)) return;
+            if (alreadyCached && !isCacheStale(item)) {
+              renderPane(container, alreadyCached, item);
+              setSectionSummary(citationSummary(alreadyCached.citedByCount, item));
+              return;
+            }
 
-            // If a suggestion is already rendered (from a prior fetch stored in Extra), skip
-            if (!alreadyCached && getPendingSuggestion(item)) return;
+            // Same race for a pending suggestion landed by the background fetch:
+            // render it instead of assuming onRender already did.
+            if (!alreadyCached) {
+              const pending = getPendingSuggestion(item);
+              if (pending) {
+                renderSuggestion(container, pending, item, setSectionSummary);
+                return;
+              }
+            }
 
             const result = await fetchAndCacheItem(item);
             if (gen !== paneGeneration) return;

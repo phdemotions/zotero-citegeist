@@ -5,7 +5,7 @@
 import { getSourceStats, type OpenAlexWork } from "../openalex";
 import { cacheItemAuthors, cacheWorkData } from "../cache";
 import { invalidateColumnCache } from "../citationColumn";
-import { escapeHTML, logError, safeInnerHTML } from "../utils";
+import { escapeHTML, logError, safeInnerHTML, saveItemGuarded } from "../utils";
 import { SURNAME_PREFIXES, UNDO_TIMEOUT_MS, type NetworkState } from "./types";
 
 // ────────────────────────────────────────────────────────
@@ -167,7 +167,7 @@ export async function handleUndo(state: NetworkState, workId: string): Promise<v
       const item = Zotero.Items.get(createdItemId);
       if (item) {
         item.deleted = true;
-        await item.saveTx();
+        await saveItemGuarded(item);
       }
     } catch (e) {
       logError("handleUndo", e);
@@ -361,7 +361,7 @@ export async function createZoteroItemFromWork(
     }
   }
 
-  await item.saveTx();
+  await saveItemGuarded(item);
   return item;
 }
 

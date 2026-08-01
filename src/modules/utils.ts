@@ -263,6 +263,25 @@ export class OpenAlexNetworkError extends CitegeistError {
 }
 
 /**
+ * Save a Zotero item, converting any failure into a static-message CacheError.
+ *
+ * `item.saveTx()` rides the same `queryAsync` that dumps every bound parameter
+ * into its error message — for an item write that includes the TITLE and author
+ * names. Logging that raw error would put library content into the diagnostic
+ * ring buffer (no regex can scrub a free-text title). Wrapping keeps it out: the
+ * original lives only as `cause`, which `normalizeError` does not traverse. This
+ * is the item-write twin of the cache layer's `runQuery`, and it still throws,
+ * so callers' own add/undo error handling runs unchanged.
+ */
+export async function saveItemGuarded(item: { saveTx(): Promise<unknown> }): Promise<void> {
+  try {
+    await item.saveTx();
+  } catch (e) {
+    throw new CacheError("item save failed", e);
+  }
+}
+
+/**
  * The plugin's own SQLite database couldn't be opened (corrupt or quarantined
  * `citegeist.sqlite`). Carries CG-DB02 so the startup path shows the actionable
  * "couldn't open the database" guidance rather than the generic CG-BUG01.

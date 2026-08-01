@@ -100,6 +100,7 @@ async function doInit(): Promise<void> {
   // until schema + mirror load have all succeeded, so a `closeCache()`
   // racing against init can't null-out a half-initialized connection.
   let conn: _ZoteroTypes.DBConnection;
+  let rows: ItemCacheRow[];
   try {
     // A corrupt/quarantined citegeist.sqlite fails here — code it CG-DB02 so
     // the startup path records the actionable "couldn't open the database"
@@ -110,11 +111,13 @@ async function doInit(): Promise<void> {
     // Author identity tables (additive, idempotent — plan KTD4). No mirror is
     // loaded for them: author reads query SQLite async in the pane.
     await createAuthorSchema(conn);
+    // The initial mirror load is part of "opening the database": a corrupt
+    // item_cache fails this SELECT too, and it must code CG-DB02, not CG-BUG01.
+    rows = await conn.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
   } catch (e) {
     throw new DatabaseOpenError("could not open the Citegeist database", e);
   }
 
-  const rows = await conn.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
   const nextMirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
 
   db = conn;

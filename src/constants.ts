@@ -152,3 +152,6 @@ export const NO_MATCH_RETRY_DAYS = 30;
  * GitHub comment.
  */
 export const DIAGNOSTIC_RING_BUFFER_SIZE = 50;
+
+/** How long the diagnostic "Copy report" button shows "Copied" before reverting. */
+export const COPY_FEEDBACK_REVERT_MS = 2000;

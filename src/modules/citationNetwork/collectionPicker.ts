@@ -6,7 +6,7 @@
  * consolidated in `renderCollectionOptions`.
  */
 
-import { escapeHTML, logError, safeInnerHTML } from "../utils";
+import { escapeHTML, logError, safeInnerHTML, saveItemGuarded } from "../utils";
 import { bindGuarded } from "../diagnostics";
 import type { CollectionNode, NetworkState } from "./types";
 import type { OpenAlexWork } from "../openalex";
@@ -489,7 +489,7 @@ export async function updateItemCollections(
       if (!newCols.has(colId)) item.removeFromCollection(colId);
     }
 
-    await item.saveTx();
+    await saveItemGuarded(item);
     state.itemCollections.set(workId, new Set(newCols));
   } catch (e) {
     logError("updateItemCollections", e);

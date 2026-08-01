@@ -21,6 +21,7 @@ import { describeCode } from "./codes";
 import { buildDiagnosticReport } from "./report";
 import type { DiagnosticCode } from "./codes";
 import { logError } from "../utils";
+import { COPY_FEEDBACK_REVERT_MS } from "../../constants";
 
 /**
  * Copy text to the system clipboard. `Zotero.Utilities.Internal` isn't in the
@@ -103,7 +104,7 @@ export function buildDiagnosticElement(
     const win = copy.ownerDocument?.defaultView;
     win?.setTimeout(() => {
       copy.textContent = "Copy report";
-    }, 2000);
+    }, COPY_FEEDBACK_REVERT_MS);
   });
 
   disclosure.appendChild(toggle);
