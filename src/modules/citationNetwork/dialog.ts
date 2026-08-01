@@ -444,7 +444,6 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
     work: null,
     mode: "author",
     authorId: profile.id,
-    authorProfile: profile,
     results: [],
     cursor: "*",
     hasMore: true,

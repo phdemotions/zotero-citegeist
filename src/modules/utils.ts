@@ -2,7 +2,7 @@
  * Shared utilities for Citegeist.
  */
 
-import { DIAGNOSTIC_CODES, type DiagnosticCode } from "./diagnostics/codes";
+import { type DiagnosticCode } from "./diagnostics/codes";
 import { recordDiagnostic } from "./diagnostics/record";
 
 /**
@@ -117,12 +117,12 @@ export function redactPaths(s: string): string {
  * the others.
  */
 export function redactSensitive(s: string): string {
-  // DOIs are collapsed BEFORE OpenAlex ids: an Elsevier S-PII DOI suffix like
-  // `10.1016/S0140-6736(20)…` starts with an id-shaped token (`S0140`), so if
-  // the id scrub ran first it would rewrite that chunk to `<id>` and the
-  // injected angle brackets would then block the DOI scrub from spanning the
-  // rest — leaking the tail. DOI-first avoids the interference (a collapsed
-  // `<doi>` has nothing left for the id scrub to match).
+  // DOIs are collapsed BEFORE OpenAlex ids. Under the current regexes the two
+  // are order-independent (redactDois's `[^\s"']+` spans the `<id>` a prior id
+  // scrub would inject, so either order yields `<doi>` for an Elsevier S-PII
+  // suffix like `10.1016/S0140-6736(20)…`). DOI-first is kept deliberately as
+  // the safe order for the day redactDois is tightened to stop at `<>`: id-first
+  // would then leave `10.1016/<id>-6736(20)…`, leaking the tail into the report.
   return redactOpenAlexIds(redactDois(redactPaths(redactApiKey(s))));
 }
 
@@ -238,16 +238,6 @@ export class CitegeistError extends Error {
   ) {
     super(message);
     this.name = "CitegeistError";
-  }
-
-  /** The user-facing explanation for this error's code. */
-  get userMessage(): string {
-    return DIAGNOSTIC_CODES[this.code].message;
-  }
-
-  /** True when repeating the same action might succeed shortly. */
-  get retryable(): boolean {
-    return DIAGNOSTIC_CODES[this.code].retryable;
   }
 }
 

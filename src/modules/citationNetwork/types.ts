@@ -3,7 +3,6 @@
  */
 
 import type { OpenAlexWork } from "../openalex";
-import type { OpenAlexAuthorProfile } from "../openalexAuthors";
 
 /**
  * Dialog subject: works that cite / are cited by a paper, or the works OF an
@@ -75,8 +74,6 @@ export interface NetworkState {
   mode: NetworkMode;
   /** `author` mode only: the OpenAlex author id the works are filtered by. */
   authorId?: string;
-  /** `author` mode only: the resolved profile driving the header hero. */
-  authorProfile?: OpenAlexAuthorProfile;
   results: OpenAlexWork[];
   cursor: string;
   hasMore: boolean;

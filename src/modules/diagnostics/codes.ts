@@ -17,9 +17,9 @@
  *    call sites that leave the user in the same position with the same next
  *    step share a code.
  * 3. **The message is the user's whole explanation.** Say what happened, then
- *    what to do. No exception text, no "Error:" prefix, no first person.
- * 4. **`retryable` is a promise to the UI**: true means "the same action may
- *    work shortly", which is what gates whether we offer a retry affordance.
+ *    what to do. No exception text, no "Error:" prefix, no first person. Whether
+ *    the failure is transient ("try again in a few minutes") or permanent
+ *    ("resets within 24 hours", "check the key") is carried by the copy itself.
  *
  * This module deliberately imports nothing. It sits at the bottom of the
  * dependency graph so any layer — fetch, cache, UI — can name a code without
@@ -38,8 +38,6 @@ export interface DiagnosticCodeEntry {
    * do about it. This is the entire explanation most users will ever read.
    */
   readonly message: string;
-  /** True when repeating the same action might succeed shortly. */
-  readonly retryable: boolean;
   /**
    * A code that was reserved but is intentionally not produced — the situation
    * it named turned out to be a calm outcome shown as plain copy, not a coded
@@ -62,47 +60,40 @@ export const DIAGNOSTIC_CODES = {
     area: "NET",
     message:
       "Couldn't reach OpenAlex. Check your internet connection and try again in a few minutes.",
-    retryable: true,
   },
   "CG-API01": {
     code: "CG-API01",
     area: "API",
     message:
       "OpenAlex rejected your API key. Check the key in Citegeist settings, or clear it to use the free anonymous quota.",
-    retryable: false,
   },
   "CG-API42": {
     code: "CG-API42",
     area: "API",
     message:
       "You've used up today's OpenAlex request budget. It resets within 24 hours. A free OpenAlex API key raises the limit — add one in Citegeist settings.",
-    retryable: false,
   },
   "CG-API50": {
     code: "CG-API50",
     area: "API",
     message: "OpenAlex returned an unexpected response. Try again in a few minutes.",
-    retryable: true,
   },
   "CG-DB01": {
     code: "CG-DB01",
     area: "DB",
     message:
       "Couldn't save to Citegeist's local database. If your Zotero data folder is inside Dropbox, iCloud Drive, OneDrive or Box, the sync client can lock the file — pausing sync usually clears it.",
-    retryable: true,
   },
   "CG-DB02": {
     code: "CG-DB02",
     area: "DB",
     message:
       "Citegeist's local database couldn't be opened. Restart Zotero; if it persists, quit Zotero and check that citegeist.sqlite in your data folder isn't quarantined by antivirus.",
-    retryable: false,
   },
   "CG-MATCH01": {
     code: "CG-MATCH01",
     area: "MATCH",
     message: "This work isn't in OpenAlex, so there are no citation metrics to show.",
-    retryable: false,
     retired: true,
   },
   "CG-MATCH02": {
@@ -110,7 +101,6 @@ export const DIAGNOSTIC_CODES = {
     area: "MATCH",
     message:
       "Not found by identifier, and a title search found no confident match. Adding a DOI is the most reliable fix.",
-    retryable: false,
     retired: true,
   },
   "CG-ID01": {
@@ -118,21 +108,18 @@ export const DIAGNOSTIC_CODES = {
     area: "ID",
     message:
       "No recognized identifier on this item. Add a DOI, PMID, arXiv ID, or ISBN to enable citation data.",
-    retryable: false,
     retired: true,
   },
   "CG-UI01": {
     code: "CG-UI01",
     area: "UI",
     message: "Something went wrong drawing this panel. Switch items and back, or restart Zotero.",
-    retryable: true,
   },
   "CG-BUG01": {
     code: "CG-BUG01",
     area: "BUG",
     message:
       "Citegeist hit an unexpected problem. Copying the report below into a GitHub issue is the fastest way to get it fixed.",
-    retryable: true,
   },
 } as const satisfies Record<string, DiagnosticCodeEntry>;
 

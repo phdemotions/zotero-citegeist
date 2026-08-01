@@ -121,8 +121,12 @@ describe("report privacy net", () => {
 
   it("fully scrubs an Elsevier S-PII DOI (suffix starts with an id-shaped token)", () => {
     stubZotero("/Users/x/Zotero");
-    // The suffix starts with an id-shaped token (S0140); if redactOpenAlexIds ran
-    // before redactDois it would leave "10.1016/<id>-6736(20)30154-9".
+    // An Elsevier S-PII DOI: the suffix opens with an id-shaped token (S0140) and
+    // carries a parenthesized tail. Pins that redactDois collapses the WHOLE thing
+    // to <doi> — the id-shaped prefix doesn't fragment the match and the tail
+    // (30154-9) doesn't escape. (redactSensitive runs DOI-first; see its comment
+    // for why that order stays the safe one even though it's moot under today's
+    // bracket-agnostic regex.)
     logError("cacheWorkData", new Error("locked 10.1016/S0140-6736(20)30154-9 done"));
     const report = buildDiagnosticReport({});
     expect(report).not.toContain("S0140-6736");
