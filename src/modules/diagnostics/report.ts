@@ -13,7 +13,7 @@
 
 import { describeCode } from "./codes";
 import { recentDiagnostics } from "./record";
-import { normalizeError } from "../utils";
+import { normalizeError, redactSensitive } from "../utils";
 
 /**
  * Build-time stamp injected by scripts/build.mjs. The version is held steady
@@ -99,7 +99,12 @@ export function buildDiagnosticReport(ctx: ReportContext): string {
 
     if (ctx.code) {
       const entry = describeCode(ctx.code);
-      lines.push("", `Current problem: ${entry.code}${ctx.context ? ` at ${ctx.context}` : ""}`);
+      // Scrub the call-site label the same way the ring-buffer path does in
+      // logError. Today these are static developer strings, but this is the
+      // second path `context` takes into the shareable report — netting it here
+      // keeps the "no library content in the report" promise true for both.
+      const where = ctx.context ? ` at ${redactSensitive(ctx.context)}` : "";
+      lines.push("", `Current problem: ${entry.code}${where}`);
       lines.push(entry.message);
     }
 

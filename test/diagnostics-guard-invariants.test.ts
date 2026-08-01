@@ -281,7 +281,16 @@ describe("guard", () => {
     // The char class is [WASIPFCTL]; without a per-prefix assertion, trimming it
     // (e.g. dropping A) would leave an author id — which resolves 1:1 to a named
     // person — flowing into the shareable report, with the suite still green.
-    for (const id of ["A5023888391", "I1234567", "P4210987", "F9998887", "C1111222"]) {
+    // All nine letters are exercised: W (above), S (above), A/I/P/F/C/T/L here.
+    for (const id of [
+      "A5023888391",
+      "I1234567",
+      "P4210987",
+      "F9998887",
+      "C1111222",
+      "T5000001",
+      "L1234567",
+    ]) {
       logError(`ctx ${id}`, new Error("x"));
       expect(recentDiagnostics().at(-1)?.context, `${id} not scrubbed`).not.toContain(id);
     }

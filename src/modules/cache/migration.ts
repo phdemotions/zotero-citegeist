@@ -309,7 +309,13 @@ function buildRowFromLegacy(
   if (get("isRetracted") !== undefined) {
     row.is_retracted = get("isRetracted") === "true" ? 1 : 0;
   }
-  row.last_fetched = get("lastFetched") ?? null;
+  // last_fetched means "real metrics were cached at this moment", so it must not
+  // survive without the work id those metrics hang on. A legacy row with a
+  // malformed/absent openAlexId but a surviving lastFetched (hand-edited or
+  // corrupted Extra) would otherwise read as fresh (isCacheStale=false) while
+  // getCachedData returns null (keyed on open_alex_id) — a row that never
+  // refetches yet shows no data, which strands the pane on its spinner.
+  row.last_fetched = row.open_alex_id ? (get("lastFetched") ?? null) : null;
   row.source_id = parseSourceId(get("sourceId"));
   const c2y = get("citedness2yr");
   if (c2y) row.citedness_2yr = safeParseFloat(c2y);

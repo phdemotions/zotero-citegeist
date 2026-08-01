@@ -35,6 +35,7 @@ import { getItemAuthors, getAuthor, type AuthorRow } from "./cache/authors";
 import {
   buildAuthorRowViewModels,
   compactTrend,
+  formatMetric,
   getAuthorCreators,
   maybeReconcileMerge,
   persistProfileMetrics,
@@ -635,6 +636,19 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
                 // the exact silent-hang this handler's boundary exists to prevent.
                 renderEmptyState(container, setSectionSummary, "matchSaved");
               }
+            } else if (result.status === "cached") {
+              // Cache reports fresh. onRender usually painted it; render here too
+              // for the race where a background fetch landed between onRender and
+              // now. If the row is "fresh" yet has no readable data — a v1→v2
+              // migrated row that kept last_fetched but lost its open_alex_id —
+              // fall to a terminal state rather than leave the spinner up.
+              const cachedData = getCachedData(item);
+              if (cachedData) {
+                renderPane(container, cachedData, item);
+                setSectionSummary(citationSummary(cachedData.citedByCount, item));
+              } else {
+                renderEmptyState(container, setSectionSummary, "notFound");
+              }
             } else if (result.status === "suggestion") {
               const suggestion = getPendingSuggestion(item);
               if (suggestion) {
@@ -643,20 +657,31 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
               } else {
                 renderEmptyState(container, setSectionSummary, "matchSaved");
               }
-            } else if (result.status === "error" && !alreadyCached) {
-              // "Not on OpenAlex" and "no identifier" are outcomes, not failures —
-              // plain copy, no diagnostic affordance, so the pane stays quiet when
-              // nothing is actually broken. A network or unexpected failure gets
-              // the coded state, because that is what a user ends up reporting.
-              if (result.error === "no-match") {
+            } else {
+              // Only "error" remains — but this is a catch-all `else`, not an
+              // `else if`, so no result status can ever fall through and strand
+              // the loading spinner (guarded invariant: every async exit renders
+              // a terminal state; a "cached" fall-through hung the pane once).
+              if (alreadyCached) {
+                // A refetch of stale data failed, but onRender already painted the
+                // cached data — keep it rather than replace good content with an
+                // error surface.
+              } else if (result.status === "error" && result.error === "no-match") {
+                // "Not on OpenAlex" and "no identifier" are outcomes, not failures
+                // — plain copy, no diagnostic affordance, so the pane stays quiet
+                // when nothing is actually broken. A network or unexpected failure
+                // gets the coded state, because that is what a user reports.
                 renderEmptyState(container, setSectionSummary, "notFoundTitle");
-              } else if (result.error === "not-found" || result.error === "no-identifier") {
+              } else if (
+                result.status === "error" &&
+                (result.error === "not-found" || result.error === "no-identifier")
+              ) {
                 renderEmptyState(container, setSectionSummary, "notFound");
               } else {
                 renderDiagnosticState(
                   container,
                   setSectionSummary,
-                  result.code ?? "CG-BUG01",
+                  (result.status === "error" ? result.code : undefined) ?? "CG-BUG01",
                   `pane fetch (item ${item.id})`,
                 );
               }
@@ -1293,7 +1318,12 @@ async function fillAuthorMetrics(
       maybeReconcileMerge(profile);
       if (gen !== paneGeneration) return;
       const span = hSpans.get(vm.authorId);
-      if (span) span.textContent = `h ${profile.hIndex.toLocaleString("en-US")}`;
+      // formatMetric carries the "≥" when the value is a derived, page-capped
+      // lower bound (a cached dialog derivation can return one even under
+      // aggregatesOnly), so the pane's h-index matches the dialog header rather
+      // than printing a lower bound as if it were exact.
+      if (span)
+        span.textContent = `h ${formatMetric(profile.hIndex, profile.metricsAreLowerBound)}`;
     } catch (e) {
       logError("fillAuthorMetrics", e);
       return;

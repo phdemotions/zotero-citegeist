@@ -95,7 +95,6 @@ await build({
   sourcemap: isDev ? "inline" : false,
   minify: !isDev,
   define: {
-    __DEV__: isDev ? "true" : "false",
     // Every build gets a unique stamp. The version alone is useless for telling
     // builds apart: we deliberately hold the version steady across many
     // iterations, and Zotero will happily keep running an older same-version
