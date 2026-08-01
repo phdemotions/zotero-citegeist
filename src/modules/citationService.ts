@@ -60,7 +60,7 @@ export type FetchError =
   | "unexpected";
 
 /**
- * Discriminated union for fetch results. Five states:
+ * Discriminated union for fetch results. Four states:
  *   "ok"         — fresh data fetched; `work` is the OpenAlex record
  *   "cached"     — cache is still fresh; nothing was fetched
  *   "error"      — fetch failed; `error` describes why

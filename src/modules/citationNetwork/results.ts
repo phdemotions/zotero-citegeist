@@ -138,6 +138,13 @@ export async function loadResults(state: NetworkState, append = false): Promise<
     if (totalEl) totalEl.textContent = `${response.meta.count.toLocaleString()} total`;
 
     const searchInput = state.dialog.querySelector(".cg-search-input") as HTMLInputElement;
+    // Settle the loading flag BEFORE rendering: renderResults' empty-state guard
+    // is `results.length === 0 && !state.loading`, so rendering while still
+    // loading would suppress the "No results" copy on a genuinely empty set and
+    // leave a blank body. (The trailing reset below stays as the catch-path net.)
+    state.loading = false;
+    body?.setAttribute("aria-busy", "false");
+    state.dialog.classList.remove("cg-is-loading");
     renderResults(state, searchInput?.value || "");
   } catch (e) {
     if (gen !== state.generation || state.phase === "closed") {

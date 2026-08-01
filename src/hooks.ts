@@ -22,12 +22,7 @@ import {
   purgeAllAuthorRelations,
 } from "./modules/cache";
 import { logError } from "./modules/utils";
-import {
-  buildDiagnosticReport,
-  clearDiagnostics,
-  recentDiagnostics,
-  setPluginVersion,
-} from "./modules/diagnostics";
+import { buildDiagnosticReport, clearDiagnostics, setPluginVersion } from "./modules/diagnostics";
 import { PREF_AUTHOR_RELATIONS_PURGED, PREF_LAST_BACKUP_PATH, SETTINGS_PANE_ID } from "./constants";
 
 // Bare FTL filename. Zotero auto-registers the plugin's locale/<locale>/*.ftl
@@ -56,7 +51,6 @@ declare const __BUILD_ID__: string;
 function installDiagnosticsBridge(): void {
   (Zotero as unknown as Record<string, unknown>).Citegeist = {
     buildDiagnosticReport,
-    recentDiagnostics,
     clearDiagnostics,
   };
 }

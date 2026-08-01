@@ -181,7 +181,7 @@ function renderEmptyState(
   const s = EMPTY_STATES[key];
   // Wrapped in a card so loading/empty states sit on the same surface as real
   // content: no bare text line, and no layout jump when the cards replace them.
-  container.innerHTML = `<div class="cg-card cg-state-card"><div class="${s.cls}">${s.html}</div></div>`;
+  container.innerHTML = `<div class="cg-card"><div class="${s.cls}">${s.html}</div></div>`;
   setSummary(s.summary);
 }
 
@@ -202,7 +202,7 @@ function renderDiagnosticState(
   clearSuggestionAria(container);
   container.innerHTML = "";
   const card = container.ownerDocument.createElement("div");
-  card.className = "cg-card cg-state-card";
+  card.className = "cg-card";
   card.appendChild(buildDiagnosticElement(container.ownerDocument, code, context));
   container.appendChild(card);
   setSummary("Error");

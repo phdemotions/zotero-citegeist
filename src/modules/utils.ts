@@ -117,7 +117,13 @@ export function redactPaths(s: string): string {
  * the others.
  */
 export function redactSensitive(s: string): string {
-  return redactDois(redactOpenAlexIds(redactPaths(redactApiKey(s))));
+  // DOIs are collapsed BEFORE OpenAlex ids: an Elsevier S-PII DOI suffix like
+  // `10.1016/S0140-6736(20)…` starts with an id-shaped token (`S0140`), so if
+  // the id scrub ran first it would rewrite that chunk to `<id>` and the
+  // injected angle brackets would then block the DOI scrub from spanning the
+  // rest — leaking the tail. DOI-first avoids the interference (a collapsed
+  // `<doi>` has nothing left for the id scrub to match).
+  return redactOpenAlexIds(redactDois(redactPaths(redactApiKey(s))));
 }
 
 /**
@@ -126,10 +132,13 @@ export function redactSensitive(s: string): string {
  * A DOI is the most direct pointer to library content there is, and it is named
  * first in the report's on-screen promise, so it gets the same defense-in-depth
  * net as an OpenAlex id. Matches the bare form, which also covers a doi.org URL
- * (the DOI is a substring of it).
+ * (the DOI is a substring of it). The suffix runs to the next whitespace or
+ * quote — NOT stopping at parens/angle brackets, so a legacy Wiley SICI or
+ * Elsevier PII DOI (`10.1002/(SICI)…<…>…`) is scrubbed whole rather than
+ * truncated at its first bracket.
  */
 export function redactDois(s: string): string {
-  return s.replace(/\b10\.\d{4,9}\/[^\s"')<>]+/gi, "<doi>");
+  return s.replace(/\b10\.\d{4,9}\/[^\s"']+/gi, "<doi>");
 }
 
 /**
@@ -254,11 +263,9 @@ export class OpenAlexNetworkError extends CitegeistError {
 }
 
 /**
- * OpenAlex answered, but with something we can't use — an unexpected status
- * (400/422/…) or a body that isn't valid JSON. Distinct from
- * {@link OpenAlexNetworkError}: telling a user to "check your internet
- * connection" when the service replied is misleading, and it sends them
- * debugging the wrong thing.
+ * The plugin's own SQLite database couldn't be opened (corrupt or quarantined
+ * `citegeist.sqlite`). Carries CG-DB02 so the startup path shows the actionable
+ * "couldn't open the database" guidance rather than the generic CG-BUG01.
  */
 export class DatabaseOpenError extends CitegeistError {
   constructor(message: string, cause?: unknown) {
@@ -267,6 +274,13 @@ export class DatabaseOpenError extends CitegeistError {
   }
 }
 
+/**
+ * OpenAlex answered, but with something we can't use — an unexpected status
+ * (400/422/…) or a body that isn't valid JSON. Distinct from
+ * {@link OpenAlexNetworkError}: telling a user to "check your internet
+ * connection" when the service replied is misleading, and it sends them
+ * debugging the wrong thing.
+ */
 export class OpenAlexResponseError extends CitegeistError {
   constructor(message: string, cause?: unknown) {
     super(message, "CG-API50", cause);

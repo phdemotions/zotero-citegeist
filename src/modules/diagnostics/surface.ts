@@ -98,6 +98,12 @@ export function buildDiagnosticElement(
     copy.textContent = copyToClipboard(buildDiagnosticReport({ code, context }))
       ? "Copied"
       : "Couldn't copy";
+    // Revert so a second copy re-signals (otherwise the label sticks on
+    // "Copied" and a repeat click gives no feedback).
+    const win = copy.ownerDocument?.defaultView;
+    win?.setTimeout(() => {
+      copy.textContent = "Copy report";
+    }, 2000);
   });
 
   disclosure.appendChild(toggle);

@@ -118,4 +118,27 @@ describe("report privacy net", () => {
     expect(report).not.toContain("10.1038/nature12373");
     expect(report).toContain("<doi>");
   });
+
+  it("fully scrubs an Elsevier S-PII DOI (id-scrubber must not fragment it first)", () => {
+    stubZotero("/Users/x/Zotero");
+    // The suffix starts with an id-shaped token (S0140); if redactOpenAlexIds ran
+    // before redactDois it would leave "10.1016/<id>-6736(20)30154-9".
+    logError("cacheWorkData", new Error("locked 10.1016/S0140-6736(20)30154-9 done"));
+    const report = buildDiagnosticReport({});
+    expect(report).not.toContain("S0140-6736");
+    expect(report).not.toContain("30154-9");
+    expect(report).toContain("<doi>");
+  });
+
+  it("fully scrubs a legacy Wiley SICI DOI with parens and angle brackets", () => {
+    stubZotero("/Users/x/Zotero");
+    logError(
+      "cacheWorkData",
+      new Error("x 10.1002/(SICI)1097-0266(199902)20:2<195::AID>3.0.CO end"),
+    );
+    const report = buildDiagnosticReport({});
+    expect(report).not.toContain("SICI");
+    expect(report).not.toContain("AID");
+    expect(report).toContain("<doi>");
+  });
 });

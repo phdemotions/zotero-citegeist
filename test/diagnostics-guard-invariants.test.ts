@@ -260,6 +260,23 @@ describe("guard", () => {
     logError("getSourceStats(S2764375690)", new Error("x"));
     expect(recentDiagnostics().at(-1)?.context).not.toContain("S2764375690");
   });
+
+  it("scrubs EVERY OpenAlex entity prefix, not just W/S", () => {
+    // The char class is [WASIPFCTL]; without a per-prefix assertion, trimming it
+    // (e.g. dropping A) would leave an author id — which resolves 1:1 to a named
+    // person — flowing into the shareable report, with the suite still green.
+    for (const id of ["A5023888391", "I1234567", "P4210987", "F9998887", "C1111222"]) {
+      logError(`ctx ${id}`, new Error("x"));
+      expect(recentDiagnostics().at(-1)?.context, `${id} not scrubbed`).not.toContain(id);
+    }
+  });
+
+  it("scrubs a Linux /home path (not only /Users and C:\\Users)", () => {
+    logError("prune failed for /home/janedoe/Zotero/x.sqlite", new Error("x"));
+    const ctx = recentDiagnostics().at(-1)?.context ?? "";
+    expect(ctx).not.toContain("janedoe");
+    expect(ctx).not.toContain("/home/");
+  });
 });
 
 /**
