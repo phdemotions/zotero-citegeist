@@ -381,6 +381,18 @@ describe("host entry points are guarded", () => {
     }
   });
 
+  it("every Zotero item write goes through saveItemGuarded — no raw saveTx feeds the log", () => {
+    // item.saveTx() rides a queryAsync that dumps bound params (title + author
+    // names) into its error message. A raw call whose rejection reaches logError
+    // leaks library content into the shareable report — the exact class fixed
+    // three times over. Allowed: utils.ts (the saveItemGuarded wrapper itself)
+    // and migration.ts (saveTxWithDeadline, whose errors go to local debug, not
+    // the ring buffer). Everything else must call saveItemGuarded.
+    const allowed = new Set(["src/modules/utils.ts", "src/modules/cache/migration.ts"]);
+    const offenders = allSrcFiles().filter((f) => !allowed.has(f) && /\.saveTx\(/.test(src(f)));
+    expect(offenders, "these modules call item.saveTx() directly, not saveItemGuarded").toEqual([]);
+  });
+
   it("logError is the single funnel that records — no module calls recordDiagnostic directly", () => {
     // The funnel scrubs the API key AND username-bearing paths before anything
     // reaches the shareable ring buffer; a direct recordDiagnostic call anywhere

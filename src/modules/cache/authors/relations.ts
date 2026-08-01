@@ -13,6 +13,8 @@
  * sync-safe predicate or channel.
  */
 
+import { saveItemGuarded } from "../../utils";
+
 export const AUTHOR_RELATION_PREDICATE = "openalex:author";
 /**
  * One-time cleanup that strips EVERY `openalex:author` item relation this plugin
@@ -61,7 +63,7 @@ export async function purgeAllAuthorRelations(): Promise<PurgeResult> {
       // array, so iterating `uris` directly would skip every other entry.
       for (const uri of [...uris]) item.removeRelation(AUTHOR_RELATION_PREDICATE, uri);
       try {
-        await item.saveTx();
+        await saveItemGuarded(item);
         cleaned++;
       } catch {
         // Read-only library / locked item — its relation survives, so the pass

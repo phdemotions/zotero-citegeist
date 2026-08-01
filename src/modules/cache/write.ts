@@ -21,6 +21,7 @@ import {
   parseWorkId,
   toDbBool,
 } from "./types";
+import { saveItemGuarded } from "../utils";
 import { deleteRow, mutateRow } from "./db";
 import { isMigrationInProgress } from "./migration";
 
@@ -149,7 +150,7 @@ export async function clearCache(item: CacheItemKey | _ZoteroTypes.Item): Promis
         .replace(/\n+$/, "");
       if (stripped !== extra) {
         fullItem.setField("extra", stripped);
-        await fullItem.saveTx();
+        await saveItemGuarded(fullItem);
       }
     }
   }
@@ -329,7 +330,7 @@ async function writeConfirmedMatchToExtra(
   const newLines = setExtraConfirmedMatch(extra.split("\n"), openAlexId);
   const cleaned = newLines.join("\n").replace(/\n+$/, "");
   item.setField("extra", cleaned);
-  await item.saveTx();
+  await saveItemGuarded(item);
 }
 
 /**

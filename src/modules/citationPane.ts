@@ -40,7 +40,7 @@ import {
   persistProfileMetrics,
   type AuthorRowViewModel,
 } from "./authorProfile";
-import { logError, isBookType, toOrdinal } from "./utils";
+import { logError, isBookType, toOrdinal, saveItemGuarded } from "./utils";
 import { buildDiagnosticElement, guard, guardAsync, type DiagnosticCode } from "./diagnostics";
 import { cgDesignTokens } from "./ui/tokens";
 import { cgComponents } from "./ui/components";
@@ -796,7 +796,7 @@ function renderDoiPrompt(container: HTMLElement, item: _ZoteroTypes.Item, doi: s
   yesBtn.addEventListener("click", async () => {
     try {
       item.setField("DOI", normalizeDOI(doi) ?? doi);
-      await item.saveTx();
+      await saveItemGuarded(item);
       prompt.remove();
     } catch (e) {
       logError("renderDoiPrompt add DOI", e);

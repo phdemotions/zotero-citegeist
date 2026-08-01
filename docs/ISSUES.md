@@ -20,7 +20,7 @@ tags: [citegeist, issues]
 | P0 (Blocker) | 0    |
 | P1 (High)    | 0    |
 | P2 (Medium)  | 2    |
-| P3 (Low)     | 4    |
+| P3 (Low)     | 5    |
 
 ---
 
@@ -71,6 +71,12 @@ _None currently._
 **Impact:** The native `openalex:author` item-relation handoff (Phase B, U5) hasn't been confirmed to survive a real Zotero 2-device sync round-trip; `citegeist.sqlite`-direct read is the documented fallback.
 **Fix:** Resolve authors on device A, sync, confirm the relations arrive intact on device B.
 **Effort:** Low (manual check)
+
+### DEBT-011: Add-button aria-label interpolates the collection name unescaped
+
+**Impact:** `results.ts` and `actions.ts` build the citation-network "+ Add to _Collection_" button via `safeInnerHTML`, and the visible label escapes the collection name (`escapeHTML(defaultName)`) but the sibling `aria-label` interpolates it raw. A collection named with `<`/`&`/quotes yields a malformed attribute; low XSS risk (attribute context, DOMParser-parsed) but an inconsistency. Pre-existing on `main` (predates this branch) — surfaced by the multi-round review, carved out to keep the review PR single-concern.
+**Fix:** wrap the `defaultName` interpolation in the aria-label with `escapeHTML`, both sites.
+**Effort:** Trivial.
 
 ### DEBT-009: v3.0.0 review advisory residuals
 
