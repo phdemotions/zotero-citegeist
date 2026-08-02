@@ -6,7 +6,7 @@
  * metric formatting (the ≥ lower-bound labels), the profile + author-row
  * view-models ({@link buildProfileViewModel}, {@link buildAuthorRowViewModels}),
  * the pane's trend + creator helpers ({@link compactTrend},
- * {@link getAuthorCreators}), and the fetch-error to render-state mapping.
+ * {@link getAuthorCreators}).
  *
  * The dialog's "author works" mode calls fetchAuthorProfile + buildProfileViewModel
  * directly for its hero; this module surfaces the pure pieces it composes.
@@ -15,7 +15,7 @@
  * requested author id merged into a survivor; {@link maybeReconcileMerge}
  * rewrites the stored refs to the canonical survivor at the next fetch.
  */
-import { type OpenAlexAuthorProfile } from "./openalexAuthors";
+import { parseOrcid, type OpenAlexAuthorProfile } from "./openalexAuthors";
 import type { OpenAlexWork } from "./openalex";
 import {
   updateAuthorMetrics,
@@ -23,7 +23,7 @@ import {
   type AuthorRow,
   type ItemAuthorRow,
 } from "./cache/authors";
-import { OpenAlexBudgetError, OpenAlexAuthError, logError } from "./utils";
+import { logError } from "./utils";
 
 // ────────────────────────────────────────────────────────
 // Metric formatting
@@ -59,7 +59,9 @@ export interface ProfileViewModel {
 
 /** Map an OpenAlex profile to display strings (≥ labels applied per KTD2). */
 export function buildProfileViewModel(p: OpenAlexAuthorProfile): ProfileViewModel {
-  const orcid = p.orcid ? p.orcid.replace(/^https?:\/\/orcid\.org\//i, "") : null;
+  // parseOrcid strips the URL prefix AND validates the checksum shape, so a
+  // malformed value nulls out instead of rendering a broken "ORCID …" line.
+  const orcid = p.orcid ? parseOrcid(p.orcid) : null;
   return {
     name: p.displayName ?? "Unknown author",
     orcid,
@@ -140,33 +142,6 @@ export function buildAuthorRowViewModels(
     });
 }
 
-// ────────────────────────────────────────────────────────
-// Fetch → render state
-// ────────────────────────────────────────────────────────
-
-/** The resolved state of an author-profile load — the render branches. */
-export type ProfileState =
-  | {
-      kind: "ready";
-      profile: OpenAlexAuthorProfile;
-      works: OpenAlexWork[];
-      nextCursor: string | null;
-    }
-  | { kind: "empty"; profile: OpenAlexAuthorProfile }
-  | { kind: "budget" }
-  | { kind: "auth" }
-  | { kind: "network" }
-  | { kind: "not-found" };
-
-/** Map a thrown fetch error to its non-ready profile state. */
-export function profileErrorState(
-  e: unknown,
-): Extract<ProfileState, { kind: "budget" | "auth" | "network" }> {
-  if (e instanceof OpenAlexBudgetError) return { kind: "budget" };
-  if (e instanceof OpenAlexAuthError) return { kind: "auth" };
-  return { kind: "network" };
-}
-
 /**
  * Cache exact profile metrics so the Authors-section row hint shows them without
  * a re-fetch. Skips lower-bound (derived + capped) metrics so a ≥ value is never
@@ -227,6 +202,33 @@ export function compactTrend(work?: OpenAlexWork): string | null {
 }
 
 /**
+ * The Zotero creator-type id for "author", or undefined when the API is
+ * unavailable (best-effort — callers then treat every creator as an author).
+ */
+export function getAuthorTypeID(): number | undefined {
+  try {
+    return (Zotero as { CreatorTypes?: { getID?: (n: string) => number } }).CreatorTypes?.getID?.(
+      "author",
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether a creator counts as an author. Non-authors (editors, translators) are
+ * skipped; an unknown creator type (or an unavailable CreatorTypes API) is
+ * treated as an author. Shared by the pane's row builder and the dialog's
+ * source-meta line so the "which creators are authors" rule lives in one place.
+ */
+export function isAuthorCreator(
+  c: { creatorTypeID?: number },
+  authorTypeID: number | undefined,
+): boolean {
+  return authorTypeID == null || c.creatorTypeID == null || c.creatorTypeID === authorTypeID;
+}
+
+/**
  * The item's author-type creators, each carrying its 0-based index AMONG authors
  * (the position that aligns to OpenAlex `author_position` / the `item_authors`
  * write key). Non-author creators (editors, translators) are skipped WITHOUT
@@ -235,14 +237,7 @@ export function compactTrend(work?: OpenAlexWork): string | null {
  * creator is treated as an author (best-effort).
  */
 export function getAuthorCreators(item: _ZoteroTypes.Item): AuthorCreator[] {
-  let authorTypeID: number | undefined;
-  try {
-    authorTypeID = (
-      Zotero as { CreatorTypes?: { getID?: (n: string) => number } }
-    ).CreatorTypes?.getID?.("author");
-  } catch {
-    authorTypeID = undefined;
-  }
+  const authorTypeID = getAuthorTypeID();
   const creators = (item.getCreators?.() ?? []) as Array<{
     creatorTypeID?: number;
     lastName?: string;
@@ -252,9 +247,7 @@ export function getAuthorCreators(item: _ZoteroTypes.Item): AuthorCreator[] {
   const out: AuthorCreator[] = [];
   let authorIdx = 0;
   for (const c of creators) {
-    const isAuthor =
-      authorTypeID == null || c.creatorTypeID == null || c.creatorTypeID === authorTypeID;
-    if (!isAuthor) continue;
+    if (!isAuthorCreator(c, authorTypeID)) continue;
     out.push({ name: creatorName(c) || `Author ${authorIdx + 1}`, position: authorIdx });
     authorIdx++;
   }

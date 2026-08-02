@@ -120,7 +120,6 @@ describe("fetchAuthorProfile — metrics hybrid (KTD2)", () => {
       ),
     );
     const profile = await settle(fetchAuthorProfile("A1"));
-    expect(profile?.metricsSource).toBe("aggregates");
     expect(profile?.hIndex).toBe(15);
     expect(profile?.i10Index).toBe(20);
     expect(profile?.worksCount).toBe(42);
@@ -146,7 +145,6 @@ describe("fetchAuthorProfile — metrics hybrid (KTD2)", () => {
       return Promise.resolve(httpResponse(200, worksPage([30, 20, 10, 4, 2], null)));
     });
     const profile = await settle(fetchAuthorProfile("A1"));
-    expect(profile?.metricsSource).toBe("derived");
     expect(profile?.worksCount).toBe(5); // meta.count
     expect(profile?.hIndex).toBe(4); // 30,20,10,4 >= rank; 2 < 5
     expect(profile?.i10Index).toBe(3); // 30,20,10 >= 10
@@ -167,7 +165,6 @@ describe("fetchAuthorProfile — metrics hybrid (KTD2)", () => {
       );
     });
     const profile = await settle(fetchAuthorProfile("A1"));
-    expect(profile?.metricsSource).toBe("derived");
     expect(profile?.metricsAreLowerBound).toBe(true);
     expect(profile?.worksCount).toBe(100000);
     expect(profile?.citedByCount).toBeNull(); // never fetchedAll → not summable

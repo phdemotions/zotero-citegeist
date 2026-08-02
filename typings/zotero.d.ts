@@ -195,6 +195,10 @@ declare namespace _ZoteroTypes {
 
 declare const Zotero: {
   version: string;
+  /** Host platform string, e.g. "MacIntel". Used in the diagnostic report. */
+  platform?: string;
+  /** Active UI locale, e.g. "en-US". Used in the diagnostic report. */
+  locale?: string;
   debug(msg: string, level?: number): void;
   log(msg: string): void;
   getActiveZoteroPane(): {
@@ -247,6 +251,12 @@ declare const Zotero: {
         body?: string;
         responseType?: string;
         timeout?: number;
+        /**
+         * Status codes treated as success. Zotero REJECTS any other status
+         * before the caller sees it; `false` means "resolve on any status" so
+         * the caller can classify 404/429/401 itself.
+         */
+        successCodes?: number[] | false;
       },
     ): Promise<{
       status: number;

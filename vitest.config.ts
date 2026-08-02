@@ -2,6 +2,12 @@ import { defineConfig } from "vitest/config";
 import path from "path";
 
 export default defineConfig({
+  // Build-time constant that esbuild injects in scripts/build.mjs. Without a
+  // matching definition here, any module referencing it throws ReferenceError
+  // under vitest.
+  define: {
+    __BUILD_ID__: JSON.stringify("test"),
+  },
   test: {
     include: ["test/**/*.test.ts"],
   },

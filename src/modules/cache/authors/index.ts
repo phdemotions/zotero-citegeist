@@ -20,8 +20,4 @@ export {
   type CacheAuthorshipInput,
   type AuthorMetricsInput,
 } from "./write";
-export {
-  AUTHOR_RELATION_PREDICATE,
-  setItemAuthorRelations,
-  syncItemAuthorRelations,
-} from "./relations";
+export { AUTHOR_RELATION_PREDICATE, purgeAllAuthorRelations } from "./relations";

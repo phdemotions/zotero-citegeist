@@ -2,6 +2,9 @@
  * Shared utilities for Citegeist.
  */
 
+import { type DiagnosticCode } from "./diagnostics/codes";
+import { recordDiagnostic } from "./diagnostics/record";
+
 /**
  * Safely set innerHTML in Zotero's XUL document context.
  *
@@ -87,6 +90,71 @@ export function redactApiKey(s: string): string {
 }
 
 /**
+ * Strip absolute filesystem paths, which carry the OS username.
+ *
+ * The diagnostic report is copy-pasted into public GitHub issues and promises
+ * "no personal details", so a `/Users/<name>/…` or `C:\Users\<name>\…` path
+ * (from, e.g., a backup-prune error carrying the file it touched) must not
+ * survive into the ring buffer. Anchored on the home root so it never mangles a
+ * URL (those start with a scheme, not `/Users`). The local Zotero debug log is
+ * left untouched — only what reaches the shareable buffer is scrubbed.
+ */
+export function redactPaths(s: string): string {
+  return (
+    s
+      // Consume the user segment up to the NEXT SEPARATOR, not the next space:
+      // a profile folder is often "John Smith", and stopping at the space left
+      // the surname behind ("~ Smith\\Zotero\\…").
+      .replace(/\/(?:Users|home)\/[^/\r\n]*/g, "~")
+      .replace(/[A-Za-z]:\\Users\\[^\\\r\n]*/gi, "~")
+  );
+}
+
+/**
+ * The full scrub applied to anything bound for the diagnostic ring buffer: the
+ * opt-in API key, any username-bearing path, and any resolvable OpenAlex id.
+ * The single place all three compose, so a new sink can't pick up one and miss
+ * the others.
+ */
+export function redactSensitive(s: string): string {
+  // DOIs are collapsed BEFORE OpenAlex ids. Under the current regexes the two
+  // are order-independent (redactDois's `[^\s"']+` spans the `<id>` a prior id
+  // scrub would inject, so either order yields `<doi>` for an Elsevier S-PII
+  // suffix like `10.1016/S0140-6736(20)…`). DOI-first is kept deliberately as
+  // the safe order for the day redactDois is tightened to stop at `<>`: id-first
+  // would then leave `10.1016/<id>-6736(20)…`, leaking the tail into the report.
+  return redactOpenAlexIds(redactDois(redactPaths(redactApiKey(s))));
+}
+
+/**
+ * Replace a DOI with `<doi>`.
+ *
+ * A DOI is the most direct pointer to library content there is, and it is named
+ * first in the report's on-screen promise, so it gets the same defense-in-depth
+ * net as an OpenAlex id. Matches the bare form, which also covers a doi.org URL
+ * (the DOI is a substring of it). The suffix runs to the next whitespace or
+ * quote — NOT stopping at parens/angle brackets, so a legacy Wiley SICI or
+ * Elsevier PII DOI (`10.1002/(SICI)…<…>…`) is scrubbed whole rather than
+ * truncated at its first bracket.
+ */
+export function redactDois(s: string): string {
+  return s.replace(/\b10\.\d{4,9}\/[^\s"']+/gi, "<doi>");
+}
+
+/**
+ * Replace a resolvable OpenAlex entity id with `<id>`.
+ *
+ * Any OpenAlex id (a work `W…`, author `A…`, or source/journal `S…`, plus the
+ * other entity prefixes) resolves 1:1 via one unauthenticated GET to a paper's
+ * title, a person, or a journal — a pointer to library content. Call sites are
+ * supposed to keep ids out of a recorded context, but this is the net that
+ * keeps the "no library content" promise true if a future one forgets.
+ */
+export function redactOpenAlexIds(s: string): string {
+  return s.replace(/\b[WASIPFCTL]\d{4,}\b/g, "<id>");
+}
+
+/**
  * Normalize an unknown caught value into a string suitable for logging.
  *
  * Zotero.debug(msg + e) coerces objects to "[object Object]" and drops
@@ -95,7 +163,7 @@ export function redactApiKey(s: string): string {
  * URL-bearing error can never leak the user's OpenAlex key into the debug log.
  */
 export function normalizeError(e: unknown): string {
-  return redactApiKey(rawNormalizeError(e));
+  return redactSensitive(rawNormalizeError(e));
 }
 
 function rawNormalizeError(e: unknown): string {
@@ -114,9 +182,35 @@ function rawNormalizeError(e: unknown): string {
   }
 }
 
-/** Prefixed debug logger with consistent formatting. */
+/**
+ * Prefixed debug logger, and the single funnel into the diagnostic ring buffer.
+ *
+ * Every caught error in the codebase already flows through here, so recording
+ * at this one point means the diagnostic report has history even though Zotero
+ * debug logging is off — which it always is until after the bug has happened.
+ * The recorded detail is `normalizeError`'s output, so it is API-key-redacted
+ * before it is ever stored.
+ */
 export function logError(context: string, e: unknown): void {
-  Zotero.debug(`[Citegeist] ERROR ${context}: ${normalizeError(e)}`);
+  const detail = normalizeError(e);
+  Zotero.debug(`[Citegeist] ERROR ${context}: ${detail}`);
+  // `context` is a call-site label, but a few carry a path (a backup filename,
+  // for one), so it goes through the same scrub as `detail` before it can reach
+  // the shareable buffer. `detail` is already scrubbed by normalizeError.
+  recordDiagnostic(codeForError(e), redactSensitive(context), detail);
+}
+
+/**
+ * The diagnostic code for a caught value.
+ *
+ * A {@link CitegeistError} names its own code; anything else is by definition
+ * unclassified, which is exactly what CG-BUG01 means. Resist the temptation to
+ * sniff message text here — a code inferred from a substring silently
+ * mis-classifies the moment an upstream message is reworded, and a wrong code
+ * in a bug report is worse than an honest "unexpected".
+ */
+export function codeForError(e: unknown): DiagnosticCode {
+  return e instanceof CitegeistError ? e.code : "CG-BUG01";
 }
 
 /**
@@ -129,16 +223,90 @@ export function isBookType(item: _ZoteroTypes.Item): boolean {
 }
 
 /**
- * Distinguishes "OpenAlex unreachable" from "work not found" so UI layers
- * can render a helpful message instead of a flat "not found" dead end.
+ * Base class for every failure Citegeist can explain to a user.
+ *
+ * Carrying the diagnostic code on the error itself is what lets a throw travel
+ * from the fetch layer to the pane without anyone re-deriving what went wrong
+ * from a message string. A subclass picks its code once; every UI layer just
+ * reads `.code`.
  */
-export class OpenAlexNetworkError extends Error {
+export class CitegeistError extends Error {
   constructor(
     message: string,
+    public readonly code: DiagnosticCode,
     public readonly cause?: unknown,
   ) {
     super(message);
+    this.name = "CitegeistError";
+  }
+}
+
+/**
+ * Distinguishes "OpenAlex unreachable" from "work not found" so UI layers
+ * can render a helpful message instead of a flat "not found" dead end.
+ */
+export class OpenAlexNetworkError extends CitegeistError {
+  constructor(message: string, cause?: unknown) {
+    super(message, "CG-NET01", cause);
     this.name = "OpenAlexNetworkError";
+  }
+}
+
+/**
+ * Save a Zotero item, converting any failure into a static-message CacheError.
+ *
+ * `item.saveTx()` rides the same `queryAsync` that dumps every bound parameter
+ * into its error message — for an item write that includes the TITLE and author
+ * names. Logging that raw error would put library content into the diagnostic
+ * ring buffer (no regex can scrub a free-text title). Wrapping keeps it out: the
+ * original lives only as `cause`, which `normalizeError` does not traverse. This
+ * is the item-write twin of the cache layer's `runQuery`, and it still throws,
+ * so callers' own add/undo error handling runs unchanged.
+ */
+export async function saveItemGuarded(item: { saveTx(): Promise<unknown> }): Promise<void> {
+  try {
+    await item.saveTx();
+  } catch (e) {
+    throw new CacheError("item save failed", e);
+  }
+}
+
+/**
+ * The plugin's own SQLite database couldn't be opened (corrupt or quarantined
+ * `citegeist.sqlite`). Carries CG-DB02 so the startup path shows the actionable
+ * "couldn't open the database" guidance rather than the generic CG-BUG01.
+ */
+export class DatabaseOpenError extends CitegeistError {
+  constructor(message: string, cause?: unknown) {
+    super(message, "CG-DB02", cause);
+    this.name = "DatabaseOpenError";
+  }
+}
+
+/**
+ * OpenAlex answered, but with something we can't use — an unexpected status
+ * (400/422/…) or a body that isn't valid JSON. Distinct from
+ * {@link OpenAlexNetworkError}: telling a user to "check your internet
+ * connection" when the service replied is misleading, and it sends them
+ * debugging the wrong thing.
+ */
+export class OpenAlexResponseError extends CitegeistError {
+  constructor(message: string, cause?: unknown) {
+    super(message, "CG-API50", cause);
+    this.name = "OpenAlexResponseError";
+  }
+}
+
+/**
+ * A local cache read or write failed. Its own class (rather than a bare throw)
+ * because the most common cause is environmental, not a bug: a Zotero data
+ * directory inside Dropbox/iCloud/OneDrive/Box lets the sync client lock the
+ * SQLite file, and CG-DB01 tells the user that in one sentence.
+ */
+export class CacheError extends CitegeistError {
+  constructor(message: string, cause?: unknown) {
+    super(message, "CG-DB01", cause);
+    this.name = "CacheError";
   }
 }
 
@@ -148,9 +316,9 @@ export class OpenAlexNetworkError extends Error {
  * add an API key rather than showing an "unreachable" dead end, and so a
  * bulk pass can stop cleanly instead of caching a spurious "no data".
  */
-export class OpenAlexBudgetError extends Error {
+export class OpenAlexBudgetError extends CitegeistError {
   constructor(message = "OpenAlex daily budget exhausted") {
-    super(message);
+    super(message, "CG-API42");
     this.name = "OpenAlexBudgetError";
   }
 }
@@ -159,9 +327,9 @@ export class OpenAlexBudgetError extends Error {
  * OpenAlex rejected the request's API key (HTTP 401/403). Distinct from a
  * network failure so the UI can prompt the user to re-check their key.
  */
-export class OpenAlexAuthError extends Error {
+export class OpenAlexAuthError extends CitegeistError {
   constructor(message = "OpenAlex rejected the API key") {
-    super(message);
+    super(message, "CG-API01");
     this.name = "OpenAlexAuthError";
   }
 }

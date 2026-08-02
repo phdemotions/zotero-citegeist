@@ -23,6 +23,7 @@ JOSS-exempt.
 
 ## Architecture & migration
 
+- [Error codes](ERROR-CODES.md) — every diagnostic code a user can see, and the append-only contract
 - [Design rationale](DESIGN.md) — architecture decisions and trade-offs
 - [Migration v2.0.0](MIGRATION-v2.0.0.md) — Extra → SQLite cache move
 

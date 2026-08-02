@@ -16,7 +16,7 @@
  * dedicated author-id lock.
  */
 
-import { requireDb, withKeyLock } from "../db";
+import { requireDb, runQuery, withKeyLock } from "../db";
 import type { CacheItemKey } from "../types";
 import { parseAuthorId } from "./types";
 
@@ -46,8 +46,8 @@ async function upsertAuthorIdentity(
   displayName: string | null,
   orcid: string | null,
 ): Promise<void> {
-  await conn.queryAsync(`INSERT OR IGNORE INTO authors (author_id) VALUES (?)`, [authorId]);
-  await conn.queryAsync(`UPDATE authors SET display_name = ?, orcid = ? WHERE author_id = ?`, [
+  await runQuery(conn, `INSERT OR IGNORE INTO authors (author_id) VALUES (?)`, [authorId]);
+  await runQuery(conn, `UPDATE authors SET display_name = ?, orcid = ? WHERE author_id = ?`, [
     displayName,
     orcid,
     authorId,
@@ -94,7 +94,8 @@ export async function cacheItemAuthors(
     }
 
     // Preserve curated rows; replace the rest.
-    const existing = await conn.queryAsync<{ author_id: string; is_curated: 0 | 1 | null }>(
+    const existing = await runQuery<{ author_id: string; is_curated: 0 | 1 | null }>(
+      conn,
       `SELECT author_id, is_curated FROM item_authors WHERE library_id = ? AND item_key = ?`,
       [libraryID, itemKey],
     );
@@ -102,14 +103,16 @@ export async function cacheItemAuthors(
       (existing ?? []).filter((r) => r.is_curated === 1).map((r) => r.author_id),
     );
 
-    await conn.queryAsync(
+    await runQuery(
+      conn,
       `DELETE FROM item_authors WHERE library_id = ? AND item_key = ? AND (is_curated IS NULL OR is_curated != 1)`,
       [libraryID, itemKey],
     );
 
     for (const v of valid) {
       if (curated.has(v.id)) continue; // don't downgrade a curated identity
-      await conn.queryAsync(
+      await runQuery(
+        conn,
         `INSERT OR REPLACE INTO item_authors (library_id, item_key, author_id, author_position, is_curated) VALUES (?, ?, ?, ?, ?)`,
         [libraryID, itemKey, v.id, v.position, 0],
       );
@@ -136,18 +139,20 @@ export async function setCuratedItemAuthor(
   if (!id) return;
   await withKeyLock(item.libraryID, item.key, async () => {
     const conn = requireDb();
-    await conn.queryAsync(`INSERT OR IGNORE INTO authors (author_id) VALUES (?)`, [id]);
+    await runQuery(conn, `INSERT OR IGNORE INTO authors (author_id) VALUES (?)`, [id]);
     // Override: clear whatever author previously occupied this creator slot so
     // the position ends up with exactly the confirmed id. The PK is
     // `(library, item, author_id)`, so a bare INSERT OR REPLACE of a *different*
     // id would leave the superseded row behind (two authors at one position).
     if (position !== null) {
-      await conn.queryAsync(
+      await runQuery(
+        conn,
         `DELETE FROM item_authors WHERE library_id = ? AND item_key = ? AND author_position = ? AND author_id != ?`,
         [item.libraryID, item.key, position, id],
       );
     }
-    await conn.queryAsync(
+    await runQuery(
+      conn,
       `INSERT OR REPLACE INTO item_authors (library_id, item_key, author_id, author_position, is_curated) VALUES (?, ?, ?, ?, ?)`,
       [item.libraryID, item.key, id, position, 1],
     );
@@ -165,8 +170,9 @@ export async function updateAuthorMetrics(
   const id = parseAuthorId(authorId);
   if (!id) return;
   const conn = requireDb();
-  await conn.queryAsync(`INSERT OR IGNORE INTO authors (author_id) VALUES (?)`, [id]);
-  await conn.queryAsync(
+  await runQuery(conn, `INSERT OR IGNORE INTO authors (author_id) VALUES (?)`, [id]);
+  await runQuery(
+    conn,
     `UPDATE authors SET works_count = ?, cited_by_count = ?, h_index = ?, i10_index = ?, last_fetched = ? WHERE author_id = ?`,
     [
       metrics.worksCount,
@@ -202,12 +208,12 @@ export async function reconcileAuthorMerge(fromId: string, toId: string): Promis
   if (!from || !to || from === to) return;
   const conn = requireDb();
   // Move refs to the survivor where the item doesn't already carry it…
-  await conn.queryAsync(`UPDATE OR IGNORE item_authors SET author_id = ? WHERE author_id = ?`, [
+  await runQuery(conn, `UPDATE OR IGNORE item_authors SET author_id = ? WHERE author_id = ?`, [
     to,
     from,
   ]);
   // …drop any leftover stale refs (items that already had the survivor)…
-  await conn.queryAsync(`DELETE FROM item_authors WHERE author_id = ?`, [from]);
+  await runQuery(conn, `DELETE FROM item_authors WHERE author_id = ?`, [from]);
   // …and the now-orphaned author row.
-  await conn.queryAsync(`DELETE FROM authors WHERE author_id = ?`, [from]);
+  await runQuery(conn, `DELETE FROM authors WHERE author_id = ?`, [from]);
 }

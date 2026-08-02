@@ -19,6 +19,7 @@ import {
   getCachedMetrics,
   getTitleMatchMeta,
   initCache,
+  isCacheStale,
   migrateFromExtraV1,
 } from "../src/modules/cache";
 
@@ -112,6 +113,27 @@ describe("migration legacy ID validation", () => {
     // Confirm the row WAS persisted (cited_by_count survived)
     const metrics = getCachedMetrics(item);
     expect(metrics.count).toBe(5);
+  });
+
+  it("does not keep last_fetched on a row whose openAlexId was dropped (no hung pane)", async () => {
+    // A legacy row with a surviving lastFetched but a malformed openAlexId would,
+    // if last_fetched persisted, read as fresh (isCacheStale=false) while
+    // getCachedData returns null (keyed on open_alex_id) — a row that never
+    // refetches yet shows no data, which strands the item pane on its spinner.
+    // The migration must null last_fetched when there's no work id, so the pane
+    // treats it as stale and refetches instead of hanging.
+    const extra = [
+      "Citegeist.openAlexId: not-a-valid-id",
+      "Citegeist.citedByCount: 5",
+      "Citegeist.lastFetched: 2099-01-01T00:00:00.000Z",
+    ].join("\n");
+    const item = mockItem("XF", extra);
+    mockZotero.Items.getAll.mockResolvedValue([item]);
+
+    await migrateFromExtraV1();
+
+    expect(getCachedData(item)).toBeNull(); // no work id → no readable data
+    expect(isCacheStale(item)).toBe(true); // and NOT masquerading as fresh
   });
 
   it("drops malformed sourceId from legacy Extra", async () => {

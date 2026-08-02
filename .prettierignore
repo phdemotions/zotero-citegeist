@@ -3,3 +3,9 @@ build
 dist
 package-lock.json
 *.xpi
+
+# XUL/XHTML with embedded CDATA scripts. Prettier reflows the CDATA body as if
+# it were prose, which merges `//` comments into the following statements and
+# silently breaks the script. The repo's `format` script never targeted these,
+# but an explicit `prettier --write` on the file does — this makes that safe.
+addon/content/*.xhtml

@@ -17,6 +17,7 @@
  */
 
 import { CLOSE_CACHE_DRAIN_TIMEOUT_MS } from "../../constants";
+import { CacheError, DatabaseOpenError } from "../utils";
 import { COLUMNS, type ItemCacheRow, mirrorKey, rowToParams } from "./types";
 import { createAuthorSchema } from "./authors/db";
 
@@ -98,14 +99,25 @@ async function doInit(): Promise<void> {
   // Build the connection in a local. Don't assign to the module's `db`
   // until schema + mirror load have all succeeded, so a `closeCache()`
   // racing against init can't null-out a half-initialized connection.
-  const conn = new Zotero.DBConnection("citegeist");
-  await conn.queryAsync(SCHEMA);
-  await conn.queryAsync(CREATE_PROGRESS_TABLE);
-  // Author identity tables (additive, idempotent — plan KTD4). No mirror is
-  // loaded for them: author reads query SQLite async in the pane.
-  await createAuthorSchema(conn);
+  let conn: _ZoteroTypes.DBConnection;
+  let rows: ItemCacheRow[];
+  try {
+    // A corrupt/quarantined citegeist.sqlite fails here — code it CG-DB02 so
+    // the startup path records the actionable "couldn't open the database"
+    // guidance rather than the generic CG-BUG01.
+    conn = new Zotero.DBConnection("citegeist");
+    await conn.queryAsync(SCHEMA);
+    await conn.queryAsync(CREATE_PROGRESS_TABLE);
+    // Author identity tables (additive, idempotent — plan KTD4). No mirror is
+    // loaded for them: author reads query SQLite async in the pane.
+    await createAuthorSchema(conn);
+    // The initial mirror load is part of "opening the database": a corrupt
+    // item_cache fails this SELECT too, and it must code CG-DB02, not CG-BUG01.
+    rows = await conn.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
+  } catch (e) {
+    throw new DatabaseOpenError("could not open the Citegeist database", e);
+  }
 
-  const rows = await conn.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
   const nextMirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
 
   db = conn;
@@ -264,10 +276,36 @@ export async function withKeyLock<T>(
   }
 }
 
+/**
+ * Run a parameterised statement, converting any failure into a {@link CacheError}
+ * with a STATIC message.
+ *
+ * Zotero's `DBConnection.queryAsync` throws with the full SQL *and a JSON dump
+ * of every bound parameter* in its message — and our bound parameters include
+ * the item's title and DOI. That message would otherwise flow through
+ * `logError` into the diagnostic ring buffer and out into the report the user
+ * pastes into a public GitHub issue, breaking the "no titles, DOIs, or other
+ * library content" promise. The original error is kept only as `cause`, which
+ * `normalizeError` deliberately does not traverse, so the failure stays
+ * debuggable locally while nothing library-derived reaches the shareable
+ * buffer. This is also what finally gives CG-DB01 a producer.
+ */
+export async function runQuery<T = unknown>(
+  conn: _ZoteroTypes.DBConnection,
+  sql: string,
+  params?: unknown[],
+): Promise<T[]> {
+  try {
+    return await conn.queryAsync<T>(sql, params);
+  } catch (e) {
+    throw new CacheError("cache query failed", e);
+  }
+}
+
 export async function upsertRow(row: ItemCacheRow): Promise<void> {
   await withKeyLock(row.library_id, row.item_key, async () => {
     const conn = requireDb();
-    await conn.queryAsync(UPSERT_SQL, rowToParams(row));
+    await runQuery(conn, UPSERT_SQL, rowToParams(row));
     mirror.set(mirrorKey(row.library_id, row.item_key), row);
     Zotero.debug(
       `[Citegeist] upsertRow: lib=${row.library_id} key=${row.item_key} count=${row.cited_by_count} mirror.size=${mirror.size}`,
@@ -278,7 +316,7 @@ export async function upsertRow(row: ItemCacheRow): Promise<void> {
 export async function deleteRow(libraryID: number, itemKey: string): Promise<void> {
   await withKeyLock(libraryID, itemKey, async () => {
     const conn = requireDb();
-    await conn.queryAsync(`DELETE FROM item_cache WHERE library_id = ? AND item_key = ?`, [
+    await runQuery(conn, `DELETE FROM item_cache WHERE library_id = ? AND item_key = ?`, [
       libraryID,
       itemKey,
     ]);
@@ -286,14 +324,14 @@ export async function deleteRow(libraryID: number, itemKey: string): Promise<voi
     // actually re-process the item. Without this, a `clearCache` followed
     // by `shouldForceRerun` would skip the now-empty row at checkpoint
     // lookup and the user's intentional clear would not trigger re-migration.
-    await conn.queryAsync(`DELETE FROM migration_progress WHERE library_id = ? AND item_key = ?`, [
+    await runQuery(conn, `DELETE FROM migration_progress WHERE library_id = ? AND item_key = ?`, [
       libraryID,
       itemKey,
     ]);
     // Drop the item's resolved-author links too (per-item author GC). The
     // library-wide sweep for items removed while Zotero was closed rides
     // garbageCollectOrphans → garbageCollectOrphanAuthors.
-    await conn.queryAsync(`DELETE FROM item_authors WHERE library_id = ? AND item_key = ?`, [
+    await runQuery(conn, `DELETE FROM item_authors WHERE library_id = ? AND item_key = ?`, [
       libraryID,
       itemKey,
     ]);
@@ -318,7 +356,7 @@ export async function mutateRow(
     const next = transform(existing);
     if (next === null) return;
     const conn = requireDb();
-    await conn.queryAsync(UPSERT_SQL, rowToParams(next));
+    await runQuery(conn, UPSERT_SQL, rowToParams(next));
     mirror.set(mirrorKey(next.library_id, next.item_key), next);
   });
 }

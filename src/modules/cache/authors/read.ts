@@ -7,7 +7,7 @@
  * "My Authors" index.
  */
 
-import { requireDb } from "../db";
+import { requireDb, runQuery } from "../db";
 import type { AuthorRow, ItemAuthorRow } from "./types";
 
 /**
@@ -16,7 +16,8 @@ import type { AuthorRow, ItemAuthorRow } from "./types";
  */
 export async function getItemAuthors(libraryID: number, itemKey: string): Promise<ItemAuthorRow[]> {
   const conn = requireDb();
-  const rows = await conn.queryAsync<ItemAuthorRow>(
+  const rows = await runQuery<ItemAuthorRow>(
+    conn,
     `SELECT library_id, item_key, author_id, author_position, is_curated
        FROM item_authors
       WHERE library_id = ? AND item_key = ?
@@ -29,7 +30,8 @@ export async function getItemAuthors(libraryID: number, itemKey: string): Promis
 /** One author by OpenAlex id, or null if not cached. */
 export async function getAuthor(authorId: string): Promise<AuthorRow | null> {
   const conn = requireDb();
-  const rows = await conn.queryAsync<AuthorRow>(
+  const rows = await runQuery<AuthorRow>(
+    conn,
     `SELECT author_id, display_name, orcid, works_count, cited_by_count,
             h_index, i10_index, last_fetched
        FROM authors

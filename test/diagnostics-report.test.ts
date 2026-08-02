@@ -1,0 +1,148 @@
+/**
+ * Behavioral tests for the copy-paste diagnostic report.
+ *
+ * The report is designed to be pasted into public GitHub issues, so its privacy
+ * behavior is load-bearing: the data-directory line must classify (local vs a
+ * cloud-sync folder) WITHOUT emitting the raw path, which carries the OS
+ * username. It must also never throw — a broken "Copy report" leaves the user
+ * with no way forward.
+ */
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+function stubZotero(dataDir: string): void {
+  vi.stubGlobal("Zotero", {
+    version: "9.0.1",
+    platform: "MacIntel",
+    locale: "en-US",
+    debug: vi.fn(),
+    DataDirectory: { dir: dataDir },
+  });
+}
+
+import { logError } from "../src/modules/utils";
+import {
+  buildDiagnosticReport,
+  copyToClipboard,
+  setPluginVersion,
+  recordDiagnostic,
+  clearDiagnostics,
+} from "../src/modules/diagnostics";
+
+beforeEach(() => {
+  clearDiagnostics();
+  setPluginVersion("3.0.0");
+});
+
+describe("buildDiagnosticReport", () => {
+  it("classifies a cloud-sync data dir WITHOUT leaking the path or username", () => {
+    stubZotero("/Users/janedoe/Library/CloudStorage/Box-Box/Zotero");
+    const report = buildDiagnosticReport({});
+    expect(report).toContain("cloud-sync");
+    expect(report).not.toContain("janedoe");
+    expect(report).not.toContain("/Users/");
+  });
+
+  it("classifies a plain local data dir as local, still no path", () => {
+    stubZotero("/Users/janedoe/Zotero");
+    const report = buildDiagnosticReport({});
+    expect(report).toContain("local");
+    expect(report).not.toContain("janedoe");
+  });
+
+  it("includes the build id, Zotero version, and platform", () => {
+    stubZotero("/Users/x/Zotero");
+    const report = buildDiagnosticReport({});
+    expect(report).toContain("3.0.0");
+    expect(report).toContain("9.0.1");
+    expect(report).toContain("MacIntel");
+    // __BUILD_ID__ is injected as "test" by vitest.config.ts — assert the
+    // build-stamp line so a regression in it is caught.
+    expect(report).toContain("build test");
+  });
+
+  it("renders the current code's message and lists recent problems", () => {
+    stubZotero("/Users/x/Zotero");
+    recordDiagnostic("CG-DB01", "cacheWorkData", "locked");
+    const report = buildDiagnosticReport({ code: "CG-DB01", context: "cacheWorkData" });
+    expect(report).toContain("CG-DB01");
+    expect(report).toContain("cacheWorkData");
+    expect(report).toContain("Recent problems (1)");
+  });
+
+  it("degrades per-fact when one host API throws — it does not bail out entirely", () => {
+    vi.stubGlobal("Zotero", {
+      debug: vi.fn(),
+      version: "9.0.1",
+      get platform(): string {
+        throw new Error("host exploded");
+      },
+      locale: "en-US",
+      DataDirectory: { dir: "/Users/x/Zotero" },
+    });
+    const report = buildDiagnosticReport({});
+    // The broken fact is marked unavailable, and every OTHER fact still lands —
+    // asserting only "didn't throw" would pass even if the whole body bailed to
+    // the outer catch and the report lost all its host context.
+    expect(report).toContain("Platform: unavailable");
+    expect(report).toContain("9.0.1");
+    expect(report).toContain("en-US");
+    expect(report).toContain("Recent problems");
+  });
+});
+
+describe("copyToClipboard", () => {
+  it("copies via Zotero and returns true when the clipboard API is available", () => {
+    const copy = vi.fn();
+    vi.stubGlobal("Zotero", {
+      debug: vi.fn(),
+      Utilities: { Internal: { copyTextToClipboard: copy } },
+    });
+    expect(copyToClipboard("hello")).toBe(true);
+    expect(copy).toHaveBeenCalledWith("hello");
+  });
+
+  it("returns false instead of throwing when the clipboard API is missing", () => {
+    // A failed copy must not take out the error panel it lives in.
+    vi.stubGlobal("Zotero", { debug: vi.fn() });
+    expect(copyToClipboard("x")).toBe(false);
+  });
+});
+
+describe("report privacy net", () => {
+  it("scrubs a DOI on the real recording path (logError, the single funnel)", () => {
+    stubZotero("/Users/x/Zotero");
+    // A Zotero DB error embeds every bound parameter — including the item's DOI
+    // and title — in its message. It must not survive into the pasted report.
+    logError("cacheWorkData", new Error("locked [PARAMS: 10.1038/nature12373]"));
+    const report = buildDiagnosticReport({});
+    expect(report).not.toContain("10.1038/nature12373");
+    expect(report).toContain("<doi>");
+  });
+
+  it("fully scrubs an Elsevier S-PII DOI (suffix starts with an id-shaped token)", () => {
+    stubZotero("/Users/x/Zotero");
+    // An Elsevier S-PII DOI: the suffix opens with an id-shaped token (S0140) and
+    // carries a parenthesized tail. Pins that redactDois collapses the WHOLE thing
+    // to <doi> — the id-shaped prefix doesn't fragment the match and the tail
+    // (30154-9) doesn't escape. (redactSensitive runs DOI-first; see its comment
+    // for why that order stays the safe one even though it's moot under today's
+    // bracket-agnostic regex.)
+    logError("cacheWorkData", new Error("locked 10.1016/S0140-6736(20)30154-9 done"));
+    const report = buildDiagnosticReport({});
+    expect(report).not.toContain("S0140-6736");
+    expect(report).not.toContain("30154-9");
+    expect(report).toContain("<doi>");
+  });
+
+  it("fully scrubs a legacy Wiley SICI DOI with parens and angle brackets", () => {
+    stubZotero("/Users/x/Zotero");
+    logError(
+      "cacheWorkData",
+      new Error("x 10.1002/(SICI)1097-0266(199902)20:2<195::AID>3.0.CO end"),
+    );
+    const report = buildDiagnosticReport({});
+    expect(report).not.toContain("SICI");
+    expect(report).not.toContain("AID");
+    expect(report).toContain("<doi>");
+  });
+});

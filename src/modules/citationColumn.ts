@@ -16,6 +16,7 @@ import { fetchAndCacheItem, extractIdentifier } from "./citationService";
 import { lookupRanking, RANKING_VERSIONS, type JournalRanking } from "../data/journalRankings";
 import { getCachedSourceISSNs } from "./openalex";
 import { logError, isBookType } from "./utils";
+import { guard } from "./diagnostics";
 import {
   AUTO_FETCH_PREF_TTL_MS,
   COLUMN_REPAINT_DEBOUNCE_MS,
@@ -255,6 +256,19 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
   // tree can't be wired correctly — better to surface it than to leave half
   // the columns dead with no dataProvider.
   const safeRegister = async (options: _ZoteroTypes.RegisterColumnOptions) => {
+    // Guard the dataProvider HERE, at the one choke point every column passes
+    // through, rather than at nine call sites — a column added later is
+    // protected without anyone remembering to wrap it. Zotero calls
+    // dataProvider synchronously while painting rows, and a throw blanks the
+    // column with no error anywhere the user can see it.
+    const provide = options.dataProvider;
+    if (provide) {
+      options = {
+        ...options,
+        dataProvider: (item: _ZoteroTypes.Item, dataKey: string) =>
+          guard(`column dataProvider ${options.dataKey}`, () => provide(item, dataKey)) ?? "",
+      };
+    }
     try {
       await Zotero.ItemTreeManager.registerColumn(options);
       registeredKeys.push(options.dataKey);

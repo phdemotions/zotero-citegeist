@@ -1,9 +1,16 @@
-citegeist-pane-header = Citation Intelligence
-citegeist-pane-sidenav = Citations
+# Item-pane section (Zotero 8/9 ItemPaneManager). Zotero renders the collapsible
+# section title from the header message's `.label` attribute, the sidenav strip's
+# hover from `.tooltiptext`, and section-button tooltips from `.tooltiptext`. A
+# bare `id = value` has NO attribute for these to land on and renders BLANK — the
+# blank sidenav-icon / empty-header bug. Attribute syntax is mandatory here.
+citegeist-pane-header =
+    .label = Citation Intelligence
+citegeist-pane-sidenav =
+    .tooltiptext = Citations
 citegeist-pane-refresh =
-    .title = Refresh citation data
+    .tooltiptext = Refresh citation data
 citegeist-pane-settings =
-    .title = Citegeist settings
+    .tooltiptext = Citegeist settings
 
 # Context-menu labels (Zotero 8+ MenuManager path). MenuManager applies these
 # via `dataset.l10nId` on a XUL <menuitem>, so they MUST use Fluent attribute

@@ -10,10 +10,12 @@
  * requests still work at the lower daily budget.
  *
  * Error semantics: lookup helpers return `null` when a work is not found
- * (404). Otherwise the fetch layer throws one of three distinct errors so UI
+ * (404). Otherwise the fetch layer throws one of four distinct errors so UI
  * can respond appropriately: {@link OpenAlexBudgetError} (daily budget spent —
- * prompt for a key), {@link OpenAlexAuthError} (key rejected), or
- * {@link OpenAlexNetworkError} (unreachable / non-200 after retries).
+ * prompt for a key), {@link OpenAlexAuthError} (key rejected, 401/403),
+ * {@link OpenAlexResponseError} (the service answered with an unusable status or
+ * body — e.g. 400/422 or non-JSON), or {@link OpenAlexNetworkError}
+ * (unreachable / request failed after retries).
  */
 
 import {
@@ -27,6 +29,7 @@ import {
 } from "../constants";
 import {
   OpenAlexNetworkError,
+  OpenAlexResponseError,
   OpenAlexBudgetError,
   OpenAlexAuthError,
   normalizeError,
@@ -178,6 +181,13 @@ async function fetchJson<T>(url: string, label: string, attempt: number): Promis
       },
       responseType: "text",
       timeout: OPENALEX_REQUEST_TIMEOUT_MS,
+      // Resolve on ANY status so the classification below actually runs.
+      // Zotero's default is `success = status >= 200 && status < 300`
+      // (http.js), which REJECTS every 404/429/401/5xx before we can read it —
+      // collapsing "not found", "budget exhausted" and "bad key" into the
+      // network-error branch, retried three times each. Every status branch
+      // below is dead code without this flag.
+      successCodes: false,
     });
   } catch (e) {
     // Network-level failure (timeout, DNS, offline) — retry then bubble up.
@@ -228,13 +238,15 @@ async function fetchJson<T>(url: string, label: string, attempt: number): Promis
   }
 
   if (response.status !== 200) {
-    throw new OpenAlexNetworkError(`OpenAlex ${response.status} while fetching ${label}`);
+    // The service ANSWERED — this is not a connectivity problem, so it must not
+    // surface as CG-NET01 "check your internet connection".
+    throw new OpenAlexResponseError(`OpenAlex ${response.status} while fetching ${label}`);
   }
 
   try {
     return JSON.parse(response.responseText) as T;
   } catch (e) {
-    throw new OpenAlexNetworkError(`OpenAlex returned invalid JSON for ${label}`, e);
+    throw new OpenAlexResponseError(`OpenAlex returned invalid JSON for ${label}`, e);
   }
 }
 
@@ -336,8 +348,10 @@ export const LIST_SELECT =
  *            {@link normalizeDOI} for accepted forms.
  * @returns The OpenAlex work, or `null` if the DOI is blank or the work
  *          is not indexed on OpenAlex (404).
- * @throws {@link OpenAlexNetworkError} when OpenAlex is unreachable,
- *         rate-limiting persists past retries, or returns invalid JSON.
+ * @throws {@link OpenAlexResponseError} on a non-200 status (incl. persistent
+ *         5xx/429 after retries) or a non-JSON body, {@link OpenAlexNetworkError}
+ *         when unreachable, or {@link OpenAlexBudgetError}/{@link OpenAlexAuthError}
+ *         on a spent budget / rejected key.
  */
 export async function getWorkByDOI(doi: string): Promise<OpenAlexWork | null> {
   const cleanDOI = normalizeDOI(doi);
@@ -349,7 +363,7 @@ export async function getWorkByDOI(doi: string): Promise<OpenAlexWork | null> {
   });
 
   try {
-    const work = await rateLimitedFetch<OpenAlexWork>(url, `work doi:${cleanDOI}`);
+    const work = await rateLimitedFetch<OpenAlexWork>(url, "work lookup (doi)");
     return normalizeWork(work);
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return null;
@@ -374,7 +388,7 @@ export async function getWorkByPMID(pmid: string): Promise<OpenAlexWork | null> 
   });
 
   try {
-    const work = await rateLimitedFetch<OpenAlexWork>(url, `work pmid:${clean}`);
+    const work = await rateLimitedFetch<OpenAlexWork>(url, "work lookup (pmid)");
     return normalizeWork(work);
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return null;
@@ -400,7 +414,7 @@ export async function getWorkByArxivId(id: string): Promise<OpenAlexWork | null>
   });
 
   try {
-    const work = await rateLimitedFetch<OpenAlexWork>(url, `work arxiv:${clean}`);
+    const work = await rateLimitedFetch<OpenAlexWork>(url, "work lookup (arxiv)");
     return normalizeWork(work);
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return null;
@@ -429,7 +443,7 @@ export async function getWorkByISBN(isbn: string): Promise<OpenAlexWork | null> 
   });
 
   try {
-    const work = await rateLimitedFetch<OpenAlexWork>(url, `work isbn:${clean}`);
+    const work = await rateLimitedFetch<OpenAlexWork>(url, "work lookup (isbn)");
     return normalizeWork(work);
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return null;
@@ -440,7 +454,10 @@ export async function getWorkByISBN(isbn: string): Promise<OpenAlexWork | null> 
 /**
  * Fetch works that cite a given work (pagination via OpenAlex cursor).
  *
- * @throws {@link OpenAlexNetworkError} on unreachable/5xx/invalid responses.
+ * @throws {@link OpenAlexResponseError} on a non-200 status or non-JSON body,
+ *         {@link OpenAlexNetworkError} when unreachable after retries, or
+ *         {@link OpenAlexBudgetError}/{@link OpenAlexAuthError} on a spent
+ *         budget / rejected key.
  */
 export async function getCitingWorks(
   openAlexId: string,
@@ -456,7 +473,7 @@ export async function getCitingWorks(
     cursor,
   });
 
-  return rateLimitedFetch<OpenAlexListResponse>(url, `citing works for ${shortId}`);
+  return rateLimitedFetch<OpenAlexListResponse>(url, "citing works");
 }
 
 /**
@@ -466,7 +483,10 @@ export async function getCitingWorks(
  * which returns X's references with cursor pagination — reliable even
  * when the reference list is very long.
  *
- * @throws {@link OpenAlexNetworkError} on unreachable/5xx/invalid responses.
+ * @throws {@link OpenAlexResponseError} on a non-200 status or non-JSON body,
+ *         {@link OpenAlexNetworkError} when unreachable after retries, or
+ *         {@link OpenAlexBudgetError}/{@link OpenAlexAuthError} on a spent
+ *         budget / rejected key.
  */
 export async function getReferencedWorks(
   parentOpenAlexId: string,
@@ -482,7 +502,7 @@ export async function getReferencedWorks(
     cursor,
   });
 
-  return rateLimitedFetch<OpenAlexListResponse>(url, `references for ${shortId}`);
+  return rateLimitedFetch<OpenAlexListResponse>(url, "references");
 }
 
 /**
@@ -542,7 +562,10 @@ export function normalizeWork(work: OpenAlexWork): OpenAlexWork {
  * Returns full data including the inverted-index abstract.
  *
  * @returns The work, or `null` if not found (404).
- * @throws {@link OpenAlexNetworkError} on unreachable/5xx/invalid responses.
+ * @throws {@link OpenAlexResponseError} on a non-200 status or non-JSON body,
+ *         {@link OpenAlexNetworkError} when unreachable after retries, or
+ *         {@link OpenAlexBudgetError}/{@link OpenAlexAuthError} on a spent
+ *         budget / rejected key.
  */
 export async function getWorkById(openAlexId: string): Promise<OpenAlexWork | null> {
   const shortId = openAlexId.replace("https://openalex.org/", "");
@@ -551,11 +574,13 @@ export async function getWorkById(openAlexId: string): Promise<OpenAlexWork | nu
   });
 
   try {
-    const work = await rateLimitedFetch<OpenAlexWork>(url, `work ${shortId}`);
+    const work = await rateLimitedFetch<OpenAlexWork>(url, "work lookup (id)");
     return normalizeWork(work);
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return null;
-    logError(`getWorkById(${shortId})`, e);
+    // Rethrow only, matching the sibling getWorkBy* lookups. Every caller logs
+    // on catch, so logging here too would record one failure twice in the
+    // 50-slot diagnostic ring buffer.
     throw e;
   }
 }
@@ -603,7 +628,7 @@ export async function getSourceStats(sourceId: string): Promise<OpenAlexSourceSt
         h_index: number;
         i10_index: number;
       } | null;
-    }>(url, `source ${shortId}`);
+    }>(url, "source lookup");
 
     if (!data.summary_stats) {
       sourceStatsCache.set(shortId, null);
@@ -624,7 +649,7 @@ export async function getSourceStats(sourceId: string): Promise<OpenAlexSourceSt
       return null;
     }
     // For network issues, don't poison the cache — let the next call retry.
-    logError(`getSourceStats(${shortId})`, e);
+    logError("getSourceStats", e);
     return null;
   }
 }
@@ -653,7 +678,7 @@ export async function searchWorksByTitle(
   });
 
   try {
-    const resp = await rateLimitedFetch<OpenAlexListResponse>(url, `title search: ${title}`);
+    const resp = await rateLimitedFetch<OpenAlexListResponse>(url, "title search");
     return (resp.results || []).map(normalizeWork);
   } catch (e) {
     if (e instanceof OpenAlexNotFoundError) return [];

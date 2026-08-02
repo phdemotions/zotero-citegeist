@@ -12,7 +12,8 @@ import {
   type OpenAlexWork,
 } from "../openalex";
 import { fetchAuthorWorks } from "../openalexAuthors";
-import { escapeHTML, safeInnerHTML, OpenAlexNetworkError, logError } from "../utils";
+import { escapeHTML, safeInnerHTML, codeForError, logError } from "../utils";
+import { buildDiagnosticElement, type DiagnosticCode } from "../diagnostics";
 import {
   MAX_RENDERED_RESULTS,
   SURNAME_PREFIXES,
@@ -60,6 +61,25 @@ export function emptyStateHTML(opts: {
 // ────────────────────────────────────────────────────────
 // Loading & rendering
 // ────────────────────────────────────────────────────────
+
+/**
+ * Render the coded failure block into the dialog body. Lives here (not dialog.ts)
+ * so both the initial load and this results fetch can share it without a circular
+ * import; the block itself comes from the shared diagnostics renderer, so every
+ * Citegeist error surface reads identically.
+ */
+export function renderDialogDiagnostic(
+  body: HTMLElement,
+  code: DiagnosticCode,
+  context: string,
+): void {
+  const doc = body.ownerDocument;
+  body.innerHTML = "";
+  const wrap = doc.createElement("div");
+  wrap.className = "cg-empty cg-empty--diag";
+  wrap.appendChild(buildDiagnosticElement(doc, code, context));
+  body.appendChild(wrap);
+}
 
 export async function loadResults(state: NetworkState, append = false): Promise<void> {
   if (state.loading) return;
@@ -118,6 +138,13 @@ export async function loadResults(state: NetworkState, append = false): Promise<
     if (totalEl) totalEl.textContent = `${response.meta.count.toLocaleString()} total`;
 
     const searchInput = state.dialog.querySelector(".cg-search-input") as HTMLInputElement;
+    // Settle the loading flag BEFORE rendering: renderResults' empty-state guard
+    // is `results.length === 0 && !state.loading`, so rendering while still
+    // loading would suppress the "No results" copy on a genuinely empty set and
+    // leave a blank body. (The trailing reset below stays as the catch-path net.)
+    state.loading = false;
+    body?.setAttribute("aria-busy", "false");
+    state.dialog.classList.remove("cg-is-loading");
     renderResults(state, searchInput?.value || "");
   } catch (e) {
     if (gen !== state.generation || state.phase === "closed") {
@@ -127,14 +154,11 @@ export async function loadResults(state: NetworkState, append = false): Promise<
       return;
     }
     logError("loadResults", e);
-    const msg =
-      e instanceof OpenAlexNetworkError
-        ? `<div class="cg-empty">
-          <div class="cg-empty-title">OpenAlex is unavailable</div>
-          Try again in a few minutes.
-        </div>`
-        : `<div class="cg-empty">Error loading results. Please try again.</div>`;
-    safeInnerHTML(body, msg);
+    // Coded state for every failure class (network, budget CG-API42, auth
+    // CG-API01, unexpected), not just network — so a budget stop in the dialog
+    // says what happened and gives the user a code to quote, same as the pane.
+    if (body)
+      renderDialogDiagnostic(body, codeForError(e), `network dialog results (${state.mode})`);
   }
 
   state.loading = false;
@@ -499,7 +523,10 @@ export async function toggleExpanded(state: NetworkState, workId: string): Promi
       text = fullWork?.abstract_inverted_index
         ? reconstructAbstract(fullWork.abstract_inverted_index)
         : null;
-    } catch {
+    } catch (e) {
+      // getWorkById rethrows without logging (log-once at the caller), so this
+      // is the record point for an abstract-fetch failure.
+      logError("toggleExpanded abstract", e);
       text = null;
     }
     state.abstractCache.set(workId, text);

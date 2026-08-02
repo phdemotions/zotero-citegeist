@@ -160,10 +160,17 @@ describe("buildAuthorDialogHTML", () => {
     lowerBound: false,
   };
 
-  it("renders the author hero (metric stack, h-index prominent) and drops the tabs", () => {
+  it("renders the author header with the shared metric-line primitive, never boxed stat tiles, and drops the tabs", () => {
     const html = buildAuthorDialogHTML(vm);
-    expect(html).toContain("cg-author-metrics");
-    expect(html).toContain("cg-stat--hero");
+    // Composes the SHARED primitive so this header and the item pane's Impact
+    // card read as one product.
+    expect(html).toContain("cg-metricline");
+    expect(html).toContain("cg-dialog-top--author");
+    // Guard the regression: four bordered, equal-weight tiles flattened the
+    // hierarchy and looked nothing like the pane. A box is earned by an
+    // interaction, not by a number.
+    expect(html).not.toContain("cg-stat--hero");
+    expect(html).not.toContain("cg-author-metrics");
     expect(html).toContain("cg-command-bar--notabs");
     expect(html).toContain("Baumeister, R. F.");
     expect(html).toContain("ORCID 0000-0003-1148-2894");
