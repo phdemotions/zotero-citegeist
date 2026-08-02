@@ -8,28 +8,35 @@ tags: [citegeist, status]
 
 # Citegeist — Status
 
-> **Last Updated:** 2026-07-18
-> **Phase:** Author identity Phase C → **v3.0.0**, merging to `main`. The item pane was **rebuilt into one unified section** (citation-impact hero → one supporting-metric line → two explore buttons → author link rows), following the new `docs/design-system/pane-composition-language.md`. The **confirm/override curation UI was cut** (unused + confusing) in favour of author _links_ that open the Scholar-style author-works dialog; the dead curation code was removed (`setCuratedItemAuthor` kept, de-exported, as the v2 "My Authors" write primitive). A two-round adversarial code review fixed two real defects — a `showAuthorWorks` re-entrancy race and a per-item batch-isolation gap — and added coverage. Author identity still resolves in the background on the metrics fetch and writes the `openalex:author` relation handoff. Right-click stray-menu-section bug (#72) fixed. v2.0.4 last released 2026-06-10 (#57); 3.0.0 **not yet tagged** (merge-only for a downstream project).
-> **Build:** typecheck · **451 tests** · lint (0 errors) · format · OKF · build → `citegeist-3.0.0.xpi`, all green on **Node ≥22** (required by `.nvmrc`/CI — vitest 4's ESM config can't be `require()`d on Node 20).
+> **Last Updated:** 2026-08-02
+> **Phase:** **v3.0.0 staged on `main`, untagged.** Author identity (#75) and the diagnostics + Zotero-9 host-contract + pane-rebuild branch (#77, squash `277444b`, 2026-08-01) are both merged but **not tagged** — staged behind one future v3.0.0 release. #77 added a user-facing diagnostics layer (append-only `CG-*` error codes users can quote, guard/guardAsync boundaries on every Zotero callback, a redaction net, and metered-API budget/auth/response/network discrimination), fixed two silent-spinner-hang classes and closed the DB-write-leak class with a structural invariant test, and cleaned the review tail. Reviewed across 12 escalating adversarial rounds — converged with two consecutive full-panel rounds clean of P2+. v2.0.4 last released 2026-06-10 (#57).
+> **Build:** typecheck (strict, no errors) · **519 tests** · lint (0 errors, 3 pre-existing `any` warnings) · format · OKF · build → `citegeist-3.0.0.xpi` (~107 KB), all green on **Node ≥22** (required by `.nvmrc`/CI — vitest 4's ESM config can't be `require()`d on Node 20; use `--no-file-parallelism` to distinguish real failures from the known parallel flakiness).
 
 ---
 
 ## Current State
 
-| Attribute        | Value                                                                                                |
-| ---------------- | ---------------------------------------------------------------------------------------------------- |
-| **Version**      | 3.0.0 (merging to `main`, untagged; 2.0.4 last released 2026-06-10 — Zenodo 10.5281/zenodo.19433716) |
-| **Build Status** | Clean — 451 tests, typecheck/lint/format/OKF clean, XPI ~100 KB (Node ≥22)                           |
-| **Open Issues**  | P0: 0, P1: 0, P2: 1, P3: 2 (see ISSUES.md)                                                           |
-| **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, Zotero 7.0.10–9, SQLite, Node 22                       |
-| **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                                                |
-| **Distribution** | GitHub Releases → auto-update via `release` Release (self-maintaining); Zenodo-archived              |
+| Attribute        | Value                                                                                                         |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Version**      | 3.0.0 (#75 + #77 merged to `main`, untagged; 2.0.4 last released 2026-06-10 — Zenodo 10.5281/zenodo.19433716) |
+| **Build Status** | Clean — 519 tests, typecheck/lint/format/OKF clean, XPI ~107 KB (Node ≥22)                                    |
+| **Open Issues**  | P0: 0, P1: 0, P2: 2, P3: 8 (see ISSUES.md; DEBT-011..014 are review residuals)                                |
+| **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, Zotero 7.0.10–9, SQLite, Node 22                                |
+| **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                                                         |
+| **Distribution** | GitHub Releases → auto-update via `release` Release (self-maintaining); Zenodo-archived                       |
 
 ---
 
 ## In Progress
 
-**No active feature work — the author-identity layer (v3.0.0) is merged to `main`.** Remaining follow-ups: a real-Zotero visual-verify of the rebuilt pane (composition + the Zotero 8/9 sidenav icon), and the `v3.0.0` release (tag + `CITATION.cff`/`CHANGELOG` date) when it's time to ship to users. Origin docs: `docs/brainstorms/2026-07-16-author-identity-layer-requirements.md` + `docs/plans/2026-07-16-001-feat-author-identity-layer-plan.md`.
+**No active feature work — author identity (#75) and the diagnostics + Zotero-9 + pane-rebuild branch (#77) are both merged to `main`, untagged.** Remaining follow-ups: a real-Zotero visual-verify of the rebuilt pane (composition + the Zotero 8/9 sidenav icon), a 2-device sync round-trip check, and the `v3.0.0` release (tag + `CITATION.cff`/`CHANGELOG` date) when it's time to ship to users. Origin docs: `docs/brainstorms/2026-07-16-author-identity-layer-requirements.md` + `docs/plans/2026-07-16-001-feat-author-identity-layer-plan.md`.
+
+**Diagnostics + Zotero-9 host contracts + pane rebuild — merged to `main` ([#77](https://github.com/phdemotions/zotero-citegeist/pull/77), squash `277444b`, 2026-08-01; untagged).** A user-facing diagnostics layer so every failure is addressable, plus the Zotero-9 host-contract fixes and the item-pane rebuild.
+
+- **Diagnostics:** append-only `CG-*` error-code registry (`src/modules/diagnostics/codes.ts`) with plain-language copy a user can quote in an issue; an in-memory ring buffer; `logError` as the single funnel; `guard`/`guardAsync`/`bindGuarded` boundaries on every Zotero-invoked callback; total service functions (never throw); a coded failure UI with a Copy-report button. A central redaction net keeps titles/DOIs/OpenAlex-ids/api-key/usernames out of the shareable report. Locked by `test/diagnostics-guard-invariants.test.ts`; human mirror in `docs/ERROR-CODES.md`.
+- **Metered-OpenAlex discrimination:** budget (`CG-API42`) vs auth (`CG-API01`) vs response (`CG-API50`) vs network (`CG-NET01`); bulk fetch/resolve passes stop cleanly on a spent budget or a rejected key rather than grinding through the library.
+- **Silent-hang classes closed:** the item-save leak and the `onAsyncRender` `"cached"` fall-through (both left the spinner up forever); the DB-write-leak class closed with a structural no-raw-`saveTx` invariant test. See `project_render_terminal_state` in memory.
+- **Process:** 12 escalating adversarial review rounds (diverse-lens finders → default-refute verifiers); converged with two consecutive full-panel rounds clean of P2+. Non-blocking residuals recorded as DEBT-011..014.
 
 **Author identity layer — merged to `main` as v3.0.0 ([#75](https://github.com/phdemotions/zotero-citegeist/pull/75), 2026-07-18; supersedes #73/#74; untagged).** Resolve and surface OpenAlex author identity across the library, plus a Scholar-style author view in the pane.
 
