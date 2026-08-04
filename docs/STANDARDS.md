@@ -34,7 +34,7 @@ file is the explicit, pinned conformance statement for the plugin.
   conventions stay where they already live: TypeScript strict (`tsc --noEmit`),
   ESLint 9 flat config, Prettier, and the "every magic number in `src/constants.ts`"
   rule (see [`CLAUDE.md`](../CLAUDE.md)). "OKF for our coding" means our code
-  *knowledge* — the architecture decisions in [`DESIGN.md`](DESIGN.md), the
+  _knowledge_ — the architecture decisions in [`DESIGN.md`](DESIGN.md), the
   principles in `CLAUDE.md` — is captured as OKF-conformant docs. It does **not**
   mean OKF governs `.ts` syntax; that stays with the toolchain.
 - **Repo-root operational docs** (`README.md`, `CLAUDE.md`, `CHANGELOG.md`,
@@ -59,8 +59,8 @@ file is the explicit, pinned conformance statement for the plugin.
 ## Citegeist `type` vocabulary
 
 `standard` · `architecture` · `status` · `issues` · `backlog` · `migration` ·
-`plan` · `feat` · `brainstorm` · `ideation` · `solution` · `audit`. Not centrally
-registered — add types freely; consumers tolerate unknowns.
+`plan` · `feat` · `brainstorm` · `ideation` · `solution` · `audit` · `checklist`.
+Not centrally registered — add types freely; consumers tolerate unknowns.
 
 ## Tracking upstream (it changes "all the time")
 

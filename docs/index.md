@@ -20,6 +20,7 @@ JOSS-exempt.
 - [Status](STATUS.md) — current state, last session, upcoming work
 - [Issues](ISSUES.md) — open bugs and feature requests by priority
 - [Backlog](BACKLOG.md) — curated longer-term enhancement ideas
+- [Release checklist](RELEASE-CHECKLIST.md) — manual verification gates before tagging any `v*`
 
 ## Architecture & migration
 
