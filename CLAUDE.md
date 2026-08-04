@@ -97,6 +97,8 @@ typings/                        # Zotero type declarations
 
 ## Release Process
 
+**Gate first.** Before tagging any `v*`, run `docs/RELEASE-CHECKLIST.md` — the manual host-verification gates (real-Zotero smoke on 7/8/9, diagnostics end-to-end, and the 2-device sync round-trip). The 519 tests mock Zotero, so the highest-risk surface (pane render, sidenav icon, sync integrity) has no automated coverage; auto-update hits 100% of users with no canary, so a bad tag is fleet-wide. The mechanical steps below only run once those gates pass.
+
 Shipping to users requires a **tagged release**, not just a push to `main`:
 
 1. Bump versions in `package.json`, `package-lock.json` (top-level + `packages[""]`), and `CITATION.cff` — all three must match
@@ -134,16 +136,17 @@ Locally, always verify with `rm -rf node_modules && npm install` before releasin
 
 ## Key Files
 
-| File                  | Purpose                                                                                                                                                                                 |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docs/STATUS.md`      | Current project state, what was done last session, upcoming work                                                                                                                        |
-| `docs/ISSUES.md`      | Open bugs and feature requests with priorities                                                                                                                                          |
-| `docs/solutions/`     | Documented fixes to past problems (bugs, patterns), by category with YAML frontmatter (`module`, `tags`, `problem_type`) — relevant when debugging or implementing in a documented area |
-| `docs/BACKLOG.md`     | Curated longer-term enhancement ideas                                                                                                                                                   |
-| `docs/STANDARDS.md`   | OKF documentation standard — pin, scope (docs-only), cadence                                                                                                                            |
-| `docs/index.md`       | OKF bundle catalog (reserved index of every docs/ file)                                                                                                                                 |
-| `CHANGELOG.md`        | Keep-a-Changelog format, one entry per release                                                                                                                                          |
-| `docs/DESIGN.md`      | Architecture decisions and trade-offs                                                                                                                                                   |
-| `CONTRIBUTING.md`     | Dev setup, commands, PR guidelines                                                                                                                                                      |
-| `docs/paper/paper.md` | JOSS paper (in progress)                                                                                                                                                                |
-| `CITATION.cff`        | Machine-readable citation metadata                                                                                                                                                      |
+| File                        | Purpose                                                                                                                                                                                 |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs/STATUS.md`            | Current project state, what was done last session, upcoming work                                                                                                                        |
+| `docs/ISSUES.md`            | Open bugs and feature requests with priorities                                                                                                                                          |
+| `docs/RELEASE-CHECKLIST.md` | Manual verification gates that must pass before tagging any `v*` (real-Zotero smoke 7/8/9, diagnostics end-to-end, 2-device sync) — run before the Release Process steps                |
+| `docs/solutions/`           | Documented fixes to past problems (bugs, patterns), by category with YAML frontmatter (`module`, `tags`, `problem_type`) — relevant when debugging or implementing in a documented area |
+| `docs/BACKLOG.md`           | Curated longer-term enhancement ideas                                                                                                                                                   |
+| `docs/STANDARDS.md`         | OKF documentation standard — pin, scope (docs-only), cadence                                                                                                                            |
+| `docs/index.md`             | OKF bundle catalog (reserved index of every docs/ file)                                                                                                                                 |
+| `CHANGELOG.md`              | Keep-a-Changelog format, one entry per release                                                                                                                                          |
+| `docs/DESIGN.md`            | Architecture decisions and trade-offs                                                                                                                                                   |
+| `CONTRIBUTING.md`           | Dev setup, commands, PR guidelines                                                                                                                                                      |
+| `docs/paper/paper.md`       | JOSS paper (in progress)                                                                                                                                                                |
+| `CITATION.cff`              | Machine-readable citation metadata                                                                                                                                                      |
