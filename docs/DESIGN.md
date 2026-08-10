@@ -2,8 +2,8 @@
 type: architecture
 title: Citegeist — design rationale
 description: Key architectural decisions behind Citegeist and the trade-offs involved.
-timestamp: 2026-04-09
-tags: [citegeist, architecture, design, openalex, zotero]
+timestamp: 2026-08-02
+tags: [citegeist, architecture, design, openalex, zotero, sqlite, authors, diagnostics]
 ---
 
 # Design Rationale
@@ -26,7 +26,7 @@ Citegeist needed a citation data source that met three constraints: free to use,
 
 OpenAlex is the only source that provides field-weighted citation impact (FWCI) and percentile rankings through a free, unauthenticated API. It indexes over 250 million works, covers journal-level metadata (2-year mean citedness, h-index, ISSNs), and is licensed CC0.
 
-The polite pool (faster rate limits for users who provide an email) is optional, not required. This means Citegeist works out of the box with zero configuration.
+OpenAlex became metered in July 2026. Singleton lookups — fetching one work or author by ID — remain free; list-and-filter queries draw on a daily allowance that is generous for anonymous use and larger still with a key. The older "polite pool" email model is gone: there is no email to provide and no faster tier to unlock with one. Citegeist needs neither an account nor a key to run, so it still works out of the box with zero configuration. A researcher who exhausts the anonymous daily allowance can paste a free OpenAlex API key into settings to raise it; the key is opt-in, rides the query string, and is redacted centrally so it never reaches a log or a diagnostic report.
 
 **Trade-off:** OpenAlex's FWCI values may differ from Scopus/SciVal because the underlying corpus, field classification, and calculation methodology differ. We present OpenAlex's values as-is without modification, and note this in the JOSS paper.
 
@@ -63,31 +63,45 @@ Updates happen at plugin release time. When ABDC or AJG publish new editions, we
 
 ---
 
-## Why the Extra Field for Caching?
+## Why a Plugin-Owned SQLite Cache?
 
-Zotero items have an `Extra` field that supports arbitrary text. Citegeist stores all cached data there using namespaced keys:
+Through v1.3.x, Citegeist cached everything it knew about a paper — citation count, FWCI, percentile, journal metrics, confirmed title matches — in that item's `Extra` field, tagged with `Citegeist.` prefixes. That was a mistake, and v2.0.0 undid it. Cached metrics now live in a plugin-owned SQLite database at `<profile>/citegeist.sqlite`, opened via `Zotero.DBConnection` — the documented Zotero 7+ plugin-storage pattern, the same one Better BibTeX uses.
 
-```
-Citegeist.citedByCount: 42
-Citegeist.fwci: 2.31
-Citegeist.percentile: 85.2
-Citegeist.lastFetched: 2026-04-04T12:00:00Z
-```
+Four problems drove the move off `Extra`:
 
-This approach was chosen over alternatives (a separate SQLite database, a JSON file, localStorage) for one critical reason: **Zotero Sync compatibility.** The Extra field syncs automatically across devices through Zotero's built-in sync. A researcher who fetches citation data on their office desktop will see it on their laptop at home without any additional configuration.
+1. **Tenancy collision.** Better BibTeX, Zutilo, and CSL processors all read and write `Extra`. Sharing that namespace with them was a standing footgun.
+2. **CSL template leakage.** Templates can pull from `Extra`, so a misconfigured one could surface bibliometric bookkeeping inside a generated citation.
+3. **Orphan data on uninstall.** Removing the plugin left `Citegeist.*` lines in every item forever.
+4. **Backup-restore staleness.** Restoring an older library backup silently overwrote fresher cached values.
 
-The cache layer parses and writes only lines prefixed with `Citegeist.`, preserving all other Extra field content (user notes, CSL variables, PMIDs, other plugin data) exactly as-is.
+Owning the store fixes all four: the database is Citegeist's alone, invisible to citation processing, and a researcher's bibliographic records stop carrying the plugin's bookkeeping.
 
-**Trade-off:** The Extra field is plain text, so we store flat key-value pairs rather than structured objects. This limits what we can cache per item, but the fields we need (counts, FWCI, percentile, source ID, journal metrics, timestamps) are all scalar values that serialize naturally.
+SQLite also resolves a constraint the `Extra` field never had to satisfy. Zotero's column `dataProvider` is **synchronous** — a sortable column must return a value in the same tick it is asked — but SQLite reads are async. Citegeist bridges this with an in-memory mirror: at startup the whole `item_cache` table loads into a `Map` keyed by `(libraryID, itemKey)`, column rendering reads that map with zero SQL per row, and writes go to SQLite first and then update the mirror. The database is the source of truth; the mirror is the sync-read surface over it.
+
+One line still travels back to `Extra`: the user-curated `Citegeist match ID: W…` for an item whose citation data was confirmed by title match. It is the only thing worth preserving outside the plugin's own store — it survives a downgrade to v1.x and rides Zotero Sync to the user's other devices, so a confirmed match never has to be re-confirmed.
+
+**Trade-off:** The cache is now re-derivable local state rather than synced content. On a new device, or after clearing the database, each item re-fetches from OpenAlex the first time it is viewed — a brief "loading" beat on first scroll. Nothing is lost, because every cached value is re-derivable from a free singleton lookup, and the one piece that is _not_ re-derivable (the curated match ID) is exactly the piece kept in `Extra`. Full detail: [`docs/MIGRATION-v2.0.0.md`](MIGRATION-v2.0.0.md).
+
+---
+
+## Why a Separate Author-Identity Store?
+
+Citegeist v3.0.0 added an author-identity layer: it resolves each item's authors to their OpenAlex author identities and, in the item pane, lets a researcher open a Scholar-style view of an author's works. **Identity is not a profile.** Resolving _who_ an author is — a canonical OpenAlex author ID, display name, and ORCID — is separate from fetching that author's aggregate metrics. Identity rides the free background metrics fetch: `resolveAuthorsForItem` re-reads the item's already-cached work through `getWorkById`, a free OpenAlex singleton lookup, so resolving identity across an entire library costs no metered budget. The heavier profile fetch (works count, h-index, i10) only runs when the researcher actually opens an author.
+
+Author identity lives in its own normalized sub-module of the cache — `cache/authors/`, holding two tables: `authors` (one row per OpenAlex author: id, name, ORCID, and the derived metric columns) and `item_authors` (which authors belong to which item). Unlike the item cache, there is no in-memory mirror: author reads are async and happen only in the pane, never in a synchronous column `dataProvider`, so the mirror the columns need would be dead weight here. Writes serialize under the same per-`(libraryID, itemKey)` lock as the item cache, and are column-disjoint (an identity write never clobbers a metrics write) so a background resolve and a user action on the same item can't corrupt each other.
+
+The external handoff is the SQLite file itself. A downstream pipeline reads `citegeist.sqlite` directly, so the `item_authors` table _is_ the interchange format. An earlier design asserted each work's resolved authors as native Zotero item relations under an `openalex:author` predicate, on the theory that a native relation would sync and travel with the item. It was removed before v3.0.0 shipped: Zotero's **sync server rejects the custom predicate** ("Error 400 — Unsupported predicate 'openalex:author'") and, worse, that rejection halts the user's entire library sync. A one-time purge now strips any such relation an earlier build wrote, so a library stuck on the rejected predicate can sync again.
+
+**Trade-off:** Keeping identity out of `Extra` and out of item relations means it does not ride Zotero Sync — a second device re-resolves identity on its own rather than receiving it. That is the price of not breaking sync, and it is cheap: re-resolution runs on free singleton lookups, so the only cost is a background pass, not a re-confirmation or a metered charge. A sync-safe cross-device handoff waits on a predicate or channel Zotero's server will accept.
 
 ---
 
 ## Why a Centralized Rate Limiter?
 
-OpenAlex's polite pool allows 10 requests per second. Citegeist targets 8 req/s to stay safely below the limit. All API calls go through a single `rateLimitedFetch` function that:
+OpenAlex is metered rather than gated behind a polite pool, so there is no published per-second ceiling to hug — but a burst of requests is still antisocial and risks a transient throttle. Citegeist targets 8 req/s. All API calls — works and authors alike — go through a single `rateLimitedFetch` function that:
 
 1. Enforces a minimum 125ms interval between requests.
-2. Retries on HTTP 429 with exponential backoff (2s, then 4s).
+2. Retries transient failures (network errors, a per-second 429, 5xx) with backoff (2s, then 4s). A _budget-exhausted_ 429 — the daily allowance spent, flagged by `X-RateLimit-Remaining: 0` — is **not** retried; it raises a distinct error that prompts the user for an optional API key rather than hammering a quota that won't refill for hours.
 
 This matters because Citegeist has multiple concurrent callers: the auto-fetch triggered by browsing items, batch operations on entire collections, and the citation network browser paginating through results. Without centralization, each caller would independently track timing, and concurrent operations could easily exceed the rate limit.
 
@@ -103,13 +117,25 @@ The plugin is organized into focused modules rather than a single monolithic fil
 
 ```
 src/modules/
-  openalex.ts          → API client (fetch, parse, rate limit)
-  cache.ts             → Extra field read/write
-  citationService.ts   → Orchestration (fetch + cache + journal stats)
+  openalex.ts          → Works API client (fetch, parse, rate limit, metered-error mapping)
+  openalexAuthors.ts   → Authors API client (shares the works client's rate limiter + URL builder)
+  cache/               → Plugin-owned SQLite cache
+    db.ts              → Connection, in-memory mirror, lifecycle (init/close)
+    read.ts            → Synchronous read API (mirror only)
+    write.ts           → Async write API (SQLite first, then mirror)
+    migration.ts       → One-shot Extra→SQLite migration + orphan GC
+    types.ts           → Public types + internal row shape
+    index.ts           → Public surface (re-exports)
+    authors/           → Normalized author-identity store (authors + item_authors)
+  citationService.ts   → Orchestration (fetch + cache + journal stats + author backfill)
   citationColumn.ts    → Sortable column registration
   citationPane.ts      → Sidebar pane rendering
   menu.ts              → Right-click context menus
-  citationNetwork/     → Citation browser (dialog, results, actions, styles, types)
+  authorProfile.ts     → Author profile + view-model layer (pure logic, unit-tested)
+  titleSearch.ts       → Metadata matching (title/year/author scoring)
+  diagnostics/         → Quotable error codes, ring buffer, guards, copy-report
+  ui/                  → Canonical design system (tokens, components, theme)
+  citationNetwork/     → Citation browser + author-works dialog
     dialog.ts          → Modal lifecycle
     results.ts         → Result rendering and pagination
     actions.ts         → Add-to-library, undo, collection filing
@@ -117,21 +143,40 @@ src/modules/
     types.ts           → Shared interfaces and constants
     styles.ts          → CSS-in-JS for the dialog
     index.ts           → Public API
+  utils.ts             → Shared: escapeHTML, normalizeError, logError, safeHTML
 src/data/
   journalRankings.ts   → Static ISSN-to-ranking lookup table
 ```
 
-Each module has a single responsibility and communicates through typed interfaces. The citation network browser was split into six files because it handles dialog lifecycle, result rendering, library import actions, collection picking, and styling, which are distinct concerns that benefit from separation.
+Each module has a single responsibility and communicates through typed interfaces. The citation network browser was split into focused files because it handles dialog lifecycle, result rendering, library import actions, collection picking, and styling — distinct concerns that benefit from separation. The same dialog also drives the author-works view, so its shared row markup lives in one place.
 
-`citationService.ts` is the orchestration layer. It is the only module that imports both `openalex.ts` and `cache.ts`, keeping the API client and storage logic decoupled. Columns, panes, and menus all call the service layer rather than reaching into the API or cache directly.
+`citationService.ts` is the orchestration layer. It is the module that imports both the API clients and `cache/`, keeping the API clients and storage logic decoupled. Columns, panes, and menus all call the service layer rather than reaching into the API or cache directly.
 
-**Trade-off:** More files means more indirection. But for a plugin with ~2,500 lines of TypeScript, the navigation cost is minimal and the testability benefit is significant. Each module can be unit-tested with focused mocks.
+**Trade-off:** More files means more indirection. But for a plugin of roughly 18,000 lines of TypeScript across several dozen modules, the navigation cost is minimal and the testability benefit is significant. Each module can be unit-tested with focused mocks.
+
+---
+
+## Why Stable, Quotable Diagnostic Codes?
+
+A plugin that runs inside someone else's application, against a metered remote API, on a database that a cloud-sync client might be holding open, will fail in ways the user has no vocabulary for — a blank column, a menu that does nothing, a pane stuck on its spinner. v3.0.0 added a diagnostics layer so that **every distinguishable failure ends with something the user can quote.**
+
+Every failure Citegeist can distinguish carries a **stable `CG-*` code** — `CG-NET01` (can't reach OpenAlex), `CG-API42` (daily budget spent), `CG-DB01` (can't write the local database), and so on. The codes are an **append-only public contract**: a code is a permanent identifier, so it is never renumbered, reused, or repurposed, and one is retired by leaving its entry in place with a note. The registry lives in `src/modules/diagnostics/codes.ts`; its human-facing mirror is [`docs/ERROR-CODES.md`](ERROR-CODES.md). A thrown `CitegeistError` carries its own code from the fetch layer to the UI, so intent is never re-derived by sniffing a message string.
+
+Three mechanisms make the codes trustworthy:
+
+1. **A single funnel.** `logError()` is the only path that records into an in-memory ring buffer of recent problems. Redaction happens inside `normalizeError` on that path, so nothing — no API key, no library content — reaches the buffer unredacted.
+2. **Guarded boundaries.** Zotero does nothing useful with an exception thrown from a callback it invoked: a rejected async render hangs the pane on its spinner, a throwing `dataProvider` blanks a column, a throwing menu command does nothing at all. Every callback Zotero invokes is wrapped in `guard`/`guardAsync` at its registration choke point, so a failure becomes a recorded, coded diagnostic instead of a silent dead surface.
+3. **A copy-paste report.** _Settings → Citegeist → Troubleshooting → Copy diagnostic report_ produces one plain-text block — build ID, Zotero version, platform, and every problem recorded since startup — that a user can paste into an issue without knowing what any of it means. The redaction net guarantees it carries no titles, DOIs, API key, or username.
+
+**Trade-off:** The codes must be minted and maintained by hand — one code per _distinguishable user situation_, not per throw site — and the append-only rule means the registry only grows. Both the append-only property and the "every host callback is guarded" property are locked by `test/diagnostics-guard-invariants.test.ts`, a hard test/CI gate: if it fails, the fix is the code, never the test.
 
 ---
 
 ## Metadata-Based Matching (Title Search Fallback)
 
-> **Status: Planned — v1.2.0**
+> **Shipped in v1.2.0** (2026-04-09).
+
+> _Storage note:_ the match-state keys described below (`Citegeist.matchMethod`, `Citegeist.noMatch`, …) were the v1.2.0 design, when Citegeist still cached to `Extra`. Since v2.0.0 they live in the SQLite cache (see [Why a Plugin-Owned SQLite Cache?](#why-a-plugin-owned-sqlite-cache)); the one exception is the curated `Citegeist match ID: W…` line, which is still mirrored to `Extra` for downgrade safety. The matching logic and thresholds below are unchanged.
 
 When a direct identifier lookup fails — either because no identifier exists or because the API returned "not found" — Citegeist falls back to a metadata search using the item's existing Zotero fields. The goal is to surface citation data for as many items as possible while preserving the researcher's trust that the data is attached to the right paper.
 

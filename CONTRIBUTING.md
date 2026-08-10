@@ -11,10 +11,15 @@ Thank you for your interest in contributing! Citegeist is free and open-source, 
 
 ## Development Setup
 
+**Requires Node ≥22** (`.nvmrc` pins 22.22.3; `package.json` `engines` enforces it).
+vitest 4's config is ESM-only and can't be `require()`d on Node 20, so `npm test`
+crashes at config-load before any test runs. Run `nvm use` first.
+
 ```bash
 git clone https://github.com/phdemotions/zotero-citegeist.git
 cd zotero-citegeist
-npm install
+nvm use            # Node ≥22
+npm install        # not `npm ci` — see the CI note in CLAUDE.md
 npm run build:dev
 ```
 
@@ -53,6 +58,7 @@ npm run typecheck
 npm test
 npm run lint
 npm run format:check
+npm run okf:check
 npm run build
 ```
 
@@ -92,12 +98,14 @@ Use the **Bug report** issue template. At minimum we need:
 
 See [`DESIGN.md`](docs/DESIGN.md) for the design rationale and trade-offs. Key modules:
 
-- `src/modules/openalex.ts` — OpenAlex client with polite-pool rate limiting and retry
-- `src/modules/cache.ts` — Read/write Citegeist fields in Zotero's Extra field
-- `src/modules/citationService.ts` — Orchestrates fetch + cache
+- `src/modules/openalex.ts` — OpenAlex client: single rate-limited fetch (8 req/s + backoff), metered-API budget/auth handling
+- `src/modules/cache/` — SQLite-backed cache (sync in-memory mirror + async writes); `cache/authors/` holds the author-identity tables
+- `src/modules/citationService.ts` — Orchestrates fetch + cache + error handling
 - `src/modules/citationColumn.ts` — Item-tree columns
-- `src/modules/citationPane.ts` — Item-detail pane section
-- `src/modules/citationNetwork/` — Citation browser dialog
+- `src/modules/citationPane.ts` — Item-detail pane section (citation impact + author discovery)
+- `src/modules/citationNetwork/` — Citation browser + author-works dialog
+- `src/modules/diagnostics/` — Quotable `CG-*` error codes, guard boundaries, the diagnostic report
+- `src/modules/ui/` — Canonical design system (tokens, shared component primitives, theme)
 - `src/constants.ts` — All tunable constants
 
 ## License

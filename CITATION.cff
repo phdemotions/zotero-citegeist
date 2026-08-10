@@ -16,12 +16,13 @@ identifiers:
     value: 10.5281/zenodo.20586895
     description: "Version DOI for v2.0.0"
 abstract: >-
-  Citegeist is a Zotero 7+ plugin (compatible with Zotero 8) that embeds citation intelligence
+  Citegeist is a Zotero 7+ plugin (compatible with Zotero 8 and 9) that embeds citation intelligence
   directly into the reference manager. It displays citation counts,
   field-weighted citation impact, percentile rankings, citation trends,
   journal-level metrics, and journal ranking lists (UTD24, FT50, ABDC,
-  AJG) for any paper with a DOI, and provides a citation network browser
-  for discovering and importing related works — all powered by the
+  AJG) for any paper with a DOI, PMID, arXiv ID, or ISBN; provides a
+  citation network browser for discovering and importing related works;
+  and surfaces author identity and per-author output — all powered by the
   OpenAlex open bibliometric index.
 keywords:
   - zotero

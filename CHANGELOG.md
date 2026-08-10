@@ -13,6 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each linking to that author's works — follow a researcher's output forward
   without leaving Zotero. Authors are matched to OpenAlex automatically when a
   paper's citation metrics load; no extra step.
+- **Quotable error codes when something goes wrong.** Every failure now shows a
+  short code (like `CG-NET01` for a connection problem or `CG-API42` for a spent
+  OpenAlex daily budget) with plain-language guidance, plus a "Copy diagnostic
+  report" button. Pasting that report into a GitHub issue identifies the problem
+  without a round of back-and-forth. The full list is in `docs/ERROR-CODES.md`.
+- **Optional OpenAlex API key.** OpenAlex became metered in July 2026; anonymous
+  use now has a smaller free daily allowance. Add a free OpenAlex API key in
+  Citegeist settings to raise the limit. The key is stored locally, never synced,
+  and never written to logs or the diagnostic report.
 
 ### Changed
 
@@ -23,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three-tile metric grid is gone.
 - **The pane caps its content width** so a dragged-wide item pane no longer
   stretches the metrics, buttons, and author rows apart.
+- **Settings: the OpenAlex email field was replaced by an optional API key.**
+  OpenAlex retired the email-based "polite pool," so the old email setting no
+  longer did anything; the metered API uses a key instead.
+- **Zotero 9 compatibility hardening.** The item-pane section, its sidenav icon
+  (light and dark), the right-click menu, and localized labels now follow
+  Zotero 9's stricter plugin-API contracts.
 
 ### Fixed
 
