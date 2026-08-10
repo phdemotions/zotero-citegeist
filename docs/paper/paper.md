@@ -21,7 +21,7 @@ bibliography: paper.bib
 
 # Summary
 
-Citegeist is a plugin for Zotero 7+ (including Zotero 8) that embeds citation intelligence directly into the reference manager. For any item with a recognizable identifier — DOI, PubMed ID (PMID), arXiv ID, or ISBN — Citegeist retrieves article-level metrics from OpenAlex [@priem2022openalex], a free and open index of over 250 million scholarly works, and displays them as sortable columns and a contextual detail pane. It also provides journal-level metrics from the OpenAlex Sources API and matches journals against four bundled ranking lists covering 3,177 journals. A built-in citation network browser supports forward and backward citation chaining with one-click import of discovered papers into the researcher's Zotero library.
+Citegeist is a plugin for Zotero 7, 8, and 9 that embeds citation intelligence directly into the reference manager. For any item with a recognizable identifier — DOI, PubMed ID (PMID), arXiv ID, or ISBN — Citegeist retrieves article-level metrics from OpenAlex [@priem2022openalex], a free and open index of over 250 million scholarly works, and displays them as sortable columns and a contextual detail pane. It also provides journal-level metrics from the OpenAlex Sources API and matches journals against four bundled ranking lists covering 3,177 journals. A built-in citation network browser supports forward and backward citation chaining with one-click import of discovered papers into the researcher's Zotero library.
 
 No API key, institutional subscription, or account is required.
 
@@ -37,22 +37,22 @@ Zotero [@zotero] is a widely used free, open-source reference manager, yet it pr
 
 : Comparison of Zotero citation plugins. Only actively maintained plugins with Zotero 7+ support are included. \label{tab:comparison}
 
-| Feature | Cit.Counts Mgr | Cit. Tally | GS Count | scite | Cita | **Citegeist** |
-|---|---|---|---|---|---|---|
-| Data source | Crossref, S2 | Crossref, S2 | Google Scholar | scite.ai | Wikidata, OA, S2 | OpenAlex |
-| Cost | Free | Free | Free | Paid | Free | Free |
-| Raw citation counts | Yes | Yes | Yes | No | No | Yes |
-| Non-DOI identifiers (PMID, arXiv, ISBN) | No | No | No | No | No | **Yes** |
-| FWCI column (sortable) | No | No | No | No | No | **Yes** |
-| Percentile column | No | No | No | No | No | **Yes** |
-| Journal metrics | No | No | No | No | No | **Yes** |
-| Journal rankings (UTD24, FT50, ABDC, AJG) | No | No | No | No | No | **Yes** |
-| Citation trend | No | No | No | No | No | **Yes** |
-| Citation network browsing | No | No | No | No | Yes (graph) | **Yes** (list) |
-| One-click import to library | No | No | No | No | No | **Yes** |
-| Collection filing on import | No | No | No | No | No | **Yes** |
-| Retraction detection | No | No | No | No | No | **Yes** |
-| Citation context (supporting/contrasting) | No | No | No | Yes | No | No |
+| Feature                                   | Cit.Counts Mgr | Cit. Tally   | GS Count       | scite    | Cita             | **Citegeist**  |
+| ----------------------------------------- | -------------- | ------------ | -------------- | -------- | ---------------- | -------------- |
+| Data source                               | Crossref, S2   | Crossref, S2 | Google Scholar | scite.ai | Wikidata, OA, S2 | OpenAlex       |
+| Cost                                      | Free           | Free         | Free           | Paid     | Free             | Free           |
+| Raw citation counts                       | Yes            | Yes          | Yes            | No       | No               | Yes            |
+| Non-DOI identifiers (PMID, arXiv, ISBN)   | No             | No           | No             | No       | No               | **Yes**        |
+| FWCI column (sortable)                    | No             | No           | No             | No       | No               | **Yes**        |
+| Percentile column                         | No             | No           | No             | No       | No               | **Yes**        |
+| Journal metrics                           | No             | No           | No             | No       | No               | **Yes**        |
+| Journal rankings (UTD24, FT50, ABDC, AJG) | No             | No           | No             | No       | No               | **Yes**        |
+| Citation trend                            | No             | No           | No             | No       | No               | **Yes**        |
+| Citation network browsing                 | No             | No           | No             | No       | Yes (graph)      | **Yes** (list) |
+| One-click import to library               | No             | No           | No             | No       | No               | **Yes**        |
+| Collection filing on import               | No             | No           | No             | No       | No               | **Yes**        |
+| Retraction detection                      | No             | No           | No             | No       | No               | **Yes**        |
+| Citation context (supporting/contrasting) | No             | No           | No             | Yes      | No               | No             |
 
 ZoteroCitationCountsManager [@zotero_citationcounts_manager] and zotero-citation-tally [@zotero_citation_tally] retrieve raw counts from Crossref and Semantic Scholar, while zotero-google-scholar-citation-count [@zotero_google_scholar_count] scrapes Google Scholar with the associated risk of rate limiting and bot detection. These plugins provide counts without field context, offering no way to judge whether a count is high or low for a given discipline. The scite Zotero plugin [@scite_zotero] classifies citations as supporting, mentioning, or contrasting, but requires a paid subscription and does not provide counts or field-normalized metrics. Cita [@zotero_cita] manages citation metadata via Wikidata, Crossref, and Semantic Scholar, and can visualize a citation network graph, but focuses on metadata curation and Wikidata synchronization rather than field-normalized metrics or literature discovery workflows. The Inciteful plugin [@inciteful_zotero] provides network visualization but launches an external website rather than operating within Zotero.
 
@@ -72,11 +72,11 @@ Citegeist adds three components to Zotero:
 
 **A citation network browser** lets researchers explore citing works (forward chaining) and references (backward chaining) in a modal dialog. Results show title, authors, venue, year, citation count, open-access status, and retraction warnings. Each result has a split button: the main action adds the paper to a chosen default collection with complete metadata; the dropdown opens a per-item collection picker for filing to specific folders. Duplicate detection prevents re-importing items already in the library. Expandable abstracts are fetched on demand.
 
-All data is cached in each item's Extra field using namespaced keys (e.g., `Citegeist.citedByCount: 42`), preserving data across sessions and through Zotero Sync.
+Cached data is stored in a plugin-owned SQLite database (`citegeist.sqlite`) in the Zotero profile directory, preserving metrics across sessions without writing to the bibliographic record. Only the identifier of a user-confirmed title match is retained in the item's Extra field, so that manual matches survive a downgrade and travel across devices through Zotero Sync.
 
 # Implementation
 
-Citegeist is implemented in TypeScript and built with esbuild into a single bundle. It targets Zotero 7 and later (including Zotero 8), using the plugin APIs introduced in Zotero 7: `ItemPaneManager` for the sidebar section, `ItemTreeManager` for custom sortable columns, and standard DOM APIs for the citation network dialog. The plugin communicates with the OpenAlex REST API through a centralized rate limiter that enforces a maximum of 8 requests per second (below OpenAlex's polite-pool limit of 10 req/s), with exponential backoff on HTTP 429 responses. Responses are cached locally with a configurable expiration period (default: 7 days). Users can optionally provide an email to access OpenAlex's polite pool for higher rate limits.
+Citegeist is implemented in TypeScript and built with esbuild into a single bundle. It targets Zotero 7, 8, and 9, using the plugin APIs introduced in Zotero 7: `ItemPaneManager` for the sidebar section, `ItemTreeManager` for custom sortable columns, and standard DOM APIs for the citation network dialog. The plugin communicates with the OpenAlex REST API through a centralized rate limiter that enforces a maximum of 8 requests per second, with exponential backoff on transient HTTP 429 responses. Responses are cached locally with a configurable expiration period (default: 7 days). As of July 2026, OpenAlex is metered: single-record lookups by identifier remain free, while list-and-filter queries draw on a daily allowance. Citegeist requires no account and runs on the free anonymous allowance; users may optionally supply a personal OpenAlex API key to raise their daily request limit.
 
 Identifier resolution follows a priority chain: DOI (via the Zotero DOI field), then PubMed ID (parsed from the Extra field), then arXiv ID (from the Extra field, the item's Archive ID field, or an arxiv.org URL), then ISBN (for book and book section item types). Each identifier type maps to a distinct OpenAlex endpoint (`works/doi:`, `works/pmid:`, `works/arxiv:`, `works/isbn:`). This extends coverage to preprints, biomedical literature without DOIs, and books. Because OpenAlex's citation coverage for books is incomplete, zero citation counts for book items are suppressed in the display layer to avoid misleading indicators.
 

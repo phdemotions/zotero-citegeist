@@ -28,14 +28,21 @@ JOSS-exempt.
 - [Design rationale](DESIGN.md) — architecture decisions and trade-offs
 - [Migration v2.0.0](MIGRATION-v2.0.0.md) — Extra → SQLite cache move
 
+## Design system
+
+- [Pane composition language](design-system/pane-composition-language.md) — the composition rubric on top of the `--cg-*` tokens (one hero, near-cardless, 8pt rhythm); arbiter for pane layout
+
 ## Plans
 
 - [Citation-pane metric grid (feat)](plans/2026-04-19-001-feat-citation-pane-metric-grid-plan.md)
 - [SQLite cache migration (feat)](plans/2026-05-27-001-feat-sqlite-cache-migration-plan.md)
+- [MenuManager registration lifecycle (fix)](plans/2026-07-06-001-fix-menu-manager-registration-lifecycle-plan.md)
+- [Author identity layer (feat)](plans/2026-07-16-001-feat-author-identity-layer-plan.md)
 
 ## Brainstorms & ideation
 
 - [Citation-pane metric grid — requirements](brainstorms/2026-04-19-citation-pane-metric-grid-requirements.md)
+- [Author identity layer — requirements](brainstorms/2026-07-16-author-identity-layer-requirements.md)
 - [Citation-pane UI — ideation](ideation/2026-04-19-citation-pane-ui-ideation.md)
 
 ## Solutions

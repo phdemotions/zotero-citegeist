@@ -8,8 +8,8 @@ tags: [citegeist, issues]
 
 # Citegeist — Open Issues
 
-> **Last Updated:** 2026-07-20 (DIAG-001 + DEBT-010 closed: diagnostic codes and guards now cover the network dialog; settings pane swapped the dead `mailto` field for the `api_key` field.)
-> **Previously:** 2026-07-18 (author-identity layer **v3.0.0 merged to `main`** #75, untagged — see STATUS.md; #72 stray-menu-section fixed in that merge. v2.0.4 released #57; v2.0.3 released #56. Closed issues archived to `docs/archive/issues-closed.jsonl`)
+> **Last Updated:** 2026-08-02 (GitHub-issue reconcile: the right-click-menu bug (#67/#72) is confirmed STILL OPEN on the released v2.0.5 by 3 users — the internal tracker had it marked fixed; added BUG-MENU + BUG-QUIT (#78) + OKF drift #79. **v2.0.5 is the last released version**, 2026-07-09.)
+> **Previously:** 2026-07-20 (DIAG-001 + DEBT-010 closed: diagnostic codes and guards now cover the network dialog; settings pane swapped the dead `mailto` field for the `api_key` field). 2026-07-18 (author-identity layer **v3.0.0 merged to `main`** #75, untagged — see STATUS.md). Closed issues archived to `docs/archive/issues-closed.jsonl`.
 
 ---
 
@@ -18,9 +18,9 @@ tags: [citegeist, issues]
 | Priority     | Open |
 | ------------ | ---- |
 | P0 (Blocker) | 0    |
-| P1 (High)    | 0    |
+| P1 (High)    | 2    |
 | P2 (Medium)  | 2    |
-| P3 (Low)     | 8    |
+| P3 (Low)     | 9    |
 
 ---
 
@@ -32,7 +32,19 @@ _None currently._
 
 ## P1 — High Priority
 
-_None currently._
+### BUG-MENU: Right-click menu stops responding after one use on Zotero 8/9 (#67, #72)
+
+**Impact:** On Zotero 8/9, the Citegeist context-menu entries can render without labels, and after using one entry the right-click menu stops opening on **any** item until the plugin is toggled off/on or Zotero restarts. Breaks a core surface for Z8/9 users. **Confirmed STILL BROKEN on the released v2.0.5 by three users** (MattGiulP, bwegge, scolino — latest confirmation 2026-07-23), after two fix attempts (the v2.0.5 hotfix per [#67](https://github.com/phdemotions/zotero-citegeist/issues/67); registration-lifecycle plan `docs/plans/2026-07-06-001-fix-menu-manager-registration-lifecycle-plan.md`). The stray-empty-section half of #72 appears addressed; the "menu dies after use" half is not.
+**Status:** `main`/v3.0.0 carries further MenuManager registration + teardown work (the code cites #67/#72), but it is **unverified on a real Zotero 9** and unreleased — so from a user's view it is still open. This is the top item on the `docs/RELEASE-CHECKLIST.md` right-click-menu gate; do not claim fixed until confirmed on a real Z9 install.
+**Fix:** Needs a real-Zotero-9 debug session to find why the popup stops responding after the first `onCommand`/`onShowing` (likely a MenuManager `onShowing`/DOM-fallback interaction that corrupts the native popup). Keep #67 and #72 open until users confirm.
+**Found:** #67 2026-06-25, #72 2026-07-14.
+
+### BUG-QUIT: Zotero 9.0.6 hangs on quit → force-quit required (#78)
+
+**Impact:** With Citegeist enabled, quitting Zotero 9.0.6 shows a spinning loader and never exits; the user must force-quit. Reported on v2.0.5 / macOS. A hang on every quit is severe.
+**Status:** Not yet reproduced or root-caused. `main`/v3.0.0 reworked the shutdown path (bounded cache-drain capped at `CLOSE_CACHE_DRAIN_TIMEOUT_MS`, explicit `chromeHandle.destruct()` on shutdown), which **may** address it, but it is a distinct symptom that needs real-Z9 confirmation. Added to the release-checklist smoke as a "clean quit, no hang" check.
+**Fix:** Reproduce on real Z9.0.6; trace `onShutdown` (`hooks.ts`) — an unresolved await in menu/cache teardown, or the `registerChrome`/GC path — as the likely culprit.
+**Found:** 2026-07-23.
 
 ---
 
@@ -54,6 +66,12 @@ _None currently._
 
 ## P3 — Low Priority
 
+### OKF-DRIFT: Upstream OKF spec has drifted from the pinned commit (#79)
+
+**Impact:** `npm run okf:drift` reports drift — pinned `ee67a5c` vs upstream `3fcbb9f` ([compare](https://github.com/GoogleCloudPlatform/knowledge-catalog/compare/ee67a5ca27044ebe7c38385f5b6cffc2305a9c1a...3fcbb9f828c2f23d109c855ee403c3a4c81f3a96)). Docs-only; no code impact.
+**Fix:** The deliberate monthly action — review the `okf/SPEC.md` diff, update conforming docs if needed, then re-pin in `~/developer/docs/standards/okf-adoption.md` (canonical) + `docs/STANDARDS.md`. Never auto-follow `main`.
+**Found:** 2026-07-25 (#79).
+
 ### FEAT-003: Export citation metrics (CSV) for tenure packets
 
 **Impact:** Researchers manually copy numbers from Citegeist into spreadsheets
@@ -66,10 +84,10 @@ _None currently._
 **Fix:** Aggregate stats pane for selected collection (median FWCI, percentile distribution, top papers)
 **Effort:** Medium-High
 
-### VERIFY-002: openalex:author relation handoff — 2-device sync round-trip check
+### VERIFY-002: author-relation purge + sync-safety — 2-device check
 
-**Impact:** The native `openalex:author` item-relation handoff (Phase B, U5) hasn't been confirmed to survive a real Zotero 2-device sync round-trip; `citegeist.sqlite`-direct read is the documented fallback.
-**Fix:** Resolve authors on device A, sync, confirm the relations arrive intact on device B.
+**Impact:** The native `openalex:author` item relation was **disabled before release** (it halts Zotero sync — server rejects the custom predicate) and replaced by a direct `citegeist.sqlite` read; a one-time startup purge (`purgeAllAuthorRelations`, pref-guarded) strips any stray relations left by pre-release builds. This hasn't been confirmed on a real 2-device sync — the check is now that the purge runs and library sync stays clean, **not** that a relation round-trips (it no longer should).
+**Fix:** On device A that ran a pre-release build (or after resolving authors), confirm library sync completes with no 400 / "Made no progress during upload", and device B syncs clean. Confirm author data is present on B via the pane (SQLite is per-device; not synced — that's expected).
 **Effort:** Low (manual check)
 
 ### DEBT-011: Add-button aria-label interpolates the collection name unescaped
