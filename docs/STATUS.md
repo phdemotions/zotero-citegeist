@@ -2,13 +2,13 @@
 type: status
 title: Citegeist — project status
 description: Current project state, last session's work, and upcoming priorities.
-timestamp: 2026-06-15
+timestamp: 2026-08-13
 tags: [citegeist, status]
 ---
 
 # Citegeist — Status
 
-> **Last Updated:** 2026-08-02
+> **Last Updated:** 2026-08-13 (planning unification: the stale "Upcoming" table — five rows describing work already shipped between v1.1.0 and v3.0.0 — replaced with the sequenced plan below; feature requests consolidated into BACKLOG.md + GitHub; release history table completed through v2.0.5.)
 > **Phase:** **v3.0.0 staged on `main`, untagged.** Author identity (#75) and the diagnostics + Zotero-9 host-contract + pane-rebuild branch (#77, squash `277444b`, 2026-08-01) are both merged but **not tagged** — staged behind one future v3.0.0 release. #77 added a user-facing diagnostics layer (append-only `CG-*` error codes users can quote, guard/guardAsync boundaries on every Zotero callback, a redaction net, and metered-API budget/auth/response/network discrimination), fixed two silent-spinner-hang classes and closed the DB-write-leak class with a structural invariant test, and cleaned the review tail. Reviewed across 12 escalating adversarial rounds — converged with two consecutive full-panel rounds clean of P2+. **v2.0.5 is the last released version** (2026-07-09, a right-click-menu hotfix shipped isolated while v3.0.0 waited).
 > **Build:** typecheck (strict, no errors) · **519 tests** · lint (0 errors, 3 pre-existing `any` warnings) · format · OKF · build → `citegeist-3.0.0.xpi` (~107 KB), all green on **Node ≥22** (required by `.nvmrc`/CI — vitest 4's ESM config can't be `require()`d on Node 20; use `--no-file-parallelism` to distinguish real failures from the known parallel flakiness).
 
@@ -16,14 +16,14 @@ tags: [citegeist, status]
 
 ## Current State
 
-| Attribute        | Value                                                                                   |
-| ---------------- | --------------------------------------------------------------------------------------- |
-| **Version**      | 3.0.0 (#75 + #77 merged to `main`, untagged; **2.0.5 last released 2026-07-09**)        |
-| **Build Status** | Clean — 519 tests, typecheck/lint/format/OKF clean, XPI ~107 KB (Node ≥22)              |
-| **Open Issues**  | P0: 0, P1: 2, P2: 2, P3: 9 (see ISSUES.md; P1 = BUG-MENU #67/#72, BUG-QUIT #78)         |
-| **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, Zotero 7.0.10–9, SQLite, Node 22          |
-| **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                                   |
-| **Distribution** | GitHub Releases → auto-update via `release` Release (self-maintaining); Zenodo-archived |
+| Attribute        | Value                                                                                                                |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **Version**      | 3.0.0 (#75 + #77 merged to `main`, untagged; **2.0.5 last released 2026-07-09**)                                     |
+| **Build Status** | Clean — 519 tests, typecheck/lint/format/OKF clean, XPI ~107 KB (Node ≥22)                                           |
+| **Open Issues**  | P0: 0, P1: 2, P2: 2, P3: 7 (see ISSUES.md; P1 = BUG-MENU #67/#72, BUG-QUIT #78; feature requests live in BACKLOG.md) |
+| **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, Zotero 7.0.10–9, SQLite, Node 22                                       |
+| **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                                                                |
+| **Distribution** | GitHub Releases → auto-update via `release` Release (self-maintaining); Zenodo-archived                              |
 
 ---
 
@@ -58,8 +58,6 @@ Also this session: closed issues moved to a machine-readable archive `docs/archi
 **Shipped 2026-06-08 (v2.0.2):** dark-mode citation-network tint fix — the dialog's sage-tint scale had a self-referential dark-theme arm (`light-dark(…, var(--cg-sage-tint-NN))`), invalid at computed-value time, so every dark-mode tint collapsed to transparent; now defined correctly. Design tokens (spacing, radii, type, motion, color ramps) consolidated into a canonical module `src/modules/ui/tokens.ts` that both the item pane and the network dialog consume; `docs/design-system/citegeist-primitives.html` added as the design reference (#45). Pane visually unchanged.
 
 **Shipped 2026-06-08 (v2.0.1):** batch/collection/library column repaint fix (#35), redesigned title-match confirm/discard card (#36), citation network browser improvements — new sort modes (first author, not-in-library) + hide-in-library filter + source-metadata header (#32), Zotero 8+ MenuManager with DOM fallback (#33), Zenodo DOI surfacing (#34), TS6/ESLint10/action-gh-release-v3 deps (#37). v2.0.0 (SQLite cache migration) shipped 2026-06-08 (#30).
-
-**Possible next:** show the candidate's _authors_ in the title-match card — deferred because it needs a new `pending_authors` cache column + a schema migration (the cache uses plain `CREATE TABLE IF NOT EXISTS`, no column-add path). See BACKLOG.
 
 ---
 
@@ -171,29 +169,31 @@ _None currently._
 
 ## Upcoming
 
-| Task                                                    | Priority | Notes                                                                                             |
-| ------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------- |
-| Fix pane copy + menu.ts DOI guards (DEBT-001, DEBT-002) | P1       | Quick fixes; complete the identifier chain end-to-end                                             |
-| Upgrade bumpp→v10, esbuild→^0.28.0 (DEBT-003)           | P1       | 4 high-severity CVEs in bumpp; batch with esbuild update                                          |
-| Extract isBookType to utils.ts (DEBT-004)               | P2       | 5-min fix before book type list grows                                                             |
-| Migrate FetchResult to discriminated union (DEBT-005)   | P2       | Required before v1.2.0 suggestion branch                                                          |
-| Metadata-based matching (v1.2.0)                        | P2       | Title+year search fallback; Confirm/Dismiss UX; DOI population bonus — fully specced in DESIGN.md |
-| JOSS paper submission                                   | P2       | `paper/paper.md` exists; needs journal confirmation                                               |
-| Export citation metrics (CSV)                           | P3       | Right-click collection → export for tenure packets                                                |
-| Collection-level analytics                              | P3       | Aggregate FWCI/percentile for a folder                                                            |
+One sequenced plan. The detail lives in exactly one place per item — bugs, verification gates, and debt in `ISSUES.md`; feature ideas in `BACKLOG.md`; release gates in `RELEASE-CHECKLIST.md` — and this table only orders it.
 
-See `BACKLOG.md` for full details.
+| #   | Step                            | Detail lives in             | Notes                                                                                                                                                                                             |
+| --- | ------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Run the v3.0.0 release gate     | `RELEASE-CHECKLIST.md`      | Real-Zotero smoke on 7/8/9 (VERIFY-001: pane composition + sidenav icon), diagnostics end-to-end, 2-device sync round-trip (VERIFY-002), BUG-MENU (#67/#72) + BUG-QUIT (#78) checked on a real Z9 |
+| 2   | Tag + ship v3.0.0               | `RELEASE-CHECKLIST.md` §5–6 | `CITATION.cff` + `CHANGELOG` date bump happen at tag time (deliberately held until the gate passes); post-release watch; close #22, and #67/#72/#78 once users confirm                            |
+| 3   | JOSS submission (JOSS-001)      | `ISSUES.md` P2              | Confirm target journal, final checks on `paper/paper.md`, submit                                                                                                                                  |
+| 4   | OKF pin review (OKF-DRIFT, #79) | `ISSUES.md` P3              | Deliberate monthly review + re-pin; never auto-follow upstream                                                                                                                                    |
+| 5   | Debt tail (DEBT-009, 011–014)   | `ISSUES.md` P3              | Batch as one single-concern cleanup PR after the release                                                                                                                                          |
+| 6   | Next feature from the backlog   | `BACKLOG.md`                | Leading candidates: export citation report (#4), collection analytics (#5), "My Authors" (v2 of the author-identity layer)                                                                        |
 
 ---
 
 ## Release History
 
-| Version | Date       | Summary                                                                      |
-| ------- | ---------- | ---------------------------------------------------------------------------- |
-| 2.0.2   | 2026-06-08 | Dark-mode dialog tint fix; canonical design-token module (both surfaces)     |
-| 2.0.1   | 2026-06-08 | Column repaint fix, redesigned title-match card, network browser sort/filter |
-| 2.0.0   | 2026-06-08 | SQLite-backed cache (migrated from Extra-field storage)                      |
-| 1.0.3   | 2026-04-09 | Non-DOI identifiers (PMID/arXiv/ISBN), rankings refresh (ABDC '25, AJG '24)  |
-| 1.0.2   | 2026-04-08 | Family design language, FWCI/percentile sort                                 |
-| 1.0.1   | 2026-04-08 | Quality pass: error handling, tooling, tests, docs                           |
-| 1.0.0   | 2026-04-05 | Initial public release                                                       |
+| Version     | Date                    | Summary                                                                                                        |
+| ----------- | ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 2.0.5       | 2026-07-09              | Right-click-menu hotfix — MenuManager labels + registration lifecycle (#67)                                    |
+| 2.0.4       | 2026-06-10              | Shared-primitive unification (.cg-chip/.cg-card/.cg-banner); contrast fixes                                    |
+| 2.0.3       | 2026-06-10              | Settings shortcut, section icon fix, forced color-scheme theme fix, .cg-btn                                    |
+| 2.0.2       | 2026-06-08              | Dark-mode dialog tint fix; canonical design-token module (both surfaces)                                       |
+| 2.0.1       | 2026-06-08              | Column repaint fix, redesigned title-match card, network browser sort/filter                                   |
+| 2.0.0       | 2026-06-07              | SQLite-backed cache (migrated from Extra-field storage)                                                        |
+| 1.1.0–1.3.0 | 2026-04-09 – 2026-04-19 | Title-match fallback + confirm/dismiss (1.2.0), Zotero 9 compat (1.2.1), pane redesign (1.3.0) — see CHANGELOG |
+| 1.0.3       | 2026-04-09              | Non-DOI identifiers (PMID/arXiv/ISBN), rankings refresh (ABDC '25, AJG '24)                                    |
+| 1.0.2       | 2026-04-08              | Family design language, FWCI/percentile sort                                                                   |
+| 1.0.1       | 2026-04-08              | Quality pass: error handling, tooling, tests, docs                                                             |
+| 1.0.0       | 2026-04-05              | Initial public release                                                                                         |

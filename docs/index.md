@@ -31,6 +31,8 @@ JOSS-exempt.
 ## Design system
 
 - [Pane composition language](design-system/pane-composition-language.md) — the composition rubric on top of the `--cg-*` tokens (one hero, near-cardless, 8pt rhythm); arbiter for pane layout
+- [Component primitives gallery](design-system/citegeist-primitives.html) — parity-tested HTML mirror of `ui/components.ts` (HTML reference; OKF-exempt)
+- [Citation-network toolbar mockup](mockups/citation-network-toolbar-ux.html) — UX mockup behind the shipped toolbar redesign (HTML reference; OKF-exempt)
 
 ## Plans
 
@@ -49,6 +51,9 @@ JOSS-exempt.
 
 - [Equal-weight metric tile grid](solutions/ui-bugs/misleading-citation-pane-metric-hierarchy-2026-04-19.md)
 - [Dev install: proxy file vs XPI](solutions/workflow-issues/zotero-plugin-dev-install-proxy-vs-xpi-2026-04-19.md)
+- [OpenAlex metered API handling](solutions/best-practices/openalex-metered-api-handling.md)
+- [Zotero 9 blank UI + sync break](solutions/integration-issues/zotero-9-plugin-blank-ui-and-sync-break.md)
+- [MenuManager blank labels + wedged right-click](solutions/ui-bugs/zotero-menumanager-blank-labels-and-wedged-right-click.md)
 
 ## Audits (2026-04-09, v1.1.0)
 

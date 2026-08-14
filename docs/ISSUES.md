@@ -1,15 +1,16 @@
 ---
 type: issues
 title: Citegeist — open issues
-description: Open bugs and feature requests, tracked by priority.
-timestamp: 2026-06-10
+description: Open bugs, verification gates, and technical debt, tracked by priority.
+timestamp: 2026-08-13
 tags: [citegeist, issues]
 ---
 
 # Citegeist — Open Issues
 
-> **Last Updated:** 2026-08-02 (GitHub-issue reconcile: the right-click-menu bug (#67/#72) is confirmed STILL OPEN on the released v2.0.5 by 3 users — the internal tracker had it marked fixed; added BUG-MENU + BUG-QUIT (#78) + OKF drift #79. **v2.0.5 is the last released version**, 2026-07-09.)
-> **Previously:** 2026-07-20 (DIAG-001 + DEBT-010 closed: diagnostic codes and guards now cover the network dialog; settings pane swapped the dead `mailto` field for the `api_key` field). 2026-07-18 (author-identity layer **v3.0.0 merged to `main`** #75, untagged — see STATUS.md). Closed issues archived to `docs/archive/issues-closed.jsonl`.
+> **Last Updated:** 2026-08-13 (planning unification: FEAT-003/FEAT-004 moved out — feature requests live in `BACKLOG.md` + GitHub `enhancement` issues; this tracker carries bugs, verification gates, and debt only.)
+> **Previously:** 2026-08-02 (GitHub-issue reconcile: the right-click-menu bug (#67/#72) is confirmed STILL OPEN on the released v2.0.5 by 3 users — the internal tracker had it marked fixed; added BUG-MENU + BUG-QUIT (#78) + OKF drift #79. **v2.0.5 is the last released version**, 2026-07-09.)
+> 2026-07-20 (DIAG-001 + DEBT-010 closed: diagnostic codes and guards now cover the network dialog; settings pane swapped the dead `mailto` field for the `api_key` field). 2026-07-18 (author-identity layer **v3.0.0 merged to `main`** #75, untagged — see STATUS.md). Closed issues archived to `docs/archive/issues-closed.jsonl`.
 
 ---
 
@@ -20,7 +21,9 @@ tags: [citegeist, issues]
 | P0 (Blocker) | 0    |
 | P1 (High)    | 2    |
 | P2 (Medium)  | 2    |
-| P3 (Low)     | 9    |
+| P3 (Low)     | 7    |
+
+Feature requests are not tracked here — they live in [`BACKLOG.md`](BACKLOG.md) (curated detail) and GitHub `enhancement` issues (public intake).
 
 ---
 
@@ -71,18 +74,6 @@ _None currently._
 **Impact:** `npm run okf:drift` reports drift — pinned `ee67a5c` vs upstream `3fcbb9f` ([compare](https://github.com/GoogleCloudPlatform/knowledge-catalog/compare/ee67a5ca27044ebe7c38385f5b6cffc2305a9c1a...3fcbb9f828c2f23d109c855ee403c3a4c81f3a96)). Docs-only; no code impact.
 **Fix:** The deliberate monthly action — review the `okf/SPEC.md` diff, update conforming docs if needed, then re-pin in `~/developer/docs/standards/okf-adoption.md` (canonical) + `docs/STANDARDS.md`. Never auto-follow `main`.
 **Found:** 2026-07-25 (#79).
-
-### FEAT-003: Export citation metrics (CSV) for tenure packets
-
-**Impact:** Researchers manually copy numbers from Citegeist into spreadsheets
-**Fix:** Right-click collection → "Export Citation Report (Citegeist)" → CSV
-**Effort:** Medium
-
-### FEAT-004: Collection-level analytics dashboard
-
-**Impact:** No aggregate view of a collection's FWCI/percentile distribution
-**Fix:** Aggregate stats pane for selected collection (median FWCI, percentile distribution, top papers)
-**Effort:** Medium-High
 
 ### VERIFY-002: author-relation purge + sync-safety — 2-device check
 

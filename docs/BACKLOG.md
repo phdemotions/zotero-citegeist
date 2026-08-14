@@ -2,43 +2,22 @@
 type: backlog
 title: Citegeist — backlog
 description: Curated longer-term enhancement ideas, each a candidate GitHub issue.
-timestamp: 2026-06-08
+timestamp: 2026-08-13
 tags: [citegeist, backlog, enhancements]
 ---
 
 # Citegeist Backlog
 
-A curated list of planned enhancements and ideas for Citegeist. Each item is a candidate for a GitHub issue — contributions are welcome on any of them. If you'd like to pick one up, open an issue (or comment on an existing one) to coordinate.
+A curated list of planned enhancements and ideas for Citegeist. Each item is a candidate for — or already tracked as — a GitHub issue (linked where one exists); contributions are welcome on any of them. If you'd like to pick one up, open an issue (or comment on an existing one) to coordinate.
 
-Items are grouped loosely by theme, not priority. See [CONTRIBUTING.md](CONTRIBUTING.md) before starting work.
-
----
-
-## Metadata-based matching for items without a recognized identifier
-
-**Labels:** `enhancement`, `high-impact`
-
-When no DOI, PMID, arXiv ID, or ISBN is present — or when the identifier returns "not found" on OpenAlex — Citegeist currently shows blank cells with no explanation. Many items in a typical Zotero library fall into this category: older conference papers, working papers, grey literature, items imported from imperfect bibliographic databases.
-
-**Proposed feature (fully specced in [DESIGN.md](DESIGN.md)):**
-
-- Fall back to a title + year OpenAlex search when direct lookup fails
-- Score the top candidate by word-level Dice similarity (title), year proximity, and author last-name overlap
-- Two confidence tiers: high (≥ 0.92, data shown with `~` prefix) and medium (0.72–0.92, suggestion card in pane)
-- Explicit Confirm / Not this paper controls — never auto-apply without researcher sign-off
-- On confirm: store `Citegeist.openAlexId` so future refreshes go direct, bypassing title search
-- Bonus: if the matched work has a DOI and the item doesn't, offer to add it with one click — permanently graduating the item out of the title-search pipeline
-
-**Why this matters for researchers:**
-Citation data for conference proceedings, working papers, and imported items from imperfect sources is currently invisible in Citegeist. Metadata matching closes this gap without requiring researchers to manually hunt for identifiers.
-
-See the full design rationale, confidence thresholds, UI states, and module structure in [DESIGN.md](DESIGN.md).
+Items are grouped loosely by theme, not priority. Shipped items leave this list (metadata-based title matching shipped as v1.2.0 — see `CHANGELOG.md`). See [CONTRIBUTING.md](CONTRIBUTING.md) before starting work.
 
 ---
 
 ## Expand journal rankings beyond business and management
 
 **Labels:** `enhancement`, `rankings`, `help wanted`
+**GitHub:** [#3](https://github.com/phdemotions/zotero-citegeist/issues/3)
 
 Citegeist currently bundles ~180 journals across business, management, economics, finance, IS, marketing, and psychology. Researchers in other fields have their own widely-used ranking lists.
 
@@ -68,6 +47,7 @@ If you use a ranking list in your field and would like to see it in Citegeist, p
 ## Export citation metrics for tenure packets and grant reports
 
 **Labels:** `enhancement`, `high-impact`
+**GitHub:** [#4](https://github.com/phdemotions/zotero-citegeist/issues/4)
 
 Researchers regularly need to compile citation metrics for tenure cases, promotion dossiers, annual reviews, and grant applications. Right now they have to manually copy numbers from Citegeist columns into a spreadsheet or document.
 
@@ -87,6 +67,7 @@ This would save researchers hours of manual work every review cycle.
 ## Collection-level analytics dashboard
 
 **Labels:** `enhancement`, `high-impact`
+**GitHub:** [#5](https://github.com/phdemotions/zotero-citegeist/issues/5)
 
 When doing a literature review or preparing a meta-analysis, researchers often want to understand the overall profile of a collection — not just individual papers.
 
@@ -106,6 +87,7 @@ This would help researchers characterize the quality and scope of their literatu
 ## Citation alerts — track papers gaining traction
 
 **Labels:** `enhancement`, `idea`
+**GitHub:** [#7](https://github.com/phdemotions/zotero-citegeist/issues/7)
 
 Researchers want to know when a paper in their library starts getting noticed. Currently, Citegeist shows a snapshot of the trend, but doesn't proactively notify you.
 
@@ -126,6 +108,7 @@ This would be especially useful for:
 ## Localization / i18n support
 
 **Labels:** `enhancement`, `help wanted`
+**GitHub:** [#8](https://github.com/phdemotions/zotero-citegeist/issues/8)
 
 Citegeist's UI strings (column headers, pane labels, button text, tooltips) are currently English-only. Zotero has a large international user base and supports localization through `.ftl` (Fluent) files.
 
@@ -170,4 +153,3 @@ v2 follow-up to the author identity layer (see the [author-identity-layer requir
 **Why deferred to v2:** it's a second major surface (its own view plus curation-at-scale) layered on the per-item pane profile and background identity resolution that ship in v1. The identity foundation should prove out before the aggregate view is worth building.
 
 **Depends on:** the `authors` / `item_authors` tables and background identity resolution delivered in v1.
-
