@@ -44,6 +44,23 @@ If you use a ranking list in your field and would like to see it in Citegeist, p
 
 ---
 
+## Automatic fallback to secondary citation data sources
+
+**Labels:** `enhancement`
+**GitHub:** [#71](https://github.com/phdemotions/zotero-citegeist/issues/71)
+
+OpenAlex coverage is weakest exactly where many researchers work: older papers, non-English literature, and work outside the major commercial publishers. When OpenAlex has no record for an item, Citegeist currently shows nothing.
+
+**Proposed feature (from #71):**
+
+- If OpenAlex returns no result for an item, try one or more secondary sources in a configurable priority order (e.g. Crossref → Semantic Scholar → OpenCitations)
+- Opt-in setting, default OFF — users satisfied with OpenAlex-only coverage see no change
+- Stop at the first source that returns a result
+
+**Scoping notes:** each source needs its own rate limiter, error discrimination, and response mapping (the `rateLimitedFetch` machinery is OpenAlex-specific today). FWCI, percentile, and the OpenAlex work-id graph don't exist in the fallback sources — a fallback hit fills citation counts, not the normalized metrics or the citation-network browser. Counts from different sources aren't directly comparable either, so a fallback result should be labeled with its source.
+
+---
+
 ## Export citation metrics for tenure packets and grant reports
 
 **Labels:** `enhancement`, `high-impact`
@@ -129,6 +146,21 @@ If you'd like to help translate Citegeist into your language, please comment wit
 The citation network browser now sorts the **loaded page** of results client-side (`compareNetworkWorks` / `getVisibleNetworkWorks` in `src/modules/citationNetwork/results.ts`). For paginated result sets, sorting the whole set would require asking OpenAlex to sort server-side via its `sort=` parameter (e.g. `cited_by_count:desc`, `fwci:desc`, `publication_date:asc`) and re-fetching on sort change. Local-only modes (first-author surname, "not in my library first") stay client-side.
 
 This is a refinement of the now-shipped redesign (header with source metadata + cited-by stat, new sort modes, hide-in-library filter — see the [toolbar mockup](mockups/citation-network-toolbar-ux.html)). It mainly matters for source papers with hundreds of citing works, where the most-cited result may sit beyond the first loaded page.
+
+---
+
+## Reference-list order in the citation network browser
+
+**Labels:** `enhancement`
+**GitHub:** [#29](https://github.com/phdemotions/zotero-citegeist/issues/29)
+
+When viewing a paper's references, researchers often want them in the order the paper cites them — the numbered reference list — not ranked by citation count.
+
+**Proposed feature (from #29):**
+
+- A "Reference order" sort mode in the references view: a simple numbered list matching the paper's bibliography
+
+**Scoping note:** OpenAlex's `referenced_works` isn't guaranteed to preserve the paper's reference-list order, so the true order needs a second source (e.g. the Crossref `reference` array, where publishers deposit it) — a cousin of the multi-source fallback item above.
 
 ---
 
