@@ -35,6 +35,7 @@ src/
   hooks.ts                      # Zotero lifecycle hooks
   modules/
     openalex.ts                 # OpenAlex API client — fetch, parse, rate limit, retry
+    openalexAuthors.ts          # OpenAlex Authors client — profiles + works (shares the rate limiter)
     cache/                      # SQLite-backed cache (v2.0.0+)
       db.ts                     # Connection, in-memory mirror, lifecycle (init/close)
       read.ts                   # Sync read API (mirror only)
@@ -43,10 +44,18 @@ src/
       types.ts                  # Public types + internal row shape + column list
       index.ts                  # Public surface (re-exports)
     citationService.ts          # Orchestration: fetch + cache + error handling
+    titleSearch.ts              # Metadata matching — title/year/author-scored fallback
+    authorProfile.ts            # Author profile + view-model layer (pure logic, no DOM)
     citationColumn.ts           # Sortable item-tree columns
     citationPane.ts             # Item-detail sidebar pane
     menu.ts                     # Right-click context menus
     utils.ts                    # Shared: escapeHTML, normalizeError, logError, safeHTML
+    diagnostics/                # CG-* error codes, guards, ring buffer, redacted report
+      codes.ts                  # Append-only CG-* code registry
+      guard.ts                  # guard/guardAsync/bindGuarded callback boundaries
+      record.ts                 # In-memory diagnostics ring buffer
+      report.ts                 # Copyable, redacted failure report
+      surface.ts                # Coded failure UI helpers
     citationNetwork/
       dialog.ts                 # Modal lifecycle (explicit DialogPhase state machine)
       results.ts                # Result rendering, pagination, infinite scroll
@@ -97,7 +106,7 @@ typings/                        # Zotero type declarations
 
 ## Release Process
 
-**Gate first.** Before tagging any `v*`, run `docs/RELEASE-CHECKLIST.md` — the manual host-verification gates (real-Zotero smoke on 7/8/9, diagnostics end-to-end, and the 2-device sync round-trip). The 519 tests mock Zotero, so the highest-risk surface (pane render, sidenav icon, sync integrity) has no automated coverage; auto-update hits 100% of users with no canary, so a bad tag is fleet-wide. The mechanical steps below only run once those gates pass.
+**Gate first.** Before tagging any `v*`, run `docs/RELEASE-CHECKLIST.md` — the manual host-verification gates (real-Zotero smoke on 7/8/9, diagnostics end-to-end, and the 2-device sync round-trip). The test suite mocks Zotero, so the highest-risk surface (pane render, sidenav icon, sync integrity) has no automated coverage; auto-update hits 100% of users with no canary, so a bad tag is fleet-wide. The mechanical steps below only run once those gates pass.
 
 Shipping to users requires a **tagged release**, not just a push to `main`:
 
