@@ -3,7 +3,7 @@ name: Build & Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -57,3 +57,46 @@ jobs:
               --latest=false \
               --notes "Serves update.json for Zotero's built-in auto-updater. Do not download from here manually — install Citegeist from the latest versioned release."
           gh release upload release build/update.json --clobber
+
+      - name: Refresh self-hosted README badges
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          # The README's release + downloads badges are shields *endpoint* badges that
+          # read JSON from the `badges` branch over raw.githubusercontent.com. shields
+          # never calls the GitHub API for them, so the shared-token-pool rate limit
+          # ("Unable to select next GitHub token from pool") that repeatedly froze the
+          # old github/* badges cannot break them. This step regenerates that JSON and
+          # force-pushes it to the orphan `badges` branch on every release.
+          # shields blocks github.com release-asset URLs as endpoint sources, so the
+          # data must live on raw.githubusercontent.com — hence a branch, not a Release.
+          REPO="${{ github.repository }}"
+
+          # Release badge — version is the pushed tag; no API query needed.
+          printf '{"schemaVersion":1,"label":"release","message":"%s","color":"5a9cff"}\n' \
+            "$VERSION" > /tmp/badge-release.json
+
+          # Downloads badge — sum of .xpi downloads across all releases (real installs).
+          # Excludes update.json, which Zotero's auto-updater polls on a schedule and
+          # would otherwise inflate the count (~2x as of v2.0.4).
+          DL=$(gh api "repos/$REPO/releases" --paginate \
+            --jq '[.[].assets[] | select(.name | endswith(".xpi")) | .download_count] | add // 0')
+          MSG=$(node -e "const n=+process.argv[1];process.stdout.write(n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n))" "$DL")
+          printf '{"schemaVersion":1,"label":"downloads","message":"%s","color":"30d158"}\n' \
+            "$MSG" > /tmp/badge-downloads.json
+
+          # Publish to an orphan `badges` branch via a throwaway worktree, so the JSON
+          # never touches main and the branch never accumulates history (force-push a
+          # fresh root commit each release).
+          git worktree add --detach /tmp/cg-badges HEAD
+          cd /tmp/cg-badges
+          git checkout --orphan badges-tmp
+          git rm -rf . --quiet
+          cp /tmp/badge-release.json badge-release.json
+          cp /tmp/badge-downloads.json badge-downloads.json
+          git add badge-release.json badge-downloads.json
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit --quiet -m "chore(badges): refresh for ${VERSION}"
+          git push --force origin badges-tmp:badges

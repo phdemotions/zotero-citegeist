@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/phdemotions/zotero-citegeist/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/phdemotions/zotero-citegeist?style=flat-square&color=5a9cff" /></a>
-  <a href="https://github.com/phdemotions/zotero-citegeist/releases/latest"><img alt="Downloads" src="https://img.shields.io/github/downloads/phdemotions/zotero-citegeist/total?style=flat-square&color=30d158" /></a>
+  <a href="https://github.com/phdemotions/zotero-citegeist/releases/latest"><img alt="Latest release" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/phdemotions/zotero-citegeist/badges/badge-release.json&style=flat-square" /></a>
+  <a href="https://github.com/phdemotions/zotero-citegeist/releases/latest"><img alt="Downloads" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/phdemotions/zotero-citegeist/badges/badge-downloads.json&style=flat-square" /></a>
   <a href="https://github.com/phdemotions/zotero-citegeist/blob/main/LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0-8e8e93?style=flat-square" /></a>
   <a href="https://doi.org/10.5281/zenodo.19433716"><img alt="DOI" src="https://zenodo.org/badge/DOI/10.5281/zenodo.19433716.svg" /></a>
 </p>
