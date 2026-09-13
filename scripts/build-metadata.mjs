@@ -1,7 +1,10 @@
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { extname, join, relative, sep } from "node:path";
+
 export function readBuildMetadata(pkg) {
   const config = pkg.config ?? {};
 
-  return {
+  const meta = {
     addonName: requiredString(config, "addonName", "package.json config.addonName"),
     addonID: requiredString(config, "addonID", "package.json config.addonID"),
     addonRef: requiredString(config, "addonRef", "package.json config.addonRef"),
@@ -19,6 +22,8 @@ export function readBuildMetadata(pkg) {
     ),
     version: requiredString(pkg, "version", "package.json version"),
   };
+  assertRangeShape(rangeFromMetadata(meta));
+  return meta;
 }
 
 function requiredString(source, key, label) {
@@ -27,6 +32,83 @@ function requiredString(source, key, label) {
     throw new Error(`${label} must be a non-empty string`);
   }
   return value;
+}
+
+// Firefox's add-on manager, which Zotero runs, reads these fields with nsVersionComparator:
+// a missing part counts as 0 and "*" as infinity. A cap of "10" therefore refuses 10.0.1,
+// "10.*" and "*" admit Zotero minors the suite has never run on (KTD2), and XPIInstall
+// throws on any "*" in strict_min_version.
+const FLOOR_SHAPE = /^\d+(\.\d+)*$/;
+const CAP_SHAPE = /^\d+\.\d+\.\*$/;
+
+function assertRangeShape({ min, max }) {
+  if (!FLOOR_SHAPE.test(min)) {
+    throw new Error(
+      `package.json config.zoteroMinVersion must be a dotted number such as "7.0.10" ` +
+        `(Zotero refuses "*" in strict_min_version), got ${JSON.stringify(min)}`,
+    );
+  }
+  if (!CAP_SHAPE.test(max)) {
+    throw new Error(
+      `package.json config.zoteroMaxVersion must be major.minor.* such as "10.0.*" ` +
+        `(a bare "10" refuses 10.0.1; "10.*" or "*" admits untested minors), ` +
+        `got ${JSON.stringify(max)}`,
+    );
+  }
+  if (compareVersions(min, max) > 0) {
+    throw new Error(
+      `package.json config.zoteroMinVersion ${min} is above the cap ${max}, ` +
+        `so no Zotero version satisfies the range`,
+    );
+  }
+}
+
+/**
+ * Compares two dotted versions the way nsVersionComparator does: a missing part counts as 0
+ * and a "*" part as larger than any number. So "10" equals "10.0", "7.0.10" sorts below
+ * "10.0", and "10.0.1" sorts below "10.0.*" while "10.1" sorts above it. Returns -1, 0 or 1.
+ */
+export function compareVersions(a, b) {
+  const parse = (version) =>
+    version.split(".").map((part) => (part === "*" ? Infinity : Number(part)));
+  const left = parse(a);
+  const right = parse(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const leftPart = left[i] ?? 0;
+    const rightPart = right[i] ?? 0;
+    if (leftPart !== rightPart) return leftPart < rightPart ? -1 : 1;
+  }
+  return 0;
+}
+
+// Every layout that carries a Zotero range normalises to `{ min, max }`, so the checks and
+// the build log compare and print one shape. U15's release-lines.json adds a reader here.
+
+/** The range package.json's config declares. */
+export function rangeFromMetadata(meta) {
+  return { min: meta.zoteroMinVersion, max: meta.zoteroMaxVersion };
+}
+
+/** The range in an `applications.zotero` block, the layout manifest.json and update.json share. */
+export function rangeFromApplication(zotero) {
+  return { min: zotero?.strict_min_version, max: zotero?.strict_max_version };
+}
+
+export function applicationFromRange({ min, max }) {
+  return { strict_min_version: min, strict_max_version: max };
+}
+
+export function rangesEqual(a, b) {
+  return a.min === b.min && a.max === b.max;
+}
+
+export function formatRange({ min, max }) {
+  return `${formatVersion(min)} to ${formatVersion(max)}`;
+}
+
+function formatVersion(value) {
+  if (typeof value === "string") return value;
+  return value === undefined ? "(missing)" : JSON.stringify(value);
 }
 
 export function placeholdersFor(meta) {
@@ -52,10 +134,7 @@ export function updateManifestFor(meta, xpiName, hash) {
             update_link: `https://github.com/phdemotions/zotero-citegeist/releases/download/v${meta.version}/${xpiName}`,
             update_hash: `sha256:${hash}`,
             applications: {
-              zotero: {
-                strict_min_version: meta.zoteroMinVersion,
-                strict_max_version: meta.zoteroMaxVersion,
-              },
+              zotero: applicationFromRange(rangeFromMetadata(meta)),
             },
           },
         ],
@@ -64,64 +143,169 @@ export function updateManifestFor(meta, xpiName, hash) {
   };
 }
 
-// A placeholder is lowerCamelCase between double underscores, like every key in
-// `placeholdersFor` (a test holds each key to this shape). Matching the shape
-// rather than the known names means a misspelt placeholder still fails, while
-// esbuild's `/* @__PURE__ */` annotations and the `__BUILD_ID__` define do not.
+/**
+ * The text files the build replaces placeholders in, by extension. The scan in
+ * `verifyBuiltAddon` reads the same list: a text file with any other extension that
+ * carries a placeholder fails the build rather than shipping it unreplaced.
+ */
+export const PLACEHOLDER_FILE_EXTENSIONS = Object.freeze([
+  ".json",
+  ".js",
+  ".xhtml",
+  ".ftl",
+  ".html",
+  ".css",
+  ".svg",
+]);
+
+function isPlaceholderFile(path) {
+  return PLACEHOLDER_FILE_EXTENSIONS.includes(extname(path));
+}
+
+function listFiles(dir) {
+  return readdirSync(dir)
+    .sort()
+    .flatMap((entry) => {
+      const fullPath = join(dir, entry);
+      return statSync(fullPath).isDirectory() ? listFiles(fullPath) : [fullPath];
+    });
+}
+
+/**
+ * Every file under `dir` that holds no NUL byte, with its path relative to `dir`. A NUL
+ * byte marks a binary asset such as the PNG icons, which neither replacement nor the scan reads.
+ */
+function readTextFiles(dir) {
+  return listFiles(dir).flatMap((file) => {
+    const bytes = readFileSync(file);
+    if (bytes.includes(0)) return [];
+    const path = relative(dir, file).split(sep).join("/");
+    return [{ file, path, content: bytes.toString("utf-8") }];
+  });
+}
+
+/** Replaces each placeholder in the addon's text files whose extension is listed. */
+export function replacePlaceholders(addonDir, placeholders) {
+  for (const { file, path, content } of readTextFiles(addonDir)) {
+    if (!isPlaceholderFile(path)) continue;
+    let replaced = content;
+    for (const [token, value] of Object.entries(placeholders)) {
+      replaced = replaced.replaceAll(token, value);
+    }
+    if (replaced !== content) writeFileSync(file, replaced);
+  }
+}
+
+// The scan matches a lowerCamelCase name between double underscores, the shape of every key
+// in `placeholdersFor` (a test holds each key to it). That catches an unreplaced placeholder
+// and a misspelt name such as `__zoteroMaxVerison__`, and passes esbuild's `/* @__PURE__ */`
+// annotations and the `__BUILD_ID__` define. It misses a misspelling that breaks the shape:
+// `__buildVersion_`, `__BuildVersion__`, `__build_version__`. `verifyBuiltAddon` catches
+// those in manifest.json only, by checking each placeholder-backed field against package.json.
 const PLACEHOLDER_TOKEN = /__[a-z][A-Za-z0-9]*__/g;
 
-// Legacy ECMAScript accessors share that shape but are real JavaScript.
+// Legacy JavaScript properties share that shape but are real code.
 const JS_DUNDER_NAMES = new Set([
   "__proto__",
   "__defineGetter__",
   "__defineSetter__",
   "__lookupGetter__",
   "__lookupSetter__",
+  "__iterator__",
+  "__noSuchMethod__",
+  "__parent__",
 ]);
 
 /**
- * Throws if any shipped text file still holds a `__name__` placeholder, naming
- * each file and token.
+ * Throws if any shipped text file still holds a `__name__` placeholder, naming each file and
+ * token. A file whose extension is outside `PLACEHOLDER_FILE_EXTENSIONS` is reported under
+ * its own heading, because the fix there is the list rather than the file.
  *
  * @param {Array<{ path: string, content: string }>} files
  */
 export function assertNoUnreplacedPlaceholders(files) {
-  const leftovers = [];
+  const unreplaced = [];
+  const unlisted = [];
   for (const { path, content } of files) {
-    const tokens = new Set(
-      (content.match(PLACEHOLDER_TOKEN) ?? []).filter((token) => !JS_DUNDER_NAMES.has(token)),
+    const tokens = [...new Set(content.match(PLACEHOLDER_TOKEN) ?? [])].filter(
+      (token) => !JS_DUNDER_NAMES.has(token),
     );
-    if (tokens.size > 0) {
-      leftovers.push(`  ${path}: ${[...tokens].join(", ")}`);
-    }
+    if (tokens.length === 0) continue;
+    (isPlaceholderFile(path) ? unreplaced : unlisted).push(`  ${path}: ${tokens.join(", ")}`);
   }
-  if (leftovers.length > 0) {
-    throw new Error(`Unreplaced build placeholders in shipped files:\n${leftovers.join("\n")}`);
+
+  const sections = [];
+  if (unreplaced.length > 0) {
+    sections.push(`Unreplaced build placeholders in shipped files:\n${unreplaced.join("\n")}`);
+  }
+  if (unlisted.length > 0) {
+    sections.push(
+      `Placeholders in shipped files the build never replaces, because their extension is ` +
+        `not in PLACEHOLDER_FILE_EXTENSIONS (${PLACEHOLDER_FILE_EXTENSIONS.join(", ")}):\n` +
+        unlisted.join("\n"),
+    );
+  }
+  if (sections.length > 0) {
+    throw new Error(sections.join("\n"));
   }
 }
 
 /**
- * Throws unless an `applications.zotero` block declares exactly the range in
- * package.json. `label` names where the block came from.
+ * Verifies a built addon directory before anything ships or loads from it: no placeholder
+ * survives in a text file, and manifest.json's name, version, id and Zotero range equal
+ * package.json's. Returns the manifest's range.
  */
-export function assertZoteroRange(label, zotero, meta) {
-  const min = zotero?.strict_min_version;
-  const max = zotero?.strict_max_version;
-  if (min !== meta.zoteroMinVersion || max !== meta.zoteroMaxVersion) {
-    throw new Error(
-      `${label} has strict_min_version ${JSON.stringify(min)} and strict_max_version ` +
-        `${JSON.stringify(max)}, but package.json config has zoteroMinVersion ` +
-        `${JSON.stringify(meta.zoteroMinVersion)} and zoteroMaxVersion ` +
-        `${JSON.stringify(meta.zoteroMaxVersion)}`,
+export function verifyBuiltAddon(addonDir, meta) {
+  const files = readTextFiles(addonDir);
+  assertNoUnreplacedPlaceholders(files);
+
+  const manifestFile = files.find(({ path }) => path === "manifest.json");
+  if (!manifestFile) {
+    throw new Error(`${addonDir} has no manifest.json`);
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(manifestFile.content);
+  } catch (error) {
+    throw new Error(`manifest.json in ${addonDir} is not valid JSON: ${error.message}`);
+  }
+
+  const zotero = manifest.applications?.zotero;
+  const mismatches = [
+    ["name", manifest.name, meta.addonName],
+    ["version", manifest.version, meta.version],
+    ["applications.zotero.id", zotero?.id, meta.addonID],
+  ]
+    .filter(([, actual, expected]) => actual !== expected)
+    .map(
+      ([field, actual, expected]) =>
+        `  ${field} is ${JSON.stringify(actual)}, package.json gives ${JSON.stringify(expected)}`,
+    );
+
+  const range = rangeFromApplication(zotero);
+  const expectedRange = rangeFromMetadata(meta);
+  if (!rangesEqual(range, expectedRange)) {
+    mismatches.push(
+      `  Zotero range is ${formatRange(range)}, package.json config gives ${formatRange(expectedRange)}`,
     );
   }
+
+  if (mismatches.length > 0) {
+    throw new Error(`manifest.json does not match package.json:\n${mismatches.join("\n")}`);
+  }
+  return range;
 }
 
 /**
- * Finds update.json's entry for the version being built and throws unless it
- * declares package.json's range. Returns the verified `applications.zotero` block.
+ * Finds update.json's entry for the version being built and throws unless it declares
+ * package.json's range. Returns that range.
+ *
+ * While build.mjs makes update.json from the same metadata this check cannot fail. It becomes
+ * load-bearing once U15 builds update.json from every line in release-lines.json, because the
+ * entry for the tagged version then comes from the lines file and must still equal
+ * package.json (KTD3).
  */
-export function assertUpdateManifestRange(updateManifest, meta) {
+export function verifyUpdateManifest(updateManifest, meta) {
   const updates = updateManifest?.addons?.[meta.addonID]?.updates;
   const entries = Array.isArray(updates)
     ? updates.filter((entry) => entry?.version === meta.version)
@@ -132,7 +316,14 @@ export function assertUpdateManifestRange(updateManifest, meta) {
         `found ${entries.length}`,
     );
   }
-  const zotero = entries[0].applications?.zotero;
-  assertZoteroRange(`update.json entry for ${meta.version}`, zotero, meta);
-  return zotero;
+
+  const range = rangeFromApplication(entries[0].applications?.zotero);
+  const expectedRange = rangeFromMetadata(meta);
+  if (!rangesEqual(range, expectedRange)) {
+    throw new Error(
+      `update.json entry for ${meta.version} declares Zotero ${formatRange(range)}, ` +
+        `but package.json config gives ${formatRange(expectedRange)}`,
+    );
+  }
+  return range;
 }

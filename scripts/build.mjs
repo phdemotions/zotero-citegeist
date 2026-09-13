@@ -1,13 +1,19 @@
 /**
  * Build script for Citegeist.
  *
- * 1. Copies addon/ to build/addon/
- * 2. Replaces __placeholders__ with values from package.json
- * 3. Compiles TypeScript via esbuild JS API
- * 4. Fails if a placeholder survives in a shipped file, or if the built
- *    manifest's Zotero range differs from package.json
- * 5. In production mode: creates .xpi and update.json, and fails if update.json's
- *    entry for this version declares a different Zotero range
+ * Every step works on a staging copy, build/.addon-staging/:
+ *
+ * 1. Copies addon/ into it and replaces __placeholders__ with values from package.json
+ * 2. Compiles TypeScript into it via the esbuild JS API
+ * 3. Verifies it: no placeholder survives, and manifest.json's name, version, id and
+ *    Zotero range equal package.json's
+ * 4. In production mode: zips it into the XPI, verifies the update.json object for this
+ *    version, then writes update.json
+ * 5. Replaces build/addon with it
+ *
+ * A dev install loads build/addon through a proxy file, so it only ever sees a copy that
+ * passed every check. If any step throws, the build removes the staging copy, the XPI and
+ * update.json, and does not replace build/addon.
  */
 
 import { build } from "esbuild";
@@ -17,32 +23,36 @@ import {
   rmSync,
   readFileSync,
   writeFileSync,
-  existsSync,
   readdirSync,
-  statSync,
+  renameSync,
 } from "fs";
-import { join, resolve, dirname, relative } from "path";
+import { join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { createHash } from "crypto";
 import { execSync } from "child_process";
 import {
   readBuildMetadata,
   placeholdersFor,
+  replacePlaceholders,
   updateManifestFor,
-  assertNoUnreplacedPlaceholders,
-  assertZoteroRange,
-  assertUpdateManifestRange,
+  verifyBuiltAddon,
+  verifyUpdateManifest,
+  formatRange,
 } from "./build-metadata.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 const BUILD_DIR = join(ROOT, "build");
 const ADDON_DIR = join(BUILD_DIR, "addon");
+const STAGING_DIR = join(BUILD_DIR, ".addon-staging");
 const isDev = process.argv.includes("--dev");
 
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8"));
 const meta = readBuildMetadata(pkg);
-const { addonID, version } = meta;
+const { version } = meta;
+const xpiName = `citegeist-${version}.xpi`;
+const XPI_PATH = join(BUILD_DIR, xpiName);
+const UPDATE_JSON_PATH = join(BUILD_DIR, "update.json");
 
 let gitSha = "nogit";
 try {
@@ -61,108 +71,81 @@ console.log(
   `\n  Citegeist build — v${version} (${isDev ? "dev" : "production"}) build ${buildId}\n`,
 );
 
-// Step 1: Clean and copy
-if (existsSync(BUILD_DIR)) {
-  rmSync(BUILD_DIR, { recursive: true });
+// Clear everything the previous build left except build/addon, which only a passing build replaces.
+mkdirSync(BUILD_DIR, { recursive: true });
+for (const entry of readdirSync(BUILD_DIR)) {
+  if (entry !== "addon") rmSync(join(BUILD_DIR, entry), { recursive: true, force: true });
 }
-mkdirSync(ADDON_DIR, { recursive: true });
-cpSync(join(ROOT, "addon"), ADDON_DIR, { recursive: true });
 
-// Step 2: Replace placeholders
-const placeholders = placeholdersFor(meta);
+try {
+  // Step 1: Stage and replace placeholders
+  cpSync(join(ROOT, "addon"), STAGING_DIR, { recursive: true });
+  replacePlaceholders(STAGING_DIR, placeholdersFor(meta));
+  console.log("  [1/4] Placeholders replaced");
 
-function listFiles(dir) {
-  return readdirSync(dir).flatMap((entry) => {
-    const fullPath = join(dir, entry);
-    return statSync(fullPath).isDirectory() ? listFiles(fullPath) : [fullPath];
+  // Step 2: Compile TypeScript via esbuild JS API
+  const scriptsDir = join(STAGING_DIR, "content", "scripts");
+  mkdirSync(scriptsDir, { recursive: true });
+
+  await build({
+    entryPoints: [join(ROOT, "src/index.ts")],
+    bundle: true,
+    format: "iife",
+    globalName: "CitegeistBundle",
+    target: "firefox115",
+    platform: "browser",
+    outfile: join(scriptsDir, "citegeist.js"),
+    sourcemap: isDev ? "inline" : false,
+    minify: !isDev,
+    define: {
+      // Every build gets a unique stamp. The version alone is useless for telling
+      // builds apart: we deliberately hold the version steady across many
+      // iterations, and Zotero will happily keep running an older same-version
+      // copy — which cost real debugging time. This is logged at startup so
+      // "which build is actually running?" is answerable from Debug Output.
+      __BUILD_ID__: JSON.stringify(buildId),
+    },
+    logLevel: "info",
   });
-}
+  console.log("  [2/4] TypeScript compiled");
 
-for (const file of listFiles(ADDON_DIR)) {
-  if (!/\.(json|js|xhtml|ftl|html|css|svg)$/.test(file)) continue;
-  let content = readFileSync(file, "utf-8");
-  for (const [key, value] of Object.entries(placeholders)) {
-    content = content.replaceAll(key, value);
-  }
-  writeFileSync(file, content);
-}
-console.log("  [1/4] Placeholders replaced");
-
-// Step 3: Compile TypeScript via esbuild JS API
-const scriptsDir = join(ADDON_DIR, "content", "scripts");
-mkdirSync(scriptsDir, { recursive: true });
-
-await build({
-  entryPoints: [join(ROOT, "src/index.ts")],
-  bundle: true,
-  format: "iife",
-  globalName: "CitegeistBundle",
-  target: "firefox115",
-  platform: "browser",
-  outfile: join(scriptsDir, "citegeist.js"),
-  sourcemap: isDev ? "inline" : false,
-  minify: !isDev,
-  define: {
-    // Every build gets a unique stamp. The version alone is useless for telling
-    // builds apart: we deliberately hold the version steady across many
-    // iterations, and Zotero will happily keep running an older same-version
-    // copy — which cost real debugging time. This is logged at startup so
-    // "which build is actually running?" is answerable from Debug Output.
-    __BUILD_ID__: JSON.stringify(buildId),
-  },
-  logLevel: "info",
-});
-console.log("  [2/4] TypeScript compiled");
-
-// Step 4: Verify what ships. Everything under build/addon goes into the XPI, and a
-// dev build loads that directory directly, so both modes check it before packaging.
-const shippedTextFiles = listFiles(ADDON_DIR).flatMap((file) => {
-  const bytes = readFileSync(file);
-  // A NUL byte marks a binary asset (the PNG icons), which replacement never touches.
-  return bytes.includes(0)
-    ? []
-    : [{ path: relative(ROOT, file), content: bytes.toString("utf-8") }];
-});
-assertNoUnreplacedPlaceholders(shippedTextFiles);
-
-const manifestPath = join(ADDON_DIR, "manifest.json");
-const builtRange = JSON.parse(readFileSync(manifestPath, "utf-8")).applications?.zotero;
-assertZoteroRange(relative(ROOT, manifestPath), builtRange, meta);
-console.log(
-  `  [3/4] Shipped files verified; manifest.json declares Zotero ` +
-    `${builtRange.strict_min_version} to ${builtRange.strict_max_version}`,
-);
-
-// Step 5: Package XPI (production only)
-if (!isDev) {
-  const xpiName = `citegeist-${version}.xpi`;
-  const xpiPath = join(BUILD_DIR, xpiName);
-
-  execSync(`cd "${ADDON_DIR}" && zip -r "${xpiPath}" .`, { stdio: "pipe" });
-
-  const xpiBuffer = readFileSync(xpiPath);
-  const hash = createHash("sha256").update(xpiBuffer).digest("hex");
-
-  const updateJson = updateManifestFor(meta, xpiName, hash);
-  const updateJsonPath = join(BUILD_DIR, "update.json");
-
-  writeFileSync(updateJsonPath, JSON.stringify(updateJson, null, 2));
-
-  // Check the file as written rather than the object, so the gate still holds once
-  // update.json carries entries that did not come from this build's metadata.
-  const publishedRange = assertUpdateManifestRange(
-    JSON.parse(readFileSync(updateJsonPath, "utf-8")),
-    meta,
-  );
-
-  console.log(`  [4/4] XPI packaged: ${xpiName} (${(xpiBuffer.length / 1024).toFixed(1)} KB)`);
-  console.log(`        SHA-256: ${hash}`);
+  // Step 3: Verify the staging copy in both modes. The XPI is zipped from it, and a dev
+  // install loads it once it becomes build/addon.
+  const builtRange = verifyBuiltAddon(STAGING_DIR, meta);
   console.log(
-    `        update.json entry for ${version} declares Zotero ` +
-      `${publishedRange.strict_min_version} to ${publishedRange.strict_max_version}`,
+    `  [3/4] Shipped files verified; manifest.json declares Zotero ${formatRange(builtRange)}`,
   );
-} else {
-  console.log("  [4/4] Dev mode — skipping XPI packaging");
+
+  // Step 4: Package XPI (production only)
+  if (!isDev) {
+    execSync(`cd "${STAGING_DIR}" && zip -r "${XPI_PATH}" .`, { stdio: "pipe" });
+
+    const xpiBuffer = readFileSync(XPI_PATH);
+    const hash = createHash("sha256").update(xpiBuffer).digest("hex");
+
+    // Checked as an object before it is written, so a failing check leaves no update.json.
+    const updateJson = updateManifestFor(meta, xpiName, hash);
+    const publishedRange = verifyUpdateManifest(updateJson, meta);
+    writeFileSync(UPDATE_JSON_PATH, JSON.stringify(updateJson, null, 2));
+
+    console.log(`  [4/4] XPI packaged: ${xpiName} (${(xpiBuffer.length / 1024).toFixed(1)} KB)`);
+    console.log(`        SHA-256: ${hash}`);
+    console.log(
+      `        update.json entry for ${version} declares Zotero ${formatRange(publishedRange)}`,
+    );
+  } else {
+    console.log("  [4/4] Dev mode — skipping XPI packaging");
+  }
+
+  // Step 5: Every check passed, so the staging copy becomes build/addon.
+  rmSync(ADDON_DIR, { recursive: true, force: true });
+  renameSync(STAGING_DIR, ADDON_DIR);
+} catch (error) {
+  for (const artefact of [STAGING_DIR, XPI_PATH, UPDATE_JSON_PATH]) {
+    rmSync(artefact, { recursive: true, force: true });
+  }
+  console.error("\n  Build failed; removed the staging copy, the XPI and update.json.\n");
+  throw error;
 }
 
 console.log("\n  Build complete.\n");
