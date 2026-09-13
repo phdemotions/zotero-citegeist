@@ -110,6 +110,7 @@ describe("diagnostic code registry", () => {
       "CG-MATCH02",
       "CG-ID01",
       "CG-UI01",
+      "CG-UI02",
       "CG-BUG01",
     ];
     for (const code of published) {

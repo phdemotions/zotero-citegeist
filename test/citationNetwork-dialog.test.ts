@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildDialogHTML,
   buildAuthorDialogHTML,
+  defaultCollectionIdsFromPane,
   getItemSourceMetaLine,
   showCitationNetwork,
 } from "../src/modules/citationNetwork/dialog";
@@ -200,6 +201,51 @@ describe("buildAuthorDialogHTML", () => {
     expect(html).toContain("A &lt;x&gt; &amp; B");
     expect(html).not.toContain("A <x>");
     expect(html).toContain("≥ 40");
+  });
+});
+
+describe("defaultCollectionIdsFromPane (default filing collection)", () => {
+  const col = (id: number) => ({ id }) as unknown as _ZoteroTypes.Collection;
+  const removed = () => {
+    throw new Error("getSelectedCollection() was removed -- use getSelectedCollections()");
+  };
+
+  function stubPane(pane: Record<string, unknown>) {
+    const debug = vi.fn();
+    vi.stubGlobal("Zotero", { debug, getActiveZoteroPane: () => pane });
+    return debug;
+  }
+
+  it("gives no default when two collections are selected", () => {
+    stubPane({ getSelectedCollections: () => [col(1), col(2)], getSelectedCollection: removed });
+    expect([...defaultCollectionIdsFromPane()]).toEqual([]);
+  });
+
+  it("defaults to the one selected collection", () => {
+    stubPane({ getSelectedCollections: () => [col(3)], getSelectedCollection: removed });
+    expect([...defaultCollectionIdsFromPane()]).toEqual([3]);
+  });
+
+  it("falls back to getSelectedCollection on a pane without the plural getter", () => {
+    stubPane({ getSelectedCollection: () => col(5) });
+    expect([...defaultCollectionIdsFromPane()]).toEqual([5]);
+  });
+
+  it("gives no default for a library root on Zotero 7–9", () => {
+    stubPane({ getSelectedCollection: () => false });
+    expect([...defaultCollectionIdsFromPane()]).toEqual([]);
+  });
+
+  it("logs a throwing selection read and still returns no default", () => {
+    const debug = stubPane({
+      getSelectedCollections: () => {
+        throw new Error("host broke");
+      },
+    });
+    expect([...defaultCollectionIdsFromPane()]).toEqual([]);
+    expect(debug).toHaveBeenCalledWith(
+      expect.stringContaining("ERROR network dialog default collection"),
+    );
   });
 });
 

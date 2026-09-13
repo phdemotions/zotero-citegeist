@@ -88,6 +88,33 @@ declare namespace _ZoteroTypes {
     invalidate?(): void;
   }
 
+  /**
+   * A collection-tree row (`Zotero.CollectionTreeRow`), limited to what
+   * Citegeist reads. `type` names the row: "library", "group", "collection",
+   * "search", "feed", "feeds", "unfiled", "trash", "duplicates",
+   * "publications", "retracted", and others. `ref` depends on the type (a
+   * Collection, a Library or Group, a Search), so it stays `unknown` and
+   * `src/modules/host/selection.ts` narrows it.
+   */
+  interface CollectionTreeRow {
+    readonly type: string;
+    readonly ref: unknown;
+  }
+
+  /**
+   * The selection fields of a `Zotero.MenuManager` context on the library
+   * targets. Zotero 8 and 9 supply `collectionTreeRow`. Zotero 10 adds
+   * `collectionTreeRows`, the full selection, and turns `collectionTreeRow` into
+   * a getter that throws on a multi-row selection, so it may be read only when
+   * `collectionTreeRows` is absent.
+   */
+  interface MenuSelectionContext {
+    readonly collectionTreeRows?: readonly CollectionTreeRow[];
+    readonly collectionTreeRow?: CollectionTreeRow | null;
+    /** The menu element the context belongs to; its document's window is the right-clicked window. */
+    readonly menuElem?: Element | null;
+  }
+
   // Item pane section registration types
   interface SectionHookArgs {
     paneID: string;
@@ -201,11 +228,23 @@ declare const Zotero: {
   locale?: string;
   debug(msg: string, level?: number): void;
   log(msg: string): void;
+  // Collection-tree selection getters: read them only through
+  // src/modules/host/selection.ts. On Zotero 10 the singular ones throw for a
+  // multi-row selection, and on its beta and dev builds for any selection.
   getActiveZoteroPane(): {
     getSelectedItems(asIDs?: boolean): _ZoteroTypes.Item[];
-    getSelectedCollection(): _ZoteroTypes.Collection | null;
-    /** Returns the library ID of the currently selected library or collection. */
-    getSelectedLibraryID?(): number | undefined;
+    /** The selected collection; `false`/`undefined` when the row is not a collection. Throws on Zotero 10 (see above). */
+    getSelectedCollection(): _ZoteroTypes.Collection | false | null | undefined;
+    /** Zotero 10+: every selected collection, in tree order. */
+    getSelectedCollections?(): _ZoteroTypes.Collection[];
+    /** The library ID of the selected row. Throws on Zotero 10 (see above). */
+    getSelectedLibraryID?(): number | false | undefined;
+    /** Zotero 10+: the distinct library IDs of every selected row. */
+    getSelectedLibraryIDs?(): number[];
+    /** The focused collection-tree row, or a falsy value when none. Throws on Zotero 10 (see above). */
+    getCollectionTreeRow?(): _ZoteroTypes.CollectionTreeRow | false | 0 | null | undefined;
+    /** Zotero 10+: every selected collection-tree row, in tree order. Safe with any selection. */
+    getCollectionTreeRows?(): _ZoteroTypes.CollectionTreeRow[];
     itemsView?: _ZoteroTypes.ItemsView;
   };
   Item: new (itemType: string) => _ZoteroTypes.Item;
@@ -264,7 +303,11 @@ declare const Zotero: {
       getResponseHeader(header: string): string | null;
     }>;
   };
-  ProgressWindow: new (options?: { closeOnClick?: boolean }) => _ZoteroTypes.ProgressWindow;
+  ProgressWindow: new (options?: {
+    /** Window the notification opens in; Zotero falls back to the main window. */
+    window?: Window | null;
+    closeOnClick?: boolean;
+  }) => _ZoteroTypes.ProgressWindow;
   Search: new () => _ZoteroTypes.Search;
   ItemTreeManager: {
     registerColumn(options: _ZoteroTypes.RegisterColumnOptions): Promise<string>;

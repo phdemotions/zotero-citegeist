@@ -26,6 +26,12 @@ import {
 import { invalidateColumnCache } from "./citationColumn";
 import { showCitationNetwork } from "./citationNetwork";
 import { bindGuarded, guard } from "./diagnostics";
+import {
+  collectionTargetsFromMenuContext,
+  collectionTargetsFromPane,
+  menuCommandWindow,
+  type CollectionTarget,
+} from "./host/selection";
 import { logError } from "./utils";
 import { PROGRESS_WINDOW_ERROR_CLOSE_MS, PROGRESS_WINDOW_DONE_CLOSE_MS } from "../constants";
 
@@ -48,16 +54,14 @@ type NetworkMode = "citing" | "references";
 
 // ── Zotero.MenuManager surface (Zotero 8+; absent in typings/7.0.x) ──────────
 
-interface MenuManagerContext {
+/**
+ * The collection-tree selection fields come from `MenuSelectionContext` and are
+ * read only through `host/selection.ts`: on Zotero 10, `collectionTreeRow`
+ * throws for a multi-row selection.
+ */
+interface MenuManagerContext extends _ZoteroTypes.MenuSelectionContext {
   /** Selected items — present on the `main/library/item` target. */
   items?: _ZoteroTypes.Item[];
-  /** Right-clicked collection/library row — present on collection target. */
-  collectionTreeRow?: {
-    ref?: { libraryID?: number };
-    isCollection?: () => boolean;
-    isLibrary?: () => boolean;
-    editable?: boolean;
-  };
   setVisible: (visible: boolean) => void;
   setEnabled: (enabled: boolean) => void;
 }
@@ -204,6 +208,47 @@ function gatherCollectionItems(
   }
 }
 
+/** Every item under the targets, each ID once. A library target covers its whole library. */
+async function gatherTargetItems(
+  targets: readonly CollectionTarget[],
+): Promise<Map<number, _ZoteroTypes.Item>> {
+  const out = new Map<number, _ZoteroTypes.Item>();
+  for (const target of targets) {
+    if (target.kind === "collection") {
+      gatherCollectionItems(target.collection, out);
+    } else {
+      for (const item of await Zotero.Items.getAll(target.libraryID, false)) {
+        out.set(item.id, item);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * How the empty-state alerts name what was right-clicked: "this collection",
+ * "these 2 collections", "this library", "these 2 libraries", or, for a mix,
+ * "these 3 collections and libraries".
+ */
+function selectionPhrase(targets: readonly CollectionTarget[]): string {
+  const libraries = targets.filter((t) => t.kind === "library").length;
+  if (targets.length === 1) return libraries === 1 ? "this library" : "this collection";
+  const noun =
+    libraries === 0
+      ? "collections"
+      : libraries === targets.length
+        ? "libraries"
+        : "collections and libraries";
+  return `these ${targets.length} ${noun}`;
+}
+
+/** "This collection is empty." / "These 2 collections are empty." */
+function emptySelectionMessage(targets: readonly CollectionTarget[]): string {
+  const phrase = selectionPhrase(targets);
+  const verb = targets.length === 1 ? "is" : "are";
+  return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)} ${verb} empty.`;
+}
+
 /** Count of currently-selected items Citegeist can resolve to an OpenAlex work. */
 function eligibleSelectedCount(): number {
   return Zotero.getActiveZoteroPane().getSelectedItems().filter(canResolveWork).length;
@@ -237,7 +282,7 @@ async function runFetchSelected(win: Window): Promise<void> {
     return;
   }
 
-  const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
+  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
   progressWin.changeHeadline("Citegeist: Fetching Citations");
   // Explicit-color PNG inside the ProgressWindow — the SVG's `context-fill`
   // keyword fails to resolve there and Zotero falls back to its default red
@@ -300,44 +345,38 @@ function runViewNetwork(mode: NetworkMode): void {
   }
 }
 
-async function runFetchCollection(win: Window): Promise<void> {
-  const pane = Zotero.getActiveZoteroPane();
-  const collection = pane.getSelectedCollection();
-
-  // Gather items from the selected collection or the whole library when a
-  // library root node (e.g. "My Library") is right-clicked — those nodes don't
-  // return a collection from getSelectedCollection().
-  const allItems = new Map<number, _ZoteroTypes.Item>();
-  if (collection) {
-    gatherCollectionItems(collection, allItems);
-  } else {
-    // Library root — getSelectedCollection() returns null for root nodes.
-    // Use || (not ??) so a falsy 0 also falls back to the user library.
-    const rawLibraryID = pane.getSelectedLibraryID?.();
-    const libraryID = rawLibraryID || Zotero.Libraries.userLibraryID;
-    const libraryItems = await Zotero.Items.getAll(libraryID, false);
-    for (const item of libraryItems) allItems.set(item.id, item);
-  }
-
+/**
+ * Fetch every item under the selected collections and libraries.
+ *
+ * `targets` comes from `host/selection.ts`. `null` means the selection held a
+ * row Citegeist does not act on (the entry is hidden for it), so nothing starts:
+ * falling back to the library root would fetch a whole library the user never
+ * chose.
+ */
+async function runFetchCollection(
+  win: Window,
+  targets: readonly CollectionTarget[] | null,
+): Promise<void> {
+  if (!targets) return;
+  const allItems = await gatherTargetItems(targets);
   const totalItems = allItems.size;
   const eligible = [...allItems.values()].filter(canResolveWork);
 
   // Hard fallback when nothing is eligible — the ProgressWindow's corner
   // notification is easy to miss, leaving the user thinking the click did
   // nothing. A modal alert makes the empty result unambiguous + says WHY.
-  const scope = collection ? "collection" : "library";
   if (eligible.length === 0) {
     Services.prompt.alert(
       win,
       "Citegeist: Nothing to fetch",
       totalItems === 0
-        ? `This ${scope} is empty.`
-        : `None of the ${totalItems} item${totalItems === 1 ? "" : "s"} in this ${scope} has a recognized identifier (DOI, PMID, arXiv ID, or ISBN). Add an identifier to the items you want citation data for, then try again.`,
+        ? emptySelectionMessage(targets)
+        : `None of the ${totalItems} item${totalItems === 1 ? "" : "s"} in ${selectionPhrase(targets)} has a recognized identifier (DOI, PMID, arXiv ID, or ISBN). Add an identifier to the items you want citation data for, then try again.`,
     );
     return;
   }
 
-  const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
+  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
   progressWin.changeHeadline("Citegeist: Fetching Citations");
   const progress = new progressWin.ItemProgress(
     iconURL("icon-16-color.png"),
@@ -403,7 +442,7 @@ async function runResolveAuthorsSelected(win: Window): Promise<void> {
     return;
   }
 
-  const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
+  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
   progressWin.changeHeadline("Citegeist: Resolving Author Identities");
   const progress = new progressWin.ItemProgress(
     iconURL("icon-16-color.png"),
@@ -430,35 +469,27 @@ async function runResolveAuthorsSelected(win: Window): Promise<void> {
   progressWin.startCloseTimer(PROGRESS_WINDOW_DONE_CLOSE_MS);
 }
 
-async function runResolveAuthorsCollection(win: Window): Promise<void> {
-  const pane = Zotero.getActiveZoteroPane();
-  const collection = pane.getSelectedCollection();
-
-  const allItems = new Map<number, _ZoteroTypes.Item>();
-  if (collection) {
-    gatherCollectionItems(collection, allItems);
-  } else {
-    const rawLibraryID = pane.getSelectedLibraryID?.();
-    const libraryID = rawLibraryID || Zotero.Libraries.userLibraryID;
-    const libraryItems = await Zotero.Items.getAll(libraryID, false);
-    for (const item of libraryItems) allItems.set(item.id, item);
-  }
-
+/** Resolve author identities for every item under the targets. `null` starts nothing (see runFetchCollection). */
+async function runResolveAuthorsCollection(
+  win: Window,
+  targets: readonly CollectionTarget[] | null,
+): Promise<void> {
+  if (!targets) return;
+  const allItems = await gatherTargetItems(targets);
   const totalItems = allItems.size;
   const eligible = [...allItems.values()].filter(canResolveWork);
-  const scope = collection ? "collection" : "library";
   if (eligible.length === 0) {
     Services.prompt.alert(
       win,
       "Citegeist: Nothing to resolve",
       totalItems === 0
-        ? `This ${scope} is empty.`
-        : `None of the ${totalItems} item${totalItems === 1 ? "" : "s"} in this ${scope} has a recognized identifier to resolve authors from.`,
+        ? emptySelectionMessage(targets)
+        : `None of the ${totalItems} item${totalItems === 1 ? "" : "s"} in ${selectionPhrase(targets)} has a recognized identifier to resolve authors from.`,
     );
     return;
   }
 
-  const progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
+  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
   progressWin.changeHeadline("Citegeist: Resolving Author Identities");
   const progress = new progressWin.ItemProgress(
     iconURL("icon-16-color.png"),
@@ -517,8 +548,8 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
               ? ctx.items.some(canResolveWork)
               : eligibleSelectedCount() > 0,
           ),
-        onCommand: () => {
-          runFetchSelected(Zotero.getMainWindow()).catch((e) => logError("menu fetch", e));
+        onCommand: (e, ctx) => {
+          runFetchSelected(menuCommandWindow(e, ctx)).catch((err) => logError("menu fetch", err));
         },
       },
       {
@@ -543,9 +574,9 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
               ? ctx.items.some(canResolveWork)
               : eligibleSelectedCount() > 0,
           ),
-        onCommand: () => {
-          runResolveAuthorsSelected(Zotero.getMainWindow()).catch((e) =>
-            logError("menu resolve-authors", e),
+        onCommand: (e, ctx) => {
+          runResolveAuthorsSelected(menuCommandWindow(e, ctx)).catch((err) =>
+            logError("menu resolve-authors", err),
           );
         },
       },
@@ -562,20 +593,26 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
         menuType: "menuitem",
         l10nID: "citegeist-menu-fetch-collection",
         icon: iconURL("icon-16.svg"),
-        onCommand: () => {
-          runFetchCollection(Zotero.getMainWindow()).catch((e) =>
-            logError("menu fetch-collection", e),
-          );
+        // Hidden unless every selected row is a collection or library, so a
+        // saved search, feed, Unfiled or Trash row never reaches the fetch.
+        onShowing: (_e, ctx) => ctx.setVisible(collectionTargetsFromMenuContext(ctx) !== null),
+        onCommand: (e, ctx) => {
+          runFetchCollection(
+            menuCommandWindow(e, ctx),
+            collectionTargetsFromMenuContext(ctx),
+          ).catch((err) => logError("menu fetch-collection", err));
         },
       },
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-resolve-collection",
         icon: iconURL("icon-16.svg"),
-        onCommand: () => {
-          runResolveAuthorsCollection(Zotero.getMainWindow()).catch((e) =>
-            logError("menu resolve-authors-collection", e),
-          );
+        onShowing: (_e, ctx) => ctx.setVisible(collectionTargetsFromMenuContext(ctx) !== null),
+        onCommand: (e, ctx) => {
+          runResolveAuthorsCollection(
+            menuCommandWindow(e, ctx),
+            collectionTargetsFromMenuContext(ctx),
+          ).catch((err) => logError("menu resolve-authors-collection", err));
         },
       },
     ]),
@@ -722,7 +759,9 @@ function registerViaDOM(win: Window): void {
     // mnemonic) is unused on the default collection context menu.
     fetchAll.setAttribute("accesskey", "I");
     bindGuarded(fetchAll, "command", "menu fetch collection", () => {
-      runFetchCollection(win).catch((e) => logError("menu fetch-collection", e));
+      runFetchCollection(win, collectionTargetsFromPane(Zotero.getActiveZoteroPane())).catch((e) =>
+        logError("menu fetch-collection", e),
+      );
     });
     collectionMenu.appendChild(fetchAll);
 
@@ -732,9 +771,21 @@ function registerViaDOM(win: Window): void {
     resolveAll.setAttribute("image", iconURL("icon-16.svg"));
     resolveAll.setAttribute("accesskey", "A");
     bindGuarded(resolveAll, "command", "menu resolve collection", () => {
-      runResolveAuthorsCollection(win).catch((e) => logError("menu resolve-authors-collection", e));
+      runResolveAuthorsCollection(
+        win,
+        collectionTargetsFromPane(Zotero.getActiveZoteroPane()),
+      ).catch((e) => logError("menu resolve-authors-collection", e));
     });
     collectionMenu.appendChild(resolveAll);
+
+    // The MenuManager path's onShowing rule, for the DOM menu: hide the entries
+    // (and their separator) unless every selected row is a collection or library.
+    bindGuarded(collectionMenu, "popupshowing", "menu collection popupshowing", () => {
+      const hidden = collectionTargetsFromPane(Zotero.getActiveZoteroPane()) === null;
+      sep.hidden = hidden;
+      fetchAll.hidden = hidden;
+      resolveAll.hidden = hidden;
+    });
   }
 
   Zotero.debug("[Citegeist] Menus registered (DOM)");

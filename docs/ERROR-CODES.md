@@ -31,6 +31,7 @@ such as your username.
 | `CG-DB01` | Couldn't save to Citegeist's local database. | Most often a cloud-sync client holding the file. If your Zotero data folder is inside Dropbox, iCloud Drive, OneDrive or Box, pause sync and retry. |
 | `CG-DB02` | Citegeist's local database couldn't be opened. | Restart Zotero. If it persists, quit Zotero and check that `citegeist.sqlite` in your data folder isn't quarantined by antivirus. |
 | `CG-UI01` | Something went wrong drawing a panel. | Switch items and back, or restart Zotero. Worth reporting. |
+| `CG-UI02` | Citegeist couldn't tell which collection or library you right-clicked, so it hid its collection menu items instead of guessing. | A Zotero update usually changed how menus report the selection. Check for a Citegeist update (**Tools → Plugins**, gear menu, **Check for Updates**). If that doesn't fix it, copy the diagnostic report into a [new issue](https://github.com/phdemotions/zotero-citegeist/issues/new). |
 | `CG-BUG01` | An unexpected problem — Citegeist couldn't classify it. | Always worth reporting. Copy the diagnostic report into a [new issue](https://github.com/phdemotions/zotero-citegeist/issues/new). |
 
 ## The contract (for contributors)

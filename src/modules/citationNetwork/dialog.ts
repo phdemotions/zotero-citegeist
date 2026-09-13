@@ -35,6 +35,7 @@ import {
   buildCollectionTree,
 } from "./collectionPicker";
 import { resolveHostScheme } from "../ui/theme";
+import { selectedCollectionsFromPane } from "../host/selection";
 import { fetchAuthorProfile, type OpenAlexAuthorProfile } from "../openalexAuthors";
 import {
   buildProfileViewModel,
@@ -56,6 +57,24 @@ export let activeDialog: HTMLElement | null = null;
  * silently committed. (ADV-U1)
  */
 let activeState: NetworkState | null = null;
+
+/**
+ * The dialog's default filing collection: the selected collection when exactly
+ * one is selected, otherwise none. With several selected, no single one is
+ * clearly where the user wants new items to go.
+ */
+export function defaultCollectionIdsFromPane(): Set<number> {
+  const ids = new Set<number>();
+  try {
+    const selected = selectedCollectionsFromPane(Zotero.getActiveZoteroPane());
+    if (selected.length === 1) ids.add(selected[0].id);
+  } catch (e) {
+    // The selection read is total for every supported Zotero; a throw here is a
+    // host-contract break. The dialog still opens, with no default collection.
+    logError("network dialog default collection", e);
+  }
+  return ids;
+}
 
 /**
  * Monotonic open counter, bumped synchronously by BOTH entry points right after
@@ -251,14 +270,7 @@ export async function showCitationNetwork(
   // Fetch work + existing DOIs in parallel (user sees skeleton)
   phase = "loading-data";
   const allCollections = buildCollectionTree();
-  const defaultCollectionIds = new Set<number>();
-  try {
-    const zp = Zotero.getActiveZoteroPane();
-    const currentCol = zp?.getSelectedCollection?.();
-    if (currentCol) defaultCollectionIds.add(currentCol.id);
-  } catch {
-    /* library root */
-  }
+  const defaultCollectionIds = defaultCollectionIdsFromPane();
 
   let work;
   let existingDOIs;
@@ -427,14 +439,7 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
   const body = dialog.querySelector(".cg-dialog-body") as HTMLElement;
   if (body) renderSkeletonRows(body);
 
-  const defaultCollectionIds = new Set<number>();
-  try {
-    const zp = Zotero.getActiveZoteroPane();
-    const currentCol = zp?.getSelectedCollection?.();
-    if (currentCol) defaultCollectionIds.add(currentCol.id);
-  } catch {
-    /* library root */
-  }
+  const defaultCollectionIds = defaultCollectionIdsFromPane();
 
   const state: NetworkState = {
     phase: "ready",

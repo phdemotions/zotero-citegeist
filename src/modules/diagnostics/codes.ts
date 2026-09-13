@@ -115,6 +115,12 @@ export const DIAGNOSTIC_CODES = {
     area: "UI",
     message: "Something went wrong drawing this panel. Switch items and back, or restart Zotero.",
   },
+  "CG-UI02": {
+    code: "CG-UI02",
+    area: "UI",
+    message:
+      "Citegeist couldn't tell which collection or library was right-clicked, so it hid its collection menu items instead of guessing. Updating Citegeist usually fixes this; if it doesn't, report this code on GitHub.",
+  },
   "CG-BUG01": {
     code: "CG-BUG01",
     area: "BUG",

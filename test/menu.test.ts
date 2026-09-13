@@ -11,7 +11,16 @@
 
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { FakeDocument, makeItem, flushAsync } from "./_helpers/menuHarness";
+import {
+  FakeDocument,
+  UNSUPPORTED_ROW_TYPES,
+  collectionRow,
+  flushAsync,
+  libraryRow,
+  makeCollection,
+  makeItem,
+  otherRow,
+} from "./_helpers/menuHarness";
 
 const mocks = vi.hoisted(() => ({
   fetchAndCacheItems: vi.fn(async () => ({
@@ -68,6 +77,8 @@ interface CapturedMenu {
 let doc: FakeDocument;
 let win: Window;
 let selectedItems: _ZoteroTypes.Item[];
+let libraryItems: _ZoteroTypes.Item[];
+let alertSpy: ReturnType<typeof vi.fn>;
 let registerReturns: Array<string | false>;
 let registerMenu: ReturnType<typeof vi.fn>;
 let unregisterMenu: ReturnType<typeof vi.fn>;
@@ -80,16 +91,23 @@ function installZotero(withMenuManager: boolean): void {
     return registerReturns.length ? registerReturns.shift()! : opts.menuID;
   });
   unregisterMenu = vi.fn(() => true);
+  alertSpy = vi.fn();
 
   const zotero: Record<string, unknown> = {
     debug: vi.fn(),
     getMainWindow: vi.fn(() => win),
     getActiveZoteroPane: vi.fn(() => ({
       getSelectedItems: () => selectedItems,
-      getSelectedCollection: () => null,
-      getSelectedLibraryID: () => 1,
+      // Zotero 10's singular collection getters throw on a multi-row selection.
+      // The MenuManager path reads the context rows and must never call them.
+      getSelectedCollection: () => {
+        throw new Error("getSelectedCollection() was removed -- use getSelectedCollections()");
+      },
+      getSelectedLibraryID: () => {
+        throw new Error("getSelectedLibraryID() was removed -- use getSelectedLibraryIDs()");
+      },
     })),
-    Items: { getAll: vi.fn(async () => selectedItems) },
+    Items: { getAll: vi.fn(async () => libraryItems) },
     Libraries: { userLibraryID: 1 },
     ProgressWindow: vi.fn(function () {
       return {
@@ -106,7 +124,7 @@ function installZotero(withMenuManager: boolean): void {
     zotero.MenuManager = { registerMenu, unregisterMenu };
   }
   vi.stubGlobal("Zotero", zotero);
-  vi.stubGlobal("Services", { prompt: { alert: vi.fn() } });
+  vi.stubGlobal("Services", { prompt: { alert: alertSpy } });
 }
 
 /**
@@ -126,8 +144,14 @@ beforeEach(() => {
   doc = new FakeDocument();
   win = { document: doc } as unknown as Window;
   selectedItems = [makeItem(1)];
+  libraryItems = [makeItem(1), makeItem(2)];
   registerReturns = [];
 });
+
+/** A MenuManager context for the collection target. */
+function collectionContext(fields: Record<string, unknown>) {
+  return { setVisible: vi.fn(), setEnabled: vi.fn(), ...fields };
+}
 
 const findMenu = (target: string) => captured.find((c) => c.target === target)!;
 
@@ -237,8 +261,12 @@ describe("MenuManager path (Zotero 8+)", () => {
     const { registerMenus } = await loadMenu();
     registerMenus(win);
     const collection = findMenu("main/library/collection");
-    selectedItems = [makeItem(1), makeItem(2)];
-    collection.menus[0].onCommand!({} as Event, {});
+    collection.menus[0].onCommand!(
+      {} as Event,
+      collectionContext({
+        collectionTreeRows: [collectionRow(makeCollection([makeItem(1), makeItem(2)]))],
+      }),
+    );
     await flushAsync();
     expect(mocks.fetchAndCacheItems).toHaveBeenCalled();
   });
@@ -288,10 +316,271 @@ describe("resolve-authors handlers (MenuManager, U4 backfill)", () => {
     const resolve = collection.menus[1]; // [fetch-collection, resolve-collection]
     expect(resolve.l10nID).toBe("citegeist-menu-resolve-collection");
 
-    selectedItems = [makeItem(1), makeItem(2)];
-    resolve.onCommand!({} as Event, {});
+    resolve.onCommand!(
+      {} as Event,
+      collectionContext({
+        collectionTreeRows: [collectionRow(makeCollection([makeItem(1), makeItem(2)]))],
+      }),
+    );
     await flushAsync();
     expect(mocks.resolveAuthorsForItems).toHaveBeenCalled();
+  });
+});
+
+describe("collection menu reads the selection from the context rows (Zotero 10, AE3)", () => {
+  async function collectionMenu() {
+    installZotero(true);
+    const { registerMenus } = await loadMenu();
+    registerMenus(win);
+    // Same fresh module graph as menu.ts, so this is the buffer logError records into.
+    const diagnostics = await import("../src/modules/diagnostics");
+    diagnostics.clearDiagnostics();
+    const menu = findMenu("main/library/collection");
+    return { fetch: menu.menus[0], resolve: menu.menus[1], diagnostics };
+  }
+
+  const fetchedIds = () =>
+    (mocks.fetchAndCacheItems.mock.calls[0][0] as _ZoteroTypes.Item[])
+      .map((i) => i.id)
+      .sort((a, b) => a - b);
+
+  it("covers AE3: two selected collections fetch both collections' items, each item once", async () => {
+    const { fetch } = await collectionMenu();
+    const shared = makeItem(2);
+    const ctx = collectionContext({
+      collectionTreeRows: [
+        collectionRow(makeCollection([makeItem(1), shared])),
+        collectionRow(makeCollection([shared, makeItem(3)])),
+      ],
+    });
+
+    fetch.onShowing!({} as Event, ctx);
+    expect(ctx.setVisible).toHaveBeenCalledWith(true);
+
+    fetch.onCommand!({} as Event, ctx);
+    await flushAsync();
+    expect(mocks.fetchAndCacheItems).toHaveBeenCalledTimes(1);
+    expect(fetchedIds()).toEqual([1, 2, 3]);
+  });
+
+  it("never reads Zotero 10's collectionTreeRow getter, which throws on a multi-row selection", async () => {
+    const { fetch, diagnostics } = await collectionMenu();
+    // Built literally, not spread: a spread would invoke the throwing getter.
+    const ctx = {
+      setVisible: vi.fn(),
+      setEnabled: vi.fn(),
+      collectionTreeRows: [
+        collectionRow(makeCollection([makeItem(1)])),
+        collectionRow(makeCollection([makeItem(2)])),
+      ],
+      get collectionTreeRow(): never {
+        throw new Error("collectionTreeRow was removed -- use collectionTreeRows");
+      },
+    };
+
+    fetch.onShowing!({} as Event, ctx);
+    fetch.onCommand!({} as Event, ctx);
+    await flushAsync();
+
+    expect(ctx.setVisible).toHaveBeenCalledWith(true);
+    expect(fetchedIds()).toEqual([1, 2]);
+    expect(diagnostics.recentDiagnostics()).toEqual([]);
+  });
+
+  it("fetches a library row alone when one of its own collections is also selected", async () => {
+    const { fetch } = await collectionMenu();
+    libraryItems = [makeItem(1), makeItem(2)];
+    fetch.onCommand!(
+      {} as Event,
+      collectionContext({
+        collectionTreeRows: [libraryRow(1), collectionRow(makeCollection([makeItem(50)], [], 1))],
+      }),
+    );
+    await flushAsync();
+
+    expect(Zotero.Items.getAll).toHaveBeenCalledTimes(1);
+    expect(Zotero.Items.getAll).toHaveBeenCalledWith(1, false);
+    // Item 50 would appear only if the subsumed collection were gathered too.
+    expect(fetchedIds()).toEqual([1, 2]);
+  });
+
+  describe.each(UNSUPPORTED_ROW_TYPES)("a %s row", (type) => {
+    it.each([
+      ["alone", () => [otherRow(type)]],
+      [
+        "mixed with a collection",
+        () => [collectionRow(makeCollection([makeItem(1)])), otherRow(type)],
+      ],
+    ])(
+      "%s hides both collection entries, and the commands start no fetch",
+      async (_label, rows) => {
+        const { fetch, resolve } = await collectionMenu();
+        for (const entry of [fetch, resolve]) {
+          const ctx = collectionContext({ collectionTreeRows: rows() });
+          entry.onShowing!({} as Event, ctx);
+          expect(ctx.setVisible).toHaveBeenCalledWith(false);
+          entry.onCommand!({} as Event, ctx);
+        }
+        await flushAsync();
+
+        expect(mocks.fetchAndCacheItems).not.toHaveBeenCalled();
+        expect(mocks.resolveAuthorsForItems).not.toHaveBeenCalled();
+        expect(Zotero.Items.getAll).not.toHaveBeenCalled();
+        expect(alertSpy).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("Zotero 8/9: a context with only collectionTreeRow fetches that one collection", async () => {
+    const { fetch } = await collectionMenu();
+    const ctx = collectionContext({
+      collectionTreeRow: collectionRow(makeCollection([makeItem(4), makeItem(5)])),
+    });
+
+    fetch.onShowing!({} as Event, ctx);
+    expect(ctx.setVisible).toHaveBeenCalledWith(true);
+
+    fetch.onCommand!({} as Event, ctx);
+    await flushAsync();
+    expect(fetchedIds()).toEqual([4, 5]);
+    expect(Zotero.Items.getAll).not.toHaveBeenCalled();
+  });
+
+  it("Zotero 8/9: a library-root collectionTreeRow fetches that library", async () => {
+    const { fetch } = await collectionMenu();
+    fetch.onCommand!({} as Event, collectionContext({ collectionTreeRow: libraryRow(7) }));
+    await flushAsync();
+    expect(Zotero.Items.getAll).toHaveBeenCalledWith(7, false);
+    expect(fetchedIds()).toEqual([1, 2]);
+  });
+
+  it("a context with neither selection field hides the entries, throws nothing, and records CG-UI02", async () => {
+    const { fetch, resolve, diagnostics } = await collectionMenu();
+    for (const entry of [fetch, resolve]) {
+      const ctx = collectionContext({});
+      entry.onShowing!({} as Event, ctx);
+      expect(ctx.setVisible).toHaveBeenCalledWith(false);
+      entry.onCommand!({} as Event, ctx);
+    }
+    await flushAsync();
+
+    expect(mocks.fetchAndCacheItems).not.toHaveBeenCalled();
+    expect(mocks.resolveAuthorsForItems).not.toHaveBeenCalled();
+    const codes = diagnostics.recentDiagnostics().map((d) => d.code);
+    // One record for four reads, and no CG-BUG01: nothing threw into guard().
+    expect(codes).toEqual(["CG-UI02"]);
+  });
+
+  it.each([
+    [
+      "two collections",
+      () => [
+        collectionRow(makeCollection([makeItem(1, false)])),
+        collectionRow(makeCollection([makeItem(2, false)])),
+      ],
+      "in these 2 collections",
+    ],
+    ["one library", () => [libraryRow(1)], "in this library"],
+    ["two libraries", () => [libraryRow(1), libraryRow(2, "group")], "in these 2 libraries"],
+    [
+      "a library and a collection from another library",
+      () => [libraryRow(2, "group"), collectionRow(makeCollection([makeItem(3, false)], [], 1))],
+      "in these 2 collections and libraries",
+    ],
+  ])("names %s in the no-eligible-items alert", async (_label, rows, phrase) => {
+    const { fetch } = await collectionMenu();
+    libraryItems = [makeItem(10, false)];
+    fetch.onCommand!({} as Event, collectionContext({ collectionTreeRows: rows() }));
+    await flushAsync();
+
+    expect(alertSpy).toHaveBeenCalledWith(
+      win,
+      "Citegeist: Nothing to fetch",
+      expect.stringContaining(phrase),
+    );
+    expect(mocks.fetchAndCacheItems).not.toHaveBeenCalled();
+  });
+
+  it("says 'These 2 collections are empty.' when both selected collections are empty", async () => {
+    const { fetch } = await collectionMenu();
+    fetch.onCommand!(
+      {} as Event,
+      collectionContext({
+        collectionTreeRows: [collectionRow(makeCollection([])), collectionRow(makeCollection([]))],
+      }),
+    );
+    await flushAsync();
+    expect(alertSpy).toHaveBeenCalledWith(
+      win,
+      "Citegeist: Nothing to fetch",
+      "These 2 collections are empty.",
+    );
+  });
+
+  it("names the selection in the resolve-authors alert too", async () => {
+    const { resolve } = await collectionMenu();
+    resolve.onCommand!(
+      {} as Event,
+      collectionContext({
+        collectionTreeRows: [
+          collectionRow(makeCollection([makeItem(1, false)])),
+          collectionRow(makeCollection([makeItem(2, false)])),
+        ],
+      }),
+    );
+    await flushAsync();
+    expect(alertSpy).toHaveBeenCalledWith(
+      win,
+      "Citegeist: Nothing to resolve",
+      expect.stringContaining("in these 2 collections"),
+    );
+    expect(mocks.resolveAuthorsForItems).not.toHaveBeenCalled();
+  });
+});
+
+describe("menu commands run in the right-clicked window", () => {
+  const secondWindow = () => ({ document: new FakeDocument() }) as unknown as Window;
+  const elementIn = (w: Window) => ({ ownerDocument: { defaultView: w } });
+
+  it("attaches the collection fetch's progress window and alerts to the second window", async () => {
+    installZotero(true);
+    const { registerMenus } = await loadMenu();
+    registerMenus(win);
+    const fetch = findMenu("main/library/collection").menus[0];
+    const win2 = secondWindow();
+
+    fetch.onCommand!(
+      {} as Event,
+      collectionContext({
+        menuElem: elementIn(win2),
+        collectionTreeRows: [collectionRow(makeCollection([makeItem(1)]))],
+      }),
+    );
+    await flushAsync();
+    expect(Zotero.ProgressWindow).toHaveBeenCalledWith(expect.objectContaining({ window: win2 }));
+
+    fetch.onCommand!(
+      {} as Event,
+      collectionContext({
+        menuElem: elementIn(win2),
+        collectionTreeRows: [collectionRow(makeCollection([makeItem(2, false)]))],
+      }),
+    );
+    await flushAsync();
+    expect(alertSpy).toHaveBeenCalledWith(win2, "Citegeist: Nothing to fetch", expect.any(String));
+    expect(Zotero.getMainWindow).not.toHaveBeenCalled();
+  });
+
+  it("attaches the item fetch's progress window to the window of the command's target", async () => {
+    installZotero(true);
+    const { registerMenus } = await loadMenu();
+    registerMenus(win);
+    const fetch = findMenu("main/library/item").menus[0];
+    const win2 = secondWindow();
+
+    fetch.onCommand!({ target: elementIn(win2) } as unknown as Event, { setVisible: vi.fn() });
+    await flushAsync();
+    expect(Zotero.ProgressWindow).toHaveBeenCalledWith(expect.objectContaining({ window: win2 }));
   });
 });
 
