@@ -1,3 +1,10 @@
+# Tag push -> gated release (plan U5, KTD13).
+#
+#   verify       read-only: tag/version guard, every automated gate, the build.
+#   real-zotero  read-only: the real-Zotero matrix (real-zotero.yml).
+#   publish      the only job with contents: write. It needs both, publishes the
+#                exact bytes verify built, and runs no npm install, test code or
+#                Zotero binary.
 name: Build & Release
 
 on:
@@ -6,30 +13,119 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
+  verify:
+    name: Verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      asset-sums: ${{ steps.digest.outputs.sums }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
 
+      # A hand-made tag whose name differs from package.json would publish an
+      # update.json that links a release asset under the wrong tag.
+      - name: Tag matches the package.json version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Tag $TAG does not match package.json version $version; expected v$version"
+            exit 1
+          fi
+          echo "Tag $TAG matches package.json version $version"
+
       - run: npm install --no-audit --no-fund
+
+      - run: npm run typecheck
+
+      - run: npm run lint
+
+      - run: npm run format:check
+
+      - run: npm run okf:check
 
       - run: npm test
 
       - run: npm run build
 
-      - name: Upload XPI artifact
-        uses: actions/upload-artifact@v5
+      # publish re-checks these digests. Every job in the run can write
+      # artifacts, including the real-Zotero cells running third-party code, and
+      # none of them can change this job's outputs.
+      - name: Record the release asset digests
+        id: digest
+        working-directory: build
+        run: |
+          shopt -s failglob
+          xpis=(citegeist-*.xpi)
+          if [ "${#xpis[@]}" -ne 1 ]; then echo "::error::Expected one XPI, found: ${xpis[*]}"; exit 1; fi
+          sums=$(sha256sum "${xpis[0]}" update.json)
+          echo "$sums"
+          {
+            echo "sums<<CITEGEIST_SUMS"
+            echo "$sums"
+            echo "CITEGEIST_SUMS"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload the release assets
+        uses: actions/upload-artifact@v7
         with:
-          name: citegeist-xpi
-          path: build/*.xpi
+          name: release-assets
+          path: |
+            build/citegeist-*.xpi
+            build/update.json
+          if-no-files-found: error
+
+  real-zotero:
+    name: Real Zotero
+    permissions:
+      contents: read
+    uses: ./.github/workflows/real-zotero.yml
+
+  publish:
+    name: Publish
+    needs: [verify, real-zotero]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Credentials persist on purpose: this job pushes the `release` tag and
+      # the `badges` branch.
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Download the verified release assets
+        uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: build
+
+      - name: Confirm the assets are the bytes verify built
+        working-directory: build
+        env:
+          SUMS: ${{ needs.verify.outputs.asset-sums }}
+        run: |
+          shopt -s nullglob dotglob
+          files=(*)
+          if [ "${#files[@]}" -ne 2 ]; then
+            echo "::error::Expected exactly the XPI and update.json, found: ${files[*]}"
+            exit 1
+          fi
+          printf '%s\n' "$SUMS" | sha256sum --check --strict
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

@@ -1,0 +1,126 @@
+# Real-Zotero suite (plan U4, KTD6). Launches a pinned Zotero release of each
+# supported major with the unzipped release XPI and runs the Mocha specs in
+# test/real-zotero/ inside it via zotero-plugin-scaffold.
+#
+# One definition, called by ci.yml (pull requests and pushes to main) and by
+# release.yml (before a tag can publish). It runs scaffold and a downloaded
+# Zotero binary, so it never holds more than a read-only token (KTD13).
+name: Real Zotero
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  real-zotero:
+    # Callers name their job "Real Zotero", so each cell reports as the status
+    # check "Real Zotero / Zotero <version>".
+    name: Zotero ${{ matrix.zotero }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Latest release-channel patch of each supported major, pinned so a new
+        # Zotero build never silently changes a pull request's result. Release
+        # builds only: beta and dev builds ignore strict_max_version.
+        zotero: ["8.0.4", "9.0.6", "10.0.2"]
+    env:
+      ZOTERO_VERSION: ${{ matrix.zotero }}
+      # Without this, scaffold downloads Zotero's beta channel instead.
+      ZOTERO_PLUGIN_ZOTERO_BIN_PATH: ${{ github.workspace }}/.scaffold/zotero/zotero
+      # Skip scaffold's own headless bootstrap (apt, Xvfb, Zotero download); the
+      # steps below install the dependencies and run Xvfb explicitly.
+      ZOTERO_SETUP_COMPLETE: "1"
+      # The suite's root after-hook writes Debug Output and Zotero's errors here.
+      CITEGEIST_REAL_ZOTERO_LOG_DIR: ${{ github.workspace }}/.scaffold/logs
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm install --no-audit --no-fund
+
+      - name: Build the release XPI
+        run: npm run build
+
+      - name: Stage the unzipped XPI for the runner
+        run: |
+          shopt -s failglob
+          xpis=(build/citegeist-*.xpi)
+          if [ "${#xpis[@]}" -ne 1 ]; then echo "::error::Expected one XPI, found: ${xpis[*]}"; exit 1; fi
+          rm -rf .scaffold/xpi
+          mkdir -p .scaffold/xpi .scaffold/logs
+          unzip -q "${xpis[0]}" -d .scaffold/xpi
+
+      - name: Install headless runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth x11-xkb-utils xkb-data libasound2t64 libdbus-glib-1-2
+
+      - name: Download Zotero ${{ matrix.zotero }} for Linux
+        run: |
+          curl --fail --silent --show-error --location --retry 3 --output zotero.tar.xz \
+            "https://download.zotero.org/client/release/${ZOTERO_VERSION}/Zotero-${ZOTERO_VERSION}_linux-x86_64.tar.xz"
+          sha256sum zotero.tar.xz
+          mkdir -p .scaffold/zotero
+          tar -xJf zotero.tar.xz -C .scaffold/zotero --strip-components=1
+          test -x "$ZOTERO_PLUGIN_ZOTERO_BIN_PATH"
+
+      - name: Run the real-Zotero suite
+        run: |
+          set -o pipefail
+          timeout 15m xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            npm run test:zotero 2>&1 | tee ".scaffold/logs/runner-zotero-${ZOTERO_VERSION}.log"
+
+      # Negative control, Zotero 10 cell only. The same XPI with its cap lowered
+      # to 9.* must be refused. The step asserts that expected failure: it is
+      # green when the cap check works, and red if a wrongly capped build loads
+      # or the run fails for some unrelated reason.
+      - name: "Negative control: a build capped 9.* is refused on Zotero 10"
+        if: ${{ !cancelled() && matrix.zotero == '10.0.2' }}
+        run: |
+          pkill -f "$ZOTERO_PLUGIN_ZOTERO_BIN_PATH" || true
+          node -e '
+            const fs = require("fs");
+            const file = ".scaffold/xpi/manifest.json";
+            const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+            manifest.applications.zotero.strict_max_version = "9.*";
+            fs.writeFileSync(file, JSON.stringify(manifest, null, 2));
+          '
+          log=".scaffold/logs/negative-control-cap-9.log"
+          set +e
+          timeout 10m xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            npm run test:zotero > "$log" 2>&1
+          status=$?
+          set -e
+          pkill -f "$ZOTERO_PLUGIN_ZOTERO_BIN_PATH" || true
+          cat "$log"
+          if [ "$status" -eq 0 ]; then
+            echo "::error::A build capped 9.* passed on Zotero 10: the activation check misses cap bugs"
+            exit 1
+          fi
+          if ! grep -Eq "not compatible with application version|marked Citegeist incompatible" "$log"; then
+            echo "::error::The 9.*-capped build failed (exit $status) for a reason other than its cap"
+            exit 1
+          fi
+          echo "Negative control held: Zotero 10 refused the build capped 9.*"
+
+      - name: Upload real-Zotero logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-zotero-${{ matrix.zotero }}-logs
+          path: .scaffold/logs/
+          if-no-files-found: ignore
+          retention-days: 14

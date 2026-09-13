@@ -12,7 +12,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:dev": "node scripts/build.mjs --dev",
-    "release": "bumpp --commit 'release: v%s' --tag 'v%s' --push",
+    "release": "bumpp --commit 'release: v%s' --all --no-tag --no-push",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:zotero": "zotero-plugin test --exit-on-finish",

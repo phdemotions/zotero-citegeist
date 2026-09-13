@@ -19,7 +19,7 @@ npm run format             # Prettier write
 npm run format:check       # Prettier check (no write)
 npm run okf:check          # OKF docs-conformance (every docs/ file has a `type`)
 npm run okf:drift          # Compare OKF spec upstream HEAD vs the pinned commit
-npm run release            # Bump version, tag, push (triggers GitHub Actions release)
+npm run release            # Bump version + commit locally (no tag, no push); see Release Process
 ```
 
 **Pre-commit checklist:** `npm run typecheck && npm test && npm run lint && npm run format:check && npm run okf:check && npm run build`
@@ -106,23 +106,27 @@ typings/                        # Zotero type declarations
 
 ## Release Process
 
-**Gate first.** Before tagging any `v*`, run `docs/RELEASE-CHECKLIST.md` — the manual host-verification gates (real-Zotero smoke on 7/8/9, diagnostics end-to-end, and the 2-device sync round-trip). The test suite mocks Zotero, so the highest-risk surface (pane render, sidenav icon, sync integrity) has no automated coverage; auto-update hits 100% of users with no canary, so a bad tag is fleet-wide. The mechanical steps below only run once those gates pass.
+**Gate first.** Before tagging any `v*`, run `docs/RELEASE-CHECKLIST.md` — the manual host-verification gates (real-Zotero smoke, diagnostics end-to-end, and the 2-device sync round-trip). CI runs the real-Zotero suite on Linux only and nothing automated exercises sync, so those surfaces still need a human; auto-update hits 100% of users with no canary, so a bad tag is fleet-wide. The mechanical steps below only run once those gates pass.
 
-Shipping to users requires a **tagged release**, not just a push to `main`:
+Shipping to users requires a **tagged release**, not just a merge to `main`. `main` is protected, so the release commit lands through a pull request and the tag is pushed after merge:
 
-1. Bump versions in `package.json`, `package-lock.json` (top-level + `packages[""]`), and `CITATION.cff` — all three must match
-2. Move `[Unreleased]` in `CHANGELOG.md` to the new version with today's date, add comparison link at bottom
-3. Commit, then: `git tag vX.Y.Z && git push origin main && git push origin vX.Y.Z`
-4. GitHub Actions builds the XPI, creates a GitHub Release, and force-updates the `release` floating tag
-5. `addon/manifest.json` points `update_url` at `releases/download/release/update.json` — installed Zotero copies auto-update on next restart
-
-Or just run `npm run release` (uses bumpp) and then push the tag.
+1. Branch from an up-to-date `main`: `git switch main && git pull --ff-only && git switch -c release/vX.Y.Z`
+2. Update `CITATION.cff` (`version`, `date-released`) and move `[Unreleased]` in `CHANGELOG.md` to the new version with today's date, adding the comparison link at the bottom. Leave both uncommitted.
+3. `npm run release` — bumpp asks for the version, bumps `package.json` and `package-lock.json` (top-level + `packages[""]`), and commits every tracked change as `release: vX.Y.Z`. It does not tag or push. Confirm `package.json`, `package-lock.json` and `CITATION.cff` carry the same version.
+4. `git push -u origin release/vX.Y.Z`, open a pull request to `main`, and merge once `CI gate` is green
+5. Tag `main` after the merge, not the release branch (a squash or rebase merge leaves the branch commit off `main`): `git switch main && git pull --ff-only`, confirm `node -p "require('./package.json').version"` prints `X.Y.Z`, then `git tag vX.Y.Z && git push origin vX.Y.Z`
+6. `release.yml` runs `Verify` (the tag must equal `v` + the `package.json` version, then typecheck, lint, format, OKF, unit tests and build) and the real-Zotero matrix, both read-only. Only when both pass does `Publish`, the one job with write access, release the XPI and `update.json` that `Verify` built, force-update the `release` floating tag, and refresh the badges. A failed gate publishes nothing; recovery steps are in `docs/RELEASE-CHECKLIST.md` section 5.
+7. `addon/manifest.json` points `update_url` at `releases/download/release/update.json` — installed Zotero copies auto-update on next restart
 
 **Dev copy** (proxy-file install): `npm run build:dev` + restart Zotero. Does not auto-update.
 
 ---
 
 ## CI Notes
+
+**Gates and permissions.** `ci.yml` runs lint, format, OKF, unit tests, typecheck and build (the `test (22)` job) beside the real-Zotero matrix, which is defined once in `real-zotero.yml` and also called by `release.yml`. Branch protection on `main` requires the single `CI gate` check, which passes only when every other `ci.yml` job succeeded, so adding or bumping a Zotero cell needs no settings change. Every workflow declares least-privilege `permissions:`: jobs that run npm dependencies, scaffold or a Zotero binary hold `contents: read`, and only `release.yml`'s `Publish` job holds `contents: write` (KTD13 in `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`).
+
+**Why GitHub Actions, not Vercel.** The real-Zotero suite needs a runner that can launch the Zotero desktop app, and the repository is public, so Actions minutes cost nothing. The monorepo's Vercel-first CI rule targets Vercel-deployed sites, and Citegeist has none.
 
 Workflows use `npm install --no-audit --no-fund`, **not** `npm ci`. This is intentional — `npm ci` fails with `EBADPLATFORM` on `@esbuild/openharmony-arm64@0.28.0` (a transitive optional dep from vitest → vite → esbuild). Do not "fix" this back to `npm ci`.
 
