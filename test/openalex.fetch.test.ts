@@ -17,12 +17,18 @@ import {
 } from "../src/modules/utils";
 
 let apiKeyPref = "";
+let baseUrlPref: unknown = undefined;
 const httpRequest = vi.fn();
 
 const mockZotero = {
   Prefs: {
-    get: vi.fn((pref: string) => {
+    get: vi.fn((pref: string, global?: boolean) => {
       if (pref === "extensions.zotero.citegeist.openAlexApiKey") return apiKeyPref;
+      // Real Zotero prepends `extensions.zotero.` unless `global` is passed, so a
+      // full-name read without it would never see the profile's value.
+      if (pref === "extensions.zotero.citegeist.openAlexBaseUrl" && global === true) {
+        return baseUrlPref;
+      }
       return undefined;
     }),
   },
@@ -32,7 +38,7 @@ const mockZotero = {
 vi.stubGlobal("Zotero", mockZotero);
 
 // Import after the global is stubbed so module-level code sees it.
-import { getWorkById, resolveCanonicalId } from "../src/modules/openalex";
+import { getWorkById, resolveCanonicalId, resolveOpenAlexBase } from "../src/modules/openalex";
 
 function httpResponse(status: number, body: unknown = {}, headers: Record<string, string> = {}) {
   return {
@@ -44,6 +50,7 @@ function httpResponse(status: number, body: unknown = {}, headers: Record<string
 
 beforeEach(() => {
   apiKeyPref = "";
+  baseUrlPref = undefined;
   httpRequest.mockReset();
   mockZotero.debug.mockReset();
 });
@@ -126,6 +133,91 @@ describe("api key attachment", () => {
     const url = httpRequest.mock.calls[0][1] as string;
     expect(url).not.toContain("api_key");
     expect(url).not.toContain("mailto");
+  });
+});
+
+describe("OpenAlex base-URL override", () => {
+  async function requestedUrl(): Promise<string> {
+    httpRequest.mockResolvedValue(httpResponse(200, { id: "https://openalex.org/W1" }));
+    await getWorkById("W1");
+    return httpRequest.mock.calls[0][1] as string;
+  }
+
+  it("uses the production API when the pref is unset", async () => {
+    expect(await requestedUrl()).toMatch(/^https:\/\/api\.openalex\.org\/works\/W1\?/);
+  });
+
+  it("honours a loopback override, as the real-Zotero stub needs", async () => {
+    baseUrlPref = "http://127.0.0.1:43121";
+    expect(await requestedUrl()).toMatch(/^http:\/\/127\.0\.0\.1:43121\/works\/W1\?/);
+  });
+
+  it("ignores a non-loopback host and sends the request to OpenAlex", async () => {
+    baseUrlPref = "https://evil.example";
+    const url = await requestedUrl();
+    expect(url).toMatch(/^https:\/\/api\.openalex\.org\//);
+    expect(url).not.toContain("evil.example");
+  });
+
+  it("ignores a malformed URL", async () => {
+    baseUrlPref = "not a url";
+    expect(await requestedUrl()).toMatch(/^https:\/\/api\.openalex\.org\//);
+  });
+
+  it("never attaches the api_key to the override host", async () => {
+    apiKeyPref = "sk-mykey";
+    baseUrlPref = "http://localhost:8080";
+    const url = await requestedUrl();
+    expect(url).toMatch(/^http:\/\/localhost:8080\/works\/W1\?/);
+    expect(url).not.toContain("api_key");
+  });
+
+  it("keeps sending the api_key to OpenAlex when a hostile override is ignored", async () => {
+    apiKeyPref = "sk-mykey";
+    baseUrlPref = "https://evil.example";
+    const url = await requestedUrl();
+    expect(url).toMatch(/^https:\/\/api\.openalex\.org\//);
+    expect(url).toContain("api_key=sk-mykey");
+  });
+
+  it("reads the pref by its full name with `global`, so the profile's value is seen", async () => {
+    await requestedUrl();
+    expect(mockZotero.Prefs.get).toHaveBeenCalledWith(
+      "extensions.zotero.citegeist.openAlexBaseUrl",
+      true,
+    );
+  });
+});
+
+describe("resolveOpenAlexBase", () => {
+  const production = { url: "https://api.openalex.org", overridden: false };
+
+  it.each([
+    ["unset", undefined],
+    ["blank", "   "],
+    ["not a string", 8080],
+    ["malformed", "http://"],
+    ["missing a scheme", "127.0.0.1:8080"],
+    ["another host", "https://evil.example"],
+    ["a lookalike host", "http://127.0.0.1.evil.example"],
+    ["a userinfo trick", "http://127.0.0.1@evil.example"],
+    ["credentials on loopback", "http://user:pw@127.0.0.1:8080"],
+    ["a query string", "http://127.0.0.1:8080/?api_key=x"],
+    ["a fragment", "http://127.0.0.1:8080/#x"],
+    ["a non-http scheme", "file:///etc/passwd"],
+    ["localhost with a trailing dot", "http://localhost.:8080"],
+  ])("falls back to the production API for %s", (_label, raw) => {
+    expect(resolveOpenAlexBase(raw)).toEqual(production);
+  });
+
+  it.each([
+    ["http://127.0.0.1:43121", "http://127.0.0.1:43121"],
+    ["http://localhost:8080/", "http://localhost:8080"],
+    ["http://[::1]:9000", "http://[::1]:9000"],
+    ["https://127.0.0.1:8443/openalex/", "https://127.0.0.1:8443/openalex"],
+    ["  http://LOCALHOST:8080  ", "http://localhost:8080"],
+  ])("honours the loopback override %s", (raw, url) => {
+    expect(resolveOpenAlexBase(raw)).toEqual({ url, overridden: true });
   });
 });
 

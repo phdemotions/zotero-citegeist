@@ -26,6 +26,9 @@ import {
   MAX_ABSTRACT_LENGTH,
   MAX_ABSTRACT_POSITION,
   PREF_OPENALEX_API_KEY,
+  PREF_OPENALEX_BASE_URL,
+  OPENALEX_API_BASE_URL,
+  OPENALEX_BASE_URL_OVERRIDE_HOSTS,
 } from "../constants";
 import {
   OpenAlexNetworkError,
@@ -35,8 +38,6 @@ import {
   normalizeError,
   logError,
 } from "./utils";
-
-const OPENALEX_BASE = "https://api.openalex.org";
 
 export interface OpenAlexWork {
   id: string;
@@ -115,24 +116,72 @@ function getApiKey(): string {
   }
 }
 
+/** Where requests go: the production API, or a loopback stub the override pref names. */
+export interface OpenAlexBase {
+  url: string;
+  /** True only when a valid loopback override is in effect. */
+  overridden: boolean;
+}
+
+/**
+ * Resolve the OpenAlex base URL from the raw value of the override pref.
+ *
+ * The override exists so the real-Zotero suite can point Citegeist at a local
+ * stub server. It is honoured only for an http(s) URL whose host is loopback
+ * and which carries no credentials, query or fragment. Anything else resolves
+ * to the production API: unset, malformed, another host, or a userinfo trick
+ * such as `http://127.0.0.1@evil.example` (whose host is `evil.example`). Pure,
+ * so the allowlist is unit-tested without Zotero.
+ */
+export function resolveOpenAlexBase(raw: unknown): OpenAlexBase {
+  const production: OpenAlexBase = { url: OPENALEX_API_BASE_URL, overridden: false };
+  if (typeof raw !== "string" || raw.trim() === "") return production;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw.trim());
+  } catch {
+    return production;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return production;
+  if (!OPENALEX_BASE_URL_OVERRIDE_HOSTS.includes(parsed.hostname)) return production;
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) return production;
+  return { url: `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`, overridden: true };
+}
+
+/**
+ * Read the base-URL override pref. `global: true` because the constant is the
+ * full pref name; without it Zotero prepends `extensions.zotero.` a second time
+ * and the value scaffold writes into the test profile would never be seen.
+ */
+function getOpenAlexBase(): OpenAlexBase {
+  try {
+    return resolveOpenAlexBase(Zotero.Prefs.get(PREF_OPENALEX_BASE_URL, true));
+  } catch {
+    return resolveOpenAlexBase(undefined);
+  }
+}
+
 /**
  * Build an OpenAlex URL, attaching the opt-in `api_key` from prefs. Exported so
  * the sibling authors client (`openalexAuthors.ts`) shares the exact
  * key-attachment + centralized-redaction contract instead of re-implementing it.
  */
 export function buildUrl(path: string, params: Record<string, string> = {}): string {
+  const base = getOpenAlexBase();
   // The key rides the query string (OpenAlex's documented mechanism as of
   // July 2026 — a header form is an open question). It is never logged: the
   // retry/error paths log `label`, not the URL, and normalizeError() redacts
   // any URL that reaches it. Prefer a header here if OpenAlex confirms one.
-  const apiKey = getApiKey();
+  // It is only ever attached for the production host: a loopback override is a
+  // test stub, not OpenAlex, so it gets anonymous requests.
+  const apiKey = base.overridden ? "" : getApiKey();
   if (apiKey) {
     params.api_key = apiKey;
   }
   const query = Object.entries(params)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join("&");
-  return `${OPENALEX_BASE}${path}${query ? "?" + query : ""}`;
+  return `${base.url}${path}${query ? "?" + query : ""}`;
 }
 
 /**

@@ -5,6 +5,24 @@
  * reviewers can audit limits without grepping the codebase.
  */
 
+// ── OpenAlex endpoint ──
+/**
+ * Production OpenAlex API origin: the only non-loopback host Citegeist ever
+ * sends a request, or the opt-in `api_key`, to.
+ */
+export const OPENALEX_API_BASE_URL = "https://api.openalex.org";
+/**
+ * Hosts the {@link PREF_OPENALEX_BASE_URL} override may point at. Loopback only,
+ * so the real-Zotero suite can aim Citegeist at a local stub server while a
+ * user's key can never be redirected to another machine. `[::1]` is how the
+ * WHATWG URL parser spells the IPv6 loopback in `URL.hostname`.
+ */
+export const OPENALEX_BASE_URL_OVERRIDE_HOSTS: readonly string[] = [
+  "127.0.0.1",
+  "[::1]",
+  "localhost",
+];
+
 // ── OpenAlex rate limiting ──
 /** Polite pool target: 8 req/s (cap is 10 req/s). */
 export const OPENALEX_RATE_LIMIT_MS = 125;
@@ -120,6 +138,16 @@ export const PREF_AUTO_FETCH = "extensions.zotero.citegeist.autoFetch";
  * never logged (redacted via {@link redactApiKey}). Empty/unset → anonymous.
  */
 export const PREF_OPENALEX_API_KEY = "extensions.zotero.citegeist.openAlexApiKey";
+/**
+ * Hidden, test-only override of the OpenAlex base URL: no settings UI and no
+ * default in `addon/prefs.js`. Honoured only for a loopback http(s) URL (see
+ * {@link OPENALEX_BASE_URL_OVERRIDE_HOSTS} and `resolveOpenAlexBase`), so the
+ * real-Zotero suite can aim Citegeist at a local stub server; the `api_key` is
+ * never attached while it is in effect. Read with `Zotero.Prefs.get(name, true)`
+ * — this is the full pref name, and without `global` Zotero prepends
+ * `extensions.zotero.` a second time.
+ */
+export const PREF_OPENALEX_BASE_URL = "extensions.zotero.citegeist.openAlexBaseUrl";
 export const PREF_NETWORK_PAGE_SIZE = "extensions.zotero.citegeist.networkPageSize";
 
 /**
