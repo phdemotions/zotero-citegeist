@@ -19,7 +19,7 @@ tags: [citegeist, issues]
 | Priority     | Open |
 | ------------ | ---- |
 | P0 (Blocker) | 1    |
-| P1 (High)    | 2    |
+| P1 (High)    | 3    |
 | P2 (Medium)  | 2    |
 | P3 (Low)     | 7    |
 
@@ -39,6 +39,13 @@ Feature requests are not tracked here — they live in [`BACKLOG.md`](BACKLOG.md
 ---
 
 ## P1 — High Priority
+
+### BUG-PREFS: Settings-pane choices are never read (doubled pref prefix)
+
+**Impact:** Changing auto-fetch, cache lifetime, or citation-network page size in Zotero → Settings → Citegeist has no effect, and on `main` the optional OpenAlex API key is never sent. Zotero's `Zotero.Prefs.get(pref, global)` and `set(pref, value, global)` prepend `extensions.zotero.` unless `global` is `true` (Zotero `chrome/content/zotero/xpcom/prefs.js` at tag 10.0.2). Citegeist's pref constants are already full names (`extensions.zotero.citegeist.*`) and every call omits `true`, so each read looks up `extensions.zotero.extensions.zotero.citegeist.*`, which is never set. Released v2.0.5 carries the same pattern. Internal flags (migration done, relation purge done, last orphan GC, last backup path) were written and read under the same doubled name, so a naive fix would re-run the one-shot migration and purge for every user.
+**Status:** Being fixed as U18 on `fix/zotero-10-compat` (draft PR [#93](https://github.com/phdemotions/zotero-citegeist/pull/93)): one prefs module that reads and writes real names, honours legacy doubled internal flags once and copies them forward, and a static invariant test that bans direct `Zotero.Prefs` calls elsewhere. Found by the real-Zotero harness work (U4), confirmed against Zotero source.
+**Fix:** Ship in v3.0.0; not in the v2.0.6 hotfix, whose scope stays minimal.
+**Found:** 2026-09-13.
 
 ### BUG-MENU: Right-click menu stops responding after one use on Zotero 8/9 (#67, #72)
 
