@@ -12,12 +12,15 @@ resolution_type: workflow_improvement
 applies_when:
   - Installing the plugin for ad-hoc testing or first-time verification
   - Setting up an ongoing dev loop with frequent rebuilds
+  - Running or debugging the real-Zotero CI suite (npm run test:zotero)
 tags:
   - zotero
   - plugin-install
   - proxy-file
   - xpi
   - dev-workflow
+  - real-zotero-tests
+  - zotero-plugin-scaffold
 ---
 
 # Zotero plugin dev install: proxy file vs XPI
@@ -125,6 +128,33 @@ npm run build
 "Open Zotero → Tools → Add-ons → gear icon → Install Add-on From File → select `build/citegeist-1.3.0.xpi` → restart when prompted."
 
 The user sees the file. Zotero confirms the install. The restart is prompted by Zotero itself. No ambiguity.
+
+## Real-Zotero suite (CI)
+
+The XPI rule above is also how CI tests Citegeist against the host. `npm run test:zotero` runs the Mocha specs in `test/real-zotero/` inside a real Zotero, and the `real-zotero` job in `.github/workflows/ci.yml` runs them on Zotero 8.0.4, 9.0.6 and 10.0.2 on `ubuntu-24.04`. [zotero-plugin-scaffold](https://github.com/zotero-plugin-dev/zotero-plugin-scaffold), pinned at 0.9.2, supplies only the test runner; `scripts/build.mjs` and vitest are unchanged.
+
+**What gets tested is the release XPI, byte for byte.** `zotero-plugin test` always runs scaffold's own build first, and that build empties its output directory, so the XPI cannot be unzipped straight into the directory scaffold loads. CI unzips `build/citegeist-<version>.xpi` into `.scaffold/xpi`. scaffold copies that tree into `.scaffold/build/addon`, with manifest generation, Fluent prefixing and pref-key prefixing all off in `zotero-plugin.config.ts`. The config's `test:prebuild` hook then fails the run unless the two trees are identical. Zotero installs the result as a temporary add-on.
+
+**No request reaches OpenAlex.** The config's `test:init` hook starts a stub server on 127.0.0.1 and writes its URL into the hidden pref `extensions.zotero.citegeist.openAlexBaseUrl`. Citegeist honours that pref only for `127.0.0.1`, `[::1]` or `localhost`, and never attaches the `api_key` while it is in effect; any other value falls back to `https://api.openalex.org`.
+
+**Running it yourself** needs Linux with Xvfb (scaffold's only headless platform) and a Zotero *release* build:
+
+```bash
+npm run build
+rm -rf .scaffold/xpi && mkdir -p .scaffold/xpi && unzip -q build/citegeist-*.xpi -d .scaffold/xpi
+export ZOTERO_PLUGIN_ZOTERO_BIN_PATH=/path/to/Zotero_linux-x86_64/zotero   # unset → scaffold downloads the beta channel
+export ZOTERO_SETUP_COMPLETE=1 CITEGEIST_REAL_ZOTERO_LOG_DIR="$PWD/.scaffold/logs"
+xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" npm run test:zotero
+```
+
+Things that behave differently from a manual install:
+
+- An XPI whose `strict_max_version` is below the running Zotero is refused at install ("is not compatible with application version") before any spec runs. The Zotero 10 cell proves this with a negative control that lowers the staged cap to `9.*`.
+- Beta and dev builds ignore `strict_max_version`, so the matrix pins release builds and the activation spec fails on any other.
+- scaffold discards Zotero's stdout during tests. Debug Output and Zotero's error list come from the suite's root after-hook, written to `.scaffold/logs/` and uploaded when a cell fails.
+- scaffold pastes `waitForPlugin` into a double-quoted string, so that condition must contain no double quote.
+
+**Dev loop.** `npm start` was removed: it called a `scripts/start.mjs` that never existed. scaffold's `serve` would rebuild through scaffold's pipeline rather than `scripts/build.mjs`, so it is not a faithful dev loop for this repo. Use Approach 2 above (`npm run build:dev` plus the proxy file).
 
 ## Related
 
