@@ -466,19 +466,11 @@ export async function preciseGarbageCollection(): Promise<void> {
   }
 }
 
-/**
- * Set an OpenAlex API key under both pref spellings: the full name the settings
- * pane writes, and the doubly-prefixed name `Zotero.Prefs.get(PREF_OPENALEX_API_KEY)`
- * resolves to (Zotero prepends `extensions.zotero.` unless `global` is passed).
- * Whichever one Citegeist reads, it sees the key, so an assertion about where
- * the key goes cannot pass just because no key was read.
- */
-export function setApiKeyPrefs(value: string): void {
+/** Set an OpenAlex API key under the name the settings pane writes, the one Citegeist reads. */
+export function setApiKeyPref(value: string): void {
   Zotero.Prefs.set(PREF_OPENALEX_API_KEY, value, true);
-  Zotero.Prefs.set(PREF_OPENALEX_API_KEY, value);
 }
 
-export function clearApiKeyPrefs(): void {
+export function clearApiKeyPref(): void {
   Services.prefs.clearUserPref(PREF_OPENALEX_API_KEY);
-  Services.prefs.clearUserPref(`extensions.zotero.${PREF_OPENALEX_API_KEY}`);
 }

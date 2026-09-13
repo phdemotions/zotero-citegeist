@@ -14,9 +14,15 @@
  * - arXiv from Extra field, archiveID field, and URL field
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { PREF_MIGRATION_COMPLETE } from "../src/constants";
 import { makeFakeDb } from "./_helpers/fakeDb";
+import { makeFakePrefs } from "./_helpers/fakePrefs";
 
 let fakeDb = makeFakeDb();
+
+/** A profile that already migrated, with every other pref at its shipped default. */
+const migratedPrefs = () =>
+  makeFakePrefs({ addonDefaults: true, user: { [PREF_MIGRATION_COMPLETE]: true } });
 
 vi.stubGlobal("PathUtils", { join: (...parts: string[]) => parts.join("/") });
 vi.stubGlobal("IOUtils", {
@@ -27,15 +33,7 @@ vi.stubGlobal("IOUtils", {
 
 // Mock Zotero global
 const mockZotero = {
-  Prefs: {
-    get: vi.fn().mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      return 7;
-    }),
-    set: vi.fn(),
-    clearUserPref: vi.fn(),
-  },
+  Prefs: migratedPrefs(),
   HTTP: {
     request: vi.fn(),
   },
@@ -310,11 +308,7 @@ describe("extractIdentifier", () => {
 describe("fetchAndCacheItem", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      return 7;
-    });
+    mockZotero.Prefs = migratedPrefs();
     fakeDb = makeFakeDb();
     _resetForTesting();
     await initCache();
@@ -699,11 +693,7 @@ describe("resolveWorkForItem", () => {
 describe("resolveAuthorsForItems (U4)", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      return 7;
-    });
+    mockZotero.Prefs = migratedPrefs();
     fakeDb = makeFakeDb();
     _resetForTesting();
     await initCache();

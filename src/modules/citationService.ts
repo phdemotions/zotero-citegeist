@@ -229,22 +229,39 @@ export async function resolveWorkForItem(item: _ZoteroTypes.Item): Promise<OpenA
  * Fetch citation data for a single Zotero item and cache it.
  * Returns the work data on success so callers can use it without a second API call.
  */
+/** How far one fetch may go to find an item's work. */
+export interface FetchOptions {
+  /**
+   * Whether an item with no identifier, or one OpenAlex does not know, may fall
+   * back to the metered title search. Defaults to true, for fetches the user
+   * starts. The columns' automatic fetch passes false, so it spends only free
+   * identifier lookups and records no no-match that would suppress a later search.
+   */
+  allowMetadataSearch?: boolean;
+}
+
 /**
  * Fetch + cache one item's metrics. NEVER throws: every failure resolves to a
  * `{ status: "error" }` result. The pane's `onAsyncRender` awaits this with no
  * error boundary of its own, so a throw here leaves the loading spinner up
  * permanently — the user sees an app that hung, with nothing to report.
  */
-export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchResult> {
+export async function fetchAndCacheItem(
+  item: _ZoteroTypes.Item,
+  options: FetchOptions = {},
+): Promise<FetchResult> {
   try {
-    return await fetchAndCacheItemInner(item);
+    return await fetchAndCacheItemInner(item, options);
   } catch (e) {
     logError(`fetchAndCacheItem(${item.id})`, e);
     return { status: "error", error: "unexpected", code: codeForError(e) };
   }
 }
 
-async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchResult> {
+async function fetchAndCacheItemInner(
+  item: _ZoteroTypes.Item,
+  options: FetchOptions,
+): Promise<FetchResult> {
   if (!item.isRegularItem() || item.deleted) {
     return { status: "error", error: "invalid-item" };
   }
@@ -285,7 +302,8 @@ async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchRes
   const identifier = extractIdentifier(item);
 
   if (!identifier) {
-    // No identifier — try title search (unless suppressed)
+    // No identifier — try title search (unless suppressed or not allowed)
+    if (options.allowMetadataSearch === false) return { status: "error", error: "no-identifier" };
     return attemptTitleSearch(item);
   }
 
@@ -305,6 +323,7 @@ async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchRes
 
   if (!work) {
     // Identifier found but not in OpenAlex — try title search as fallback
+    if (options.allowMetadataSearch === false) return { status: "error", error: "not-found" };
     return attemptTitleSearch(item);
   }
 

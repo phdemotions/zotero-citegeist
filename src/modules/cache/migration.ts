@@ -25,6 +25,14 @@ import {
   PREF_MIGRATION_COMPLETE,
   SHOW_PROGRESS_UI_THRESHOLD,
 } from "../../constants";
+import {
+  getPref,
+  getTimestampPref,
+  setPref,
+  timestampPrefValue,
+  type CitegeistPref,
+  type PrefValue,
+} from "../prefs";
 import { logError, normalizeError, safeParseFloat, safeParseIntOrNull } from "../utils";
 import { cacheWriteRefused, deleteMirrorEntries, mirrorSnapshot, requireDb, upsertRow } from "./db";
 import { setExtraConfirmedMatch } from "./write";
@@ -445,7 +453,7 @@ export async function migrateFromExtraV1(): Promise<boolean> {
   // in Extra, something went wrong (manual SQLite deletion, antivirus
   // quarantine, partial profile restore). Clear the pref and re-run rather
   // than silently leaving the user with stripped Extra and no cache.
-  if (Zotero.Prefs.get(PREF_MIGRATION_COMPLETE)) {
+  if (getPref(PREF_MIGRATION_COMPLETE)) {
     if (await shouldForceRerun()) {
       Zotero.debug(
         "[Citegeist] migration pref says complete but state mismatch detected — re-running",
@@ -876,10 +884,10 @@ async function pruneOldBackups(): Promise<void> {
   }
 }
 
-/** `Zotero.Prefs.set` writes to `prefs.js` and can throw on a locked profile. */
-function trySetPref(name: string, value: unknown): void {
+/** A pref write lands in `prefs.js` and can throw on a locked profile. */
+function trySetPref(name: CitegeistPref, value: PrefValue): void {
   try {
-    Zotero.Prefs.set(name, value);
+    setPref(name, value);
   } catch (e) {
     logError(`Prefs.set('${name}') (non-fatal)`, e);
   }
@@ -908,8 +916,7 @@ async function checkpointItem(
  */
 export async function garbageCollectOrphans(options: { force?: boolean } = {}): Promise<void> {
   if (cacheWriteRefused("garbageCollectOrphans")) return;
-  const lastRunRaw = Zotero.Prefs.get(PREF_LAST_ORPHAN_GC_AT);
-  const lastRun = typeof lastRunRaw === "number" ? lastRunRaw : 0;
+  const lastRun = getTimestampPref(PREF_LAST_ORPHAN_GC_AT);
   if (!options.force && Date.now() - lastRun < ORPHAN_GC_MIN_INTERVAL_MS) return;
 
   const conn = requireDb();
@@ -941,7 +948,7 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
   }
 
   if (orphans.length === 0) {
-    trySetPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
+    trySetPref(PREF_LAST_ORPHAN_GC_AT, timestampPrefValue(Date.now()));
     return;
   }
 
@@ -967,6 +974,6 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
   // Two-level author sweep on the same orphan set: drop their item_authors
   // rows, then any authors left unreferenced.
   await garbageCollectOrphanAuthors(conn, orphans);
-  trySetPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
+  trySetPref(PREF_LAST_ORPHAN_GC_AT, timestampPrefValue(Date.now()));
   Zotero.debug(`[Citegeist] orphan GC removed ${orphans.length} rows`);
 }

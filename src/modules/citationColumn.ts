@@ -25,8 +25,8 @@ import {
   FETCH_QUEUE_DEBOUNCE_MS,
   MAX_ATTEMPTED_FETCH_CACHE,
   NO_MATCH_RETRY_DAYS,
-  PREF_AUTO_FETCH,
 } from "../constants";
+import { isAutoFetchEnabled } from "./prefs";
 
 // Column data keys
 const COL_CITATIONS = "citegeist-citation-count";
@@ -124,10 +124,19 @@ let autoFetchCacheTime = 0;
 function getAutoFetch(): boolean {
   const now = Date.now();
   if (autoFetchCached === null || now - autoFetchCacheTime > AUTO_FETCH_PREF_TTL_MS) {
-    autoFetchCached = Zotero.Prefs.get(PREF_AUTO_FETCH) as boolean;
+    autoFetchCached = isAutoFetchEnabled();
     autoFetchCacheTime = now;
   }
   return autoFetchCached;
+}
+
+/**
+ * Whether a background lookup is still coming for this item, which is what a
+ * "…" cell promises. Only an item with an identifier qualifies: the background
+ * fetch never searches by title, so any other item's cell would wait forever.
+ */
+function autoFetchPending(item: _ZoteroTypes.Item): boolean {
+  return getAutoFetch() && !fetchAttempted.has(item.id) && extractIdentifier(item) !== null;
 }
 
 /**
@@ -309,7 +318,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
         if (metrics.suggestion.count === 0 && isBookType(item)) return "";
         return metrics.suggestion.tier === "high" ? `~${metrics.suggestion.count}` : "?";
       }
-      return getAutoFetch() ? "…" : "";
+      return autoFetchPending(item) ? "…" : "";
     },
   });
 
@@ -332,7 +341,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
       if (metrics.suggestion?.tier === "high" && metrics.suggestion.fwci !== null) {
         return `~${metrics.suggestion.fwci.toFixed(2)}`;
       }
-      return getAutoFetch() ? "…" : "";
+      return autoFetchPending(item) ? "…" : "";
     },
   });
 
@@ -350,7 +359,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
         if (metrics.count === 0 && isBookType(item)) return "";
         return "—";
       }
-      return getAutoFetch() ? "…" : "";
+      return autoFetchPending(item) ? "…" : "";
     },
   });
 
@@ -367,7 +376,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
       if (!metrics) return "";
       if (metrics.citedness2yr !== null) return metrics.citedness2yr.toFixed(2);
       if (metrics.count !== null) return "—";
-      return getAutoFetch() ? "…" : "";
+      return autoFetchPending(item) ? "…" : "";
     },
   });
 
@@ -382,7 +391,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
       if (!metrics) return "";
       if (metrics.journalHIndex !== null) return String(metrics.journalHIndex);
       if (metrics.count !== null) return "—";
-      return getAutoFetch() ? "…" : "";
+      return autoFetchPending(item) ? "…" : "";
     },
   });
 
@@ -560,7 +569,11 @@ async function processFetchQueue(): Promise<void> {
         try {
           const item = Zotero.Items.get(id);
           if (item) {
-            const result = await fetchAndCacheItem(item as _ZoteroTypes.Item);
+            // Automatic, so identifier lookups only: the metered title search
+            // runs when the user opens the item or fetches from the menu.
+            const result = await fetchAndCacheItem(item as _ZoteroTypes.Item, {
+              allowMetadataSearch: false,
+            });
             // Invalidate per-id for both "ok" (real metrics) and "suggestion"
             // (pending preview) so individual rows refresh as soon as their
             // data lands, instead of waiting for the bulk metricsCache.clear()

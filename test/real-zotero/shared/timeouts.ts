@@ -67,4 +67,21 @@ export const BUDGETS = {
   lifecycleEnsureReady: sized(STARTUP_WAIT_TIMEOUT_MS),
   /** 90: the old copy's shutdown, the new copy's startup, then exactly one section. */
   lifecycleUpgrade: sized(SHUTDOWN_WAIT_TIMEOUT_MS, STARTUP_WAIT_TIMEOUT_MS, WAIT_TIMEOUT_MS),
+  /** 92: row, item pane, section, Citing works button, then the citing-works request. */
+  preferencePageSize: sized(
+    WAIT_TIMEOUT_MS,
+    WAIT_TIMEOUT_MS,
+    WAIT_TIMEOUT_MS,
+    WAIT_TIMEOUT_MS,
+    WAIT_TIMEOUT_MS,
+  ),
+  /** 92 before hook: startup, when an earlier spec left Citegeist disabled. */
+  preferenceEnsureReady: sized(STARTUP_WAIT_TIMEOUT_MS),
+  /** 92: two restarts, each the old copy's shutdown then the new copy's startup. */
+  preferenceLegacyFlag: sized(
+    SHUTDOWN_WAIT_TIMEOUT_MS,
+    STARTUP_WAIT_TIMEOUT_MS,
+    SHUTDOWN_WAIT_TIMEOUT_MS,
+    STARTUP_WAIT_TIMEOUT_MS,
+  ),
 } as const satisfies Record<string, WaitBudget>;

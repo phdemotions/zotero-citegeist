@@ -32,6 +32,7 @@ import {
   garbageCollectOrphans,
   purgeAllAuthorRelations,
 } from "./modules/cache";
+import { getPref, setPref } from "./modules/prefs";
 import { logError } from "./modules/utils";
 import {
   buildDiagnosticReport,
@@ -192,7 +193,7 @@ export async function onStartup(data: PluginData): Promise<void> {
     // alert pointing to the safety-net backup file so users know exactly
     // where to find a verbatim copy of every pre-migration Extra field
     // if they want to audit or restore anything.
-    const backupPathRaw = Zotero.Prefs.get(PREF_LAST_BACKUP_PATH);
+    const backupPathRaw = getPref(PREF_LAST_BACKUP_PATH);
     const backupPath = typeof backupPathRaw === "string" ? backupPathRaw : undefined;
     const backupLine = backupPath
       ? `A snapshot of every Extra field Citegeist touched was saved to:\n\n${backupPath}\n\n` +
@@ -295,7 +296,7 @@ export async function onStartup(data: PluginData): Promise<void> {
  */
 async function purgeAuthorRelationsOnce(): Promise<void> {
   try {
-    if (Zotero.Prefs.get(PREF_AUTHOR_RELATIONS_PURGED)) return;
+    if (getPref(PREF_AUTHOR_RELATIONS_PURGED)) return;
     const { cleaned, failures } = await purgeAllAuthorRelations();
     if (cleaned > 0) {
       Zotero.debug(`[Citegeist] Purged openalex:author relations from ${cleaned} item(s)`);
@@ -304,7 +305,7 @@ async function purgeAuthorRelationsOnce(): Promise<void> {
     // relation keeps the whole library's sync stuck, so a partial pass (a locked
     // item, a library that wouldn't enumerate) must retry on the next launch.
     if (failures === 0) {
-      Zotero.Prefs.set(PREF_AUTHOR_RELATIONS_PURGED, true);
+      setPref(PREF_AUTHOR_RELATIONS_PURGED, true);
     } else {
       Zotero.debug(`[Citegeist] Author-relation purge incomplete (${failures} left); will retry`);
     }

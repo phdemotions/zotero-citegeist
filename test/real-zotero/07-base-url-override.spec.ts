@@ -12,9 +12,9 @@ import { OPENALEX_API_BASE_URL, PREF_OPENALEX_BASE_URL } from "../../src/constan
 import { routeOpenAlexRequest } from "./shared/fixture";
 import {
   API_KEY_SENTINEL,
-  clearApiKeyPrefs,
+  clearApiKeyPref,
   patchMethod,
-  setApiKeyPrefs,
+  setApiKeyPref,
   stubBaseUrl,
   stubRequestLog,
   stubRequestsSince,
@@ -57,7 +57,7 @@ describe("OpenAlex base-URL override", function () {
           },
       );
       Zotero.Prefs.set(PREF_OPENALEX_BASE_URL, HOSTILE_BASE_URL, true);
-      setApiKeyPrefs(API_KEY_SENTINEL);
+      setApiKeyPref(API_KEY_SENTINEL);
       try {
         const result = await Zotero.Citegeist.fetchItems([item.id]);
         expect(result, "bridge fetch resolved undefined (see Debug Output)").to.exist;
@@ -72,7 +72,7 @@ describe("OpenAlex base-URL override", function () {
         expect(keyless, "OpenAlex requests without the configured api_key").to.be.empty;
       } finally {
         Zotero.Prefs.set(PREF_OPENALEX_BASE_URL, stub, true);
-        clearApiKeyPrefs();
+        clearApiKeyPref();
         restoreRequest();
       }
 

@@ -700,7 +700,7 @@ describe("garbageCollectOrphans rate limit", () => {
 
     // Last GC was 1 minute ago — far less than the 7-day interval.
     mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.lastOrphanGcAt") return Date.now() - 60_000;
+      if (pref === "extensions.zotero.citegeist.lastOrphanGcAt") return String(Date.now() - 60_000);
       if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
       if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
       return null;
@@ -721,7 +721,7 @@ describe("garbageCollectOrphans rate limit", () => {
     } as never);
 
     mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.lastOrphanGcAt") return Date.now();
+      if (pref === "extensions.zotero.citegeist.lastOrphanGcAt") return String(Date.now());
       if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
       if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
       return null;
@@ -929,6 +929,7 @@ describe("migration Extra backup", () => {
     expect(mockZotero.Prefs.set).toHaveBeenCalledWith(
       "extensions.zotero.citegeist.lastBackupPath",
       expect.stringMatching(/citegeist-migration-backup-.*\.json$/),
+      true,
     );
   });
 

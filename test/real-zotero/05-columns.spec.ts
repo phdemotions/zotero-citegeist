@@ -19,11 +19,11 @@ import { BUDGETS } from "./shared/timeouts";
 import { CITATIONS_COLUMN_DATA_KEY, COLUMN_DATA_KEYS } from "./support/citegeist";
 import {
   API_KEY_SENTINEL,
-  clearApiKeyPrefs,
+  clearApiKeyPref,
   mainWindow,
   namespacedKey,
   renderedCellText,
-  setApiKeyPrefs,
+  setApiKeyPref,
   showItemTreeColumn,
   showLibrary,
   stubRequestLog,
@@ -50,7 +50,7 @@ describe("item tree columns", function () {
       const key = namespacedKey(CITATIONS_COLUMN_DATA_KEY);
       const expected = String(STUB_CITED_BY_COUNT);
       const restoreColumn = showItemTreeColumn(view, key);
-      setApiKeyPrefs(API_KEY_SENTINEL);
+      setApiKeyPref(API_KEY_SENTINEL);
       try {
         const before = await waitFor("the spec item's row to paint its Citations cell", () => {
           const text = renderedCellText(view, item.id, key);
@@ -82,7 +82,7 @@ describe("item tree columns", function () {
         const leaked = requests.filter((r) => r.includes("api_key"));
         expect(leaked, "api_key sent to the loopback override host").to.be.empty;
       } finally {
-        clearApiKeyPrefs();
+        clearApiKeyPref();
         restoreColumn();
       }
     });

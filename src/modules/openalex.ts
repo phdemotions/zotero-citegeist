@@ -25,7 +25,6 @@ import {
   OPENALEX_RATE_REMAINING_HEADER,
   MAX_ABSTRACT_LENGTH,
   MAX_ABSTRACT_POSITION,
-  PREF_OPENALEX_API_KEY,
   PREF_OPENALEX_BASE_URL,
   OPENALEX_API_BASE_URL,
   OPENALEX_BASE_URL_OVERRIDE_HOSTS,
@@ -38,6 +37,7 @@ import {
   normalizeError,
   logError,
 } from "./utils";
+import { getOpenAlexApiKey, getPref } from "./prefs";
 
 export interface OpenAlexWork {
   id: string;
@@ -109,8 +109,7 @@ export interface OpenAlexListResponse {
  */
 function getApiKey(): string {
   try {
-    const key = Zotero.Prefs.get(PREF_OPENALEX_API_KEY) as string;
-    return (key || "").trim();
+    return getOpenAlexApiKey();
   } catch {
     return "";
   }
@@ -148,14 +147,10 @@ export function resolveOpenAlexBase(raw: unknown): OpenAlexBase {
   return { url: `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`, overridden: true };
 }
 
-/**
- * Read the base-URL override pref. `global: true` because the constant is the
- * full pref name; without it Zotero prepends `extensions.zotero.` a second time
- * and the value scaffold writes into the test profile would never be seen.
- */
+/** Read the base-URL override pref; a pref Zotero cannot read resolves to production. */
 function getOpenAlexBase(): OpenAlexBase {
   try {
-    return resolveOpenAlexBase(Zotero.Prefs.get(PREF_OPENALEX_BASE_URL, true));
+    return resolveOpenAlexBase(getPref(PREF_OPENALEX_BASE_URL));
   } catch {
     return resolveOpenAlexBase(undefined);
   }

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeFakePrefs } from "./_helpers/fakePrefs";
 
 vi.mock("../src/modules/cache", () => ({
   getCachedMetrics: vi.fn(),
@@ -42,7 +43,7 @@ describe("citation columns", () => {
     vi.stubGlobal("CSS", { escape: (s: string) => s });
     vi.stubGlobal("Zotero", {
       debug: vi.fn(),
-      Prefs: { get: vi.fn(() => false) },
+      Prefs: makeFakePrefs(),
       ItemTreeManager: {
         registerColumn: vi.fn(async (options: { dataKey: string }) => {
           registeredKeys.push(options.dataKey);

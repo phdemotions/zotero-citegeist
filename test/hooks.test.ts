@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PREF_AUTHOR_RELATIONS_PURGED, PREF_LAST_BACKUP_PATH } from "../src/constants";
+import { ZOTERO_PREF_BRANCH, makeFakePrefs, type FakePrefs } from "./_helpers/fakePrefs";
 
 const cacheMocks = vi.hoisted(() => ({
   initCache: vi.fn(async () => {}),
   migrateFromExtraV1: vi.fn(async () => false),
   garbageCollectOrphans: vi.fn(async () => {}),
+  purgeAllAuthorRelations: vi.fn(async () => ({ cleaned: 0, failures: 0 })),
   closeCache: vi.fn(async () => {}),
 }));
 
@@ -78,9 +81,7 @@ describe("hooks", () => {
     });
     vi.stubGlobal("Zotero", {
       debug: vi.fn(),
-      Prefs: {
-        get: vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true),
-      },
+      Prefs: makeFakePrefs(),
       PreferencePanes: { register: vi.fn() },
       getMainWindow: vi.fn(() => ({
         setTimeout: (fn: () => void) => fn(),
@@ -179,7 +180,7 @@ describe("Zotero.Citegeist bridge", () => {
     vi.stubGlobal("Services", { prompt: { alert: vi.fn() } });
     vi.stubGlobal("Zotero", {
       debug: vi.fn(),
-      Prefs: { get: vi.fn(() => true), set: vi.fn() },
+      Prefs: makeFakePrefs({ user: { [PREF_AUTHOR_RELATIONS_PURGED]: true } }),
       PreferencePanes: { register: vi.fn() },
       Items: { getAsync: vi.fn(async (ids: number[]) => ids.map(fakeItem)) },
       getMainWindow: vi.fn(() => null),
@@ -322,5 +323,122 @@ describe("Zotero.Citegeist bridge", () => {
     expect(Zotero.debug).toHaveBeenCalledWith(
       expect.stringContaining("[Citegeist] ERROR bridge fetchItems"),
     );
+  });
+});
+
+/**
+ * U18: earlier builds stored Citegeist's one-shot flags under a doubled pref
+ * name (`extensions.zotero.extensions.zotero.citegeist.*`). Startup must still
+ * see them, or every existing profile repeats work that was meant to happen once.
+ */
+describe("startup with flags under the doubled pref name (U18)", () => {
+  let prefs: FakePrefs;
+  const doubled = (name: string) => ZOTERO_PREF_BRANCH + name;
+  const ready = () => (Zotero as unknown as { Citegeist?: { ready: boolean } }).Citegeist?.ready;
+
+  function stubZotero(fake: FakePrefs): void {
+    prefs = fake;
+    vi.stubGlobal("Zotero", {
+      debug: vi.fn(),
+      Prefs: fake,
+      PreferencePanes: { register: vi.fn() },
+      getMainWindow: vi.fn(() => ({ setTimeout: (fn: () => void) => fn() })),
+    });
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.stubGlobal("Services", { prompt: { alert: vi.fn() } });
+  });
+
+  it("skips the relation purge when its flag exists only under the doubled name", async () => {
+    stubZotero(makeFakePrefs({ user: { [doubled(PREF_AUTHOR_RELATIONS_PURGED)]: true } }));
+    const { onStartup } = await import("../src/hooks");
+
+    await onStartup(STARTUP);
+
+    expect(cacheMocks.purgeAllAuthorRelations).not.toHaveBeenCalled();
+    expect(prefs.user.get(PREF_AUTHOR_RELATIONS_PURGED), "copied to the real name").toBe(true);
+  });
+
+  it("runs the purge when the real name says it has not completed, whatever the doubled name says", async () => {
+    stubZotero(
+      makeFakePrefs({
+        user: {
+          [PREF_AUTHOR_RELATIONS_PURGED]: false,
+          [doubled(PREF_AUTHOR_RELATIONS_PURGED)]: true,
+        },
+      }),
+    );
+    const { onStartup } = await import("../src/hooks");
+
+    await onStartup(STARTUP);
+
+    expect(cacheMocks.purgeAllAuthorRelations).toHaveBeenCalledTimes(1);
+    expect(prefs.user.get(PREF_AUTHOR_RELATIONS_PURGED)).toBe(true);
+  });
+
+  it("finishes startup when the flag cannot be copied to its real name", async () => {
+    stubZotero(makeFakePrefs({ user: { [doubled(PREF_AUTHOR_RELATIONS_PURGED)]: true } }));
+    prefs.set.mockImplementation(() => {
+      throw new Error("prefs.js is locked");
+    });
+    const { onStartup } = await import("../src/hooks");
+
+    await expect(onStartup(STARTUP)).resolves.toBeUndefined();
+
+    expect(
+      cacheMocks.purgeAllAuthorRelations,
+      "the doubled flag still answered",
+    ).not.toHaveBeenCalled();
+    expect(ready()).toBe(true);
+    expect(Zotero.debug).toHaveBeenCalledWith(
+      expect.stringContaining("[Citegeist] ERROR copy legacy pref forward"),
+    );
+  });
+
+  it("names the backup a migration recorded under the doubled name", async () => {
+    const legacyPath = "/tmp/zotero-test-data/citegeist-migration-backup-legacy.json";
+    stubZotero(
+      makeFakePrefs({
+        user: {
+          [PREF_AUTHOR_RELATIONS_PURGED]: true,
+          [doubled(PREF_LAST_BACKUP_PATH)]: legacyPath,
+        },
+      }),
+    );
+    cacheMocks.migrateFromExtraV1.mockResolvedValueOnce(true);
+    const { onStartup } = await import("../src/hooks");
+
+    await onStartup(STARTUP);
+
+    expect(Services.prompt.alert).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining("one-time migration complete"),
+      expect.stringContaining(legacyPath),
+    );
+  });
+
+  it("names the backup recorded under the real name over an older doubled-name one", async () => {
+    const legacyPath = "/tmp/zotero-test-data/citegeist-migration-backup-legacy.json";
+    const currentPath = "/tmp/zotero-test-data/citegeist-migration-backup-current.json";
+    stubZotero(
+      makeFakePrefs({
+        user: {
+          [PREF_AUTHOR_RELATIONS_PURGED]: true,
+          [PREF_LAST_BACKUP_PATH]: currentPath,
+          [doubled(PREF_LAST_BACKUP_PATH)]: legacyPath,
+        },
+      }),
+    );
+    cacheMocks.migrateFromExtraV1.mockResolvedValueOnce(true);
+    const { onStartup } = await import("../src/hooks");
+
+    await onStartup(STARTUP);
+
+    const body = vi.mocked(Services.prompt.alert).mock.calls[0]?.[2];
+    expect(body).toContain(currentPath);
+    expect(body).not.toContain(legacyPath);
   });
 });

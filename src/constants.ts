@@ -88,6 +88,11 @@ export const MAX_RENDERED_RESULTS = 200;
 export const UNDO_TIMEOUT_MS = 3000;
 /** Default per-page size for citation network queries. */
 export const DEFAULT_NETWORK_PAGE_SIZE = 25;
+/**
+ * Largest page the citation browser requests. OpenAlex rejects a `per_page`
+ * above 200, and the settings field stops there too (`max="200"`).
+ */
+export const NETWORK_PAGE_SIZE_MAX = 200;
 /** Debounce for the dialog search input. */
 export const SEARCH_DEBOUNCE_MS = 200;
 /** Infinite-scroll threshold in px from bottom. */
@@ -164,9 +169,8 @@ export const PREF_OPENALEX_API_KEY = "extensions.zotero.citegeist.openAlexApiKey
  * default in `addon/prefs.js`. Honoured only for a loopback http(s) URL (see
  * {@link OPENALEX_BASE_URL_OVERRIDE_HOSTS} and `resolveOpenAlexBase`), so the
  * real-Zotero suite can aim Citegeist at a local stub server; the `api_key` is
- * never attached while it is in effect. Read with `Zotero.Prefs.get(name, true)`
- * — this is the full pref name, and without `global` Zotero prepends
- * `extensions.zotero.` a second time.
+ * never attached while it is in effect. Read it through `getPref` in
+ * `src/modules/prefs.ts`, like every Citegeist pref.
  */
 export const PREF_OPENALEX_BASE_URL = "extensions.zotero.citegeist.openAlexBaseUrl";
 export const PREF_NETWORK_PAGE_SIZE = "extensions.zotero.citegeist.networkPageSize";
