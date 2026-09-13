@@ -63,3 +63,76 @@ export function updateManifestFor(meta, xpiName, hash) {
     },
   };
 }
+
+// A placeholder is lowerCamelCase between double underscores, like every key in
+// `placeholdersFor` (a test holds each key to this shape). Matching the shape
+// rather than the known names means a misspelt placeholder still fails, while
+// esbuild's `/* @__PURE__ */` annotations and the `__BUILD_ID__` define do not.
+const PLACEHOLDER_TOKEN = /__[a-z][A-Za-z0-9]*__/g;
+
+// Legacy ECMAScript accessors share that shape but are real JavaScript.
+const JS_DUNDER_NAMES = new Set([
+  "__proto__",
+  "__defineGetter__",
+  "__defineSetter__",
+  "__lookupGetter__",
+  "__lookupSetter__",
+]);
+
+/**
+ * Throws if any shipped text file still holds a `__name__` placeholder, naming
+ * each file and token.
+ *
+ * @param {Array<{ path: string, content: string }>} files
+ */
+export function assertNoUnreplacedPlaceholders(files) {
+  const leftovers = [];
+  for (const { path, content } of files) {
+    const tokens = new Set(
+      (content.match(PLACEHOLDER_TOKEN) ?? []).filter((token) => !JS_DUNDER_NAMES.has(token)),
+    );
+    if (tokens.size > 0) {
+      leftovers.push(`  ${path}: ${[...tokens].join(", ")}`);
+    }
+  }
+  if (leftovers.length > 0) {
+    throw new Error(`Unreplaced build placeholders in shipped files:\n${leftovers.join("\n")}`);
+  }
+}
+
+/**
+ * Throws unless an `applications.zotero` block declares exactly the range in
+ * package.json. `label` names where the block came from.
+ */
+export function assertZoteroRange(label, zotero, meta) {
+  const min = zotero?.strict_min_version;
+  const max = zotero?.strict_max_version;
+  if (min !== meta.zoteroMinVersion || max !== meta.zoteroMaxVersion) {
+    throw new Error(
+      `${label} has strict_min_version ${JSON.stringify(min)} and strict_max_version ` +
+        `${JSON.stringify(max)}, but package.json config has zoteroMinVersion ` +
+        `${JSON.stringify(meta.zoteroMinVersion)} and zoteroMaxVersion ` +
+        `${JSON.stringify(meta.zoteroMaxVersion)}`,
+    );
+  }
+}
+
+/**
+ * Finds update.json's entry for the version being built and throws unless it
+ * declares package.json's range. Returns the verified `applications.zotero` block.
+ */
+export function assertUpdateManifestRange(updateManifest, meta) {
+  const updates = updateManifest?.addons?.[meta.addonID]?.updates;
+  const entries = Array.isArray(updates)
+    ? updates.filter((entry) => entry?.version === meta.version)
+    : [];
+  if (entries.length !== 1) {
+    throw new Error(
+      `update.json must have exactly one entry for ${meta.addonID} ${meta.version}, ` +
+        `found ${entries.length}`,
+    );
+  }
+  const zotero = entries[0].applications?.zotero;
+  assertZoteroRange(`update.json entry for ${meta.version}`, zotero, meta);
+  return zotero;
+}

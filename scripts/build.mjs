@@ -4,7 +4,10 @@
  * 1. Copies addon/ to build/addon/
  * 2. Replaces __placeholders__ with values from package.json
  * 3. Compiles TypeScript via esbuild JS API
- * 4. In production mode: creates .xpi and update.json
+ * 4. Fails if a placeholder survives in a shipped file, or if the built
+ *    manifest's Zotero range differs from package.json
+ * 5. In production mode: creates .xpi and update.json, and fails if update.json's
+ *    entry for this version declares a different Zotero range
  */
 
 import { build } from "esbuild";
@@ -18,11 +21,18 @@ import {
   readdirSync,
   statSync,
 } from "fs";
-import { join, resolve, dirname } from "path";
+import { join, resolve, dirname, relative } from "path";
 import { fileURLToPath } from "url";
 import { createHash } from "crypto";
 import { execSync } from "child_process";
-import { readBuildMetadata, placeholdersFor, updateManifestFor } from "./build-metadata.mjs";
+import {
+  readBuildMetadata,
+  placeholdersFor,
+  updateManifestFor,
+  assertNoUnreplacedPlaceholders,
+  assertZoteroRange,
+  assertUpdateManifestRange,
+} from "./build-metadata.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -61,24 +71,22 @@ cpSync(join(ROOT, "addon"), ADDON_DIR, { recursive: true });
 // Step 2: Replace placeholders
 const placeholders = placeholdersFor(meta);
 
-function replacePlaceholders(dir) {
-  for (const entry of readdirSync(dir)) {
+function listFiles(dir) {
+  return readdirSync(dir).flatMap((entry) => {
     const fullPath = join(dir, entry);
-    const stat = statSync(fullPath);
-    if (stat.isDirectory()) {
-      replacePlaceholders(fullPath);
-    } else if (/\.(json|js|xhtml|ftl|html|css|svg)$/.test(entry)) {
-      let content = readFileSync(fullPath, "utf-8");
-      for (const [key, value] of Object.entries(placeholders)) {
-        content = content.replaceAll(key, value);
-      }
-      writeFileSync(fullPath, content);
-    }
-  }
+    return statSync(fullPath).isDirectory() ? listFiles(fullPath) : [fullPath];
+  });
 }
 
-replacePlaceholders(ADDON_DIR);
-console.log("  [1/3] Placeholders replaced");
+for (const file of listFiles(ADDON_DIR)) {
+  if (!/\.(json|js|xhtml|ftl|html|css|svg)$/.test(file)) continue;
+  let content = readFileSync(file, "utf-8");
+  for (const [key, value] of Object.entries(placeholders)) {
+    content = content.replaceAll(key, value);
+  }
+  writeFileSync(file, content);
+}
+console.log("  [1/4] Placeholders replaced");
 
 // Step 3: Compile TypeScript via esbuild JS API
 const scriptsDir = join(ADDON_DIR, "content", "scripts");
@@ -104,9 +112,28 @@ await build({
   },
   logLevel: "info",
 });
-console.log("  [2/3] TypeScript compiled");
+console.log("  [2/4] TypeScript compiled");
 
-// Step 4: Package XPI (production only)
+// Step 4: Verify what ships. Everything under build/addon goes into the XPI, and a
+// dev build loads that directory directly, so both modes check it before packaging.
+const shippedTextFiles = listFiles(ADDON_DIR).flatMap((file) => {
+  const bytes = readFileSync(file);
+  // A NUL byte marks a binary asset (the PNG icons), which replacement never touches.
+  return bytes.includes(0)
+    ? []
+    : [{ path: relative(ROOT, file), content: bytes.toString("utf-8") }];
+});
+assertNoUnreplacedPlaceholders(shippedTextFiles);
+
+const manifestPath = join(ADDON_DIR, "manifest.json");
+const builtRange = JSON.parse(readFileSync(manifestPath, "utf-8")).applications?.zotero;
+assertZoteroRange(relative(ROOT, manifestPath), builtRange, meta);
+console.log(
+  `  [3/4] Shipped files verified; manifest.json declares Zotero ` +
+    `${builtRange.strict_min_version} to ${builtRange.strict_max_version}`,
+);
+
+// Step 5: Package XPI (production only)
 if (!isDev) {
   const xpiName = `citegeist-${version}.xpi`;
   const xpiPath = join(BUILD_DIR, xpiName);
@@ -117,13 +144,25 @@ if (!isDev) {
   const hash = createHash("sha256").update(xpiBuffer).digest("hex");
 
   const updateJson = updateManifestFor(meta, xpiName, hash);
+  const updateJsonPath = join(BUILD_DIR, "update.json");
 
-  writeFileSync(join(BUILD_DIR, "update.json"), JSON.stringify(updateJson, null, 2));
+  writeFileSync(updateJsonPath, JSON.stringify(updateJson, null, 2));
 
-  console.log(`  [3/3] XPI packaged: ${xpiName} (${(xpiBuffer.length / 1024).toFixed(1)} KB)`);
+  // Check the file as written rather than the object, so the gate still holds once
+  // update.json carries entries that did not come from this build's metadata.
+  const publishedRange = assertUpdateManifestRange(
+    JSON.parse(readFileSync(updateJsonPath, "utf-8")),
+    meta,
+  );
+
+  console.log(`  [4/4] XPI packaged: ${xpiName} (${(xpiBuffer.length / 1024).toFixed(1)} KB)`);
   console.log(`        SHA-256: ${hash}`);
+  console.log(
+    `        update.json entry for ${version} declares Zotero ` +
+      `${publishedRange.strict_min_version} to ${publishedRange.strict_max_version}`,
+  );
 } else {
-  console.log("  [3/3] Dev mode — skipping XPI packaging");
+  console.log("  [4/4] Dev mode — skipping XPI packaging");
 }
 
 console.log("\n  Build complete.\n");

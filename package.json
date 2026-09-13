@@ -28,7 +28,7 @@
     "addonInstance": "Citegeist",
     "prefsPrefix": "extensions.zotero.citegeist",
     "zoteroMinVersion": "7.0.10",
-    "zoteroMaxVersion": "9.*"
+    "zoteroMaxVersion": "10.0.*"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
