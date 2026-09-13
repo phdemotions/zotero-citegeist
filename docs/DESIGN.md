@@ -2,8 +2,8 @@
 type: architecture
 title: Citegeist — design rationale
 description: Key architectural decisions behind Citegeist and the trade-offs involved.
-timestamp: 2026-08-02
-tags: [citegeist, architecture, design, openalex, zotero, sqlite, authors, diagnostics]
+timestamp: 2026-09-13
+tags: [citegeist, architecture, design, openalex, zotero, sqlite, schema, authors, diagnostics]
 ---
 
 # Design Rationale
@@ -93,6 +93,26 @@ Author identity lives in its own normalized sub-module of the cache — `cache/a
 The external handoff is the SQLite file itself. A downstream pipeline reads `citegeist.sqlite` directly, so the `item_authors` table _is_ the interchange format. An earlier design asserted each work's resolved authors as native Zotero item relations under an `openalex:author` predicate, on the theory that a native relation would sync and travel with the item. It was removed before v3.0.0 shipped: Zotero's **sync server rejects the custom predicate** ("Error 400 — Unsupported predicate 'openalex:author'") and, worse, that rejection halts the user's entire library sync. A one-time purge now strips any such relation an earlier build wrote, so a library stuck on the rejected predicate can sync again.
 
 **Trade-off:** Keeping identity out of `Extra` and out of item relations means it does not ride Zotero Sync — a second device re-resolves identity on its own rather than receiving it. That is the price of not breaking sync, and it is cheap: re-resolution runs on free singleton lookups, so the only cost is a background pass, not a re-confirmation or a metered charge. A sync-safe cross-device handoff waits on a predicate or channel Zotero's server will accept.
+
+---
+
+## Why Stamp the Cache Schema Version?
+
+Zotero's updater only moves a plugin forward, yet an older Citegeist can still open a database a newer one wrote. A researcher reinstalls an older XPI to get around a regression, or keeps one Zotero data folder in Dropbox and opens it from two computers running different Citegeist versions. The older build cannot know what the newer schema changed, so the protection has to ship in the older build before the newer schema exists.
+
+From v3.0.0, the cache records its schema in SQLite's `PRAGMA user_version` as major × 1000 + minor, from `CACHE_SCHEMA_MAJOR` and `CACHE_SCHEMA_MINOR` in `src/constants.ts`. Schema 1.0 is `1000`; SQLite's default of `0` means unstamped. `initCache` reads the stamp before it runs any `CREATE` statement:
+
+| Stamp found                                            | What init does                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`, or an older schema                                | Creates any missing tables, then writes the current stamp. Every v2.0.x database starts here: its `item_cache` and `migration_progress` tables are unchanged in 1.0, and the author tables are new.                                                                  |
+| The current schema, or a newer minor of the same major | Continues normally and leaves the stamp alone, so a newer minor is never lowered.                                                                                                                                                                                    |
+| A newer major                                          | Creates nothing, stamps nothing, sets `PRAGMA query_only` on the connection and loads the mirror, then records `CG-DB03` once. Every write entry point resolves without touching SQLite, the mirror or an item's `Extra` field, while reads keep serving the mirror. |
+
+A stamp write that fails leaves the database unstamped, records `CG-DB01`, and lets init finish; the next startup tries again.
+
+**Within a major, schema changes are additive.** An older build with the same major keeps writing, so a change counts as additive only if that build's writes cannot damage it. A new table or index qualifies. A new column on `item_cache` or `item_authors` does not on its own: `upsertRow` and `cacheItemAuthors` write with `INSERT OR REPLACE`, which deletes the row and reinserts only the columns the older build lists, so the new column's value is lost. Dropping, renaming or retyping a table or column, changing what a column means, or tightening a constraint bumps `CACHE_SCHEMA_MAJOR`, and relies on this refusal path to keep older builds from writing.
+
+**Trade-off:** A read-only session saves nothing new. A researcher who never updates keeps the metrics saved earlier, and new lookups leave no record; `CG-DB03` in the diagnostic report says why. The refusal also runs only in builds that read the stamp. v2.0.x predates it and writes to any database it opens, so the first major bump has to assume a v2.0.x copy may still share the file.
 
 ---
 

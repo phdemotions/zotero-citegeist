@@ -90,6 +90,12 @@ export const DIAGNOSTIC_CODES = {
     message:
       "Citegeist's local database couldn't be opened. Restart Zotero; if it persists, quit Zotero and check that citegeist.sqlite in your data folder isn't quarantined by antivirus.",
   },
+  "CG-DB03": {
+    code: "CG-DB03",
+    area: "DB",
+    message:
+      "Citegeist's local database was written by a newer version of Citegeist, so this version shows what's already saved but won't change the file. Update Citegeist to start saving new citation data again.",
+  },
   "CG-MATCH01": {
     code: "CG-MATCH01",
     area: "MATCH",

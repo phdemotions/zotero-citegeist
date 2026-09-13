@@ -2,7 +2,7 @@
 type: reference
 title: Citegeist — Diagnostic error codes
 description: Every error code Citegeist can show a user, what it means, and what to do about it. Append-only public contract.
-timestamp: 2026-07-20
+timestamp: 2026-09-13
 tags: [citegeist, diagnostics, errors, support, reference]
 ---
 
@@ -30,6 +30,7 @@ such as your username.
 | `CG-API50` | OpenAlex returned an unexpected response. | Try again in a few minutes. If it repeats, file an issue with the report. |
 | `CG-DB01` | Couldn't save to Citegeist's local database. | Most often a cloud-sync client holding the file. If your Zotero data folder is inside Dropbox, iCloud Drive, OneDrive or Box, pause sync and retry. |
 | `CG-DB02` | Citegeist's local database couldn't be opened. | Restart Zotero. If it persists, quit Zotero and check that `citegeist.sqlite` in your data folder isn't quarantined by antivirus. |
+| `CG-DB03` | Citegeist's local database was written by a newer version of Citegeist, so this version shows what's already saved but won't change the file. | Update Citegeist (**Tools → Plugins**, gear menu, **Check for Updates**). Until you do, citation data saved earlier still shows, but nothing new is saved. |
 | `CG-UI01` | Something went wrong drawing a panel. | Switch items and back, or restart Zotero. Worth reporting. |
 | `CG-UI02` | Citegeist couldn't tell which collection or library you right-clicked, so it hid its collection menu items instead of guessing. | A Zotero update usually changed how menus report the selection. Check for a Citegeist update (**Tools → Plugins**, gear menu, **Check for Updates**). If that doesn't fix it, copy the diagnostic report into a [new issue](https://github.com/phdemotions/zotero-citegeist/issues/new). |
 | `CG-BUG01` | An unexpected problem — Citegeist couldn't classify it. | Always worth reporting. Copy the diagnostic report into a [new issue](https://github.com/phdemotions/zotero-citegeist/issues/new). |

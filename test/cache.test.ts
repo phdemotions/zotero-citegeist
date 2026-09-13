@@ -86,8 +86,25 @@ const mockZotero = {
 
 vi.stubGlobal("Zotero", mockZotero);
 
-import { _resetForTesting, closeCache } from "../src/modules/cache/db";
 import {
+  _resetForTesting,
+  CURRENT_SCHEMA_STAMP,
+  classifySchemaStamp,
+  closeCache,
+} from "../src/modules/cache/db";
+import { garbageCollectOrphanAuthors } from "../src/modules/cache/authors/db";
+import { reconcileAuthorMerge } from "../src/modules/cache/authors/write";
+import { emptyRow, type ItemCacheRow } from "../src/modules/cache/types";
+import { clearDiagnostics, recentDiagnostics } from "../src/modules/diagnostics";
+import {
+  CACHE_SCHEMA_MAJOR,
+  CACHE_SCHEMA_MINOR,
+  CACHE_SCHEMA_STAMP_MULTIPLIER,
+} from "../src/constants";
+import {
+  cacheItemAuthors,
+  getItemAuthors,
+  updateAuthorMetrics,
   initCache,
   cacheWorkData,
   clearCache,
@@ -1590,5 +1607,276 @@ describe("buildRowFromLegacy strict numeric parsing", () => {
     // Garbage must not become a real `0` — that would be indistinguishable
     // from a true zero-citation work and corrupt downstream comparisons.
     expect(getCachedCitationCount(item)).toBeNull();
+  });
+});
+
+// ── Schema version stamp (plan U16 / KTD11) ─────────────────────────────────
+
+describe("cache schema stamp", () => {
+  const newerMajor = (CACHE_SCHEMA_MAJOR + 1) * CACHE_SCHEMA_STAMP_MULTIPLIER;
+  const work = {
+    id: "https://openalex.org/W900",
+    cited_by_count: 9,
+    fwci: null,
+    is_retracted: false,
+  } as never;
+  const authorship = { author: { id: "https://openalex.org/A5023888391", display_name: "Ada" } };
+
+  /** Every statement the fake saw that could change the file (reads and query_only excluded). */
+  function writeStatements(): string[] {
+    return fakeDb.queryAsync.mock.calls
+      .map(([sql]) => sql.trim())
+      .filter(
+        (s) =>
+          !/^SELECT\b/i.test(s) &&
+          !/^PRAGMA\s+user_version\s*$/i.test(s) &&
+          !/^PRAGMA\s+query_only\s*=\s*ON$/i.test(s),
+      );
+  }
+
+  function recorded(code: string): number {
+    return recentDiagnostics().filter((d) => d.code === code).length;
+  }
+
+  /** Close the beforeEach cache, then open a fresh fake prepared by `setup`. */
+  async function reopen(setup: (db: typeof fakeDb) => void = () => {}): Promise<void> {
+    await closeCache();
+    fakeDb = makeFakeDb();
+    setup(fakeDb);
+    clearDiagnostics();
+    await initCache();
+  }
+
+  /** Make one statement shape fail on `db`, delegating everything else. */
+  function failOn(db: typeof fakeDb, pattern: RegExp, message: string): void {
+    const base = db.queryAsync.getMockImplementation()!;
+    db.queryAsync.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (pattern.test(sql.trim())) throw new Error(message);
+      return base(sql, params);
+    });
+  }
+
+  /** A row as v2.0.5 wrote it: the same item_cache columns, and no stamp. */
+  function legacyRow(key: string, count: number): ItemCacheRow {
+    return {
+      ...emptyRow(1, key),
+      open_alex_id: "W100",
+      cited_by_count: count,
+      last_fetched: new Date().toISOString(),
+    };
+  }
+
+  function seed(db: typeof fakeDb, ...rows: ItemCacheRow[]): void {
+    for (const r of rows) db.table.set(`${r.library_id}:${r.item_key}`, { ...r });
+  }
+
+  it("encodes major × 1000 + minor and classifies each boundary", () => {
+    // The multiplier is an on-disk format: changing it would misread every
+    // database already stamped.
+    expect(CACHE_SCHEMA_STAMP_MULTIPLIER).toBe(1000);
+    expect(CURRENT_SCHEMA_STAMP).toBe(CACHE_SCHEMA_MAJOR * 1000 + CACHE_SCHEMA_MINOR);
+    expect(classifySchemaStamp(0)).toBe("stamp");
+    expect(classifySchemaStamp(CURRENT_SCHEMA_STAMP - 1)).toBe("stamp");
+    expect(classifySchemaStamp(CURRENT_SCHEMA_STAMP)).toBe("compatible");
+    expect(classifySchemaStamp(CURRENT_SCHEMA_STAMP + 1)).toBe("compatible");
+    expect(classifySchemaStamp(newerMajor - 1)).toBe("compatible");
+    expect(classifySchemaStamp(newerMajor)).toBe("newer-major");
+  });
+
+  it("stamps a fresh database with the current schema, after its tables are created", () => {
+    // beforeEach opened an empty fake: the fresh-database case.
+    expect(fakeDb.pragma.userVersion).toBe(CURRENT_SCHEMA_STAMP);
+    const sql = fakeDb.queryAsync.mock.calls.map(([s]) => s.trim());
+    const creates = sql.flatMap((s, i) => (/^CREATE\s+TABLE/i.test(s) ? [i] : []));
+    const stampAt = sql.findIndex((s) => /^PRAGMA\s+user_version\s*=/i.test(s));
+    expect(creates.length).toBeGreaterThan(0);
+    expect(stampAt).toBeGreaterThan(Math.max(...creates));
+  });
+
+  it("stamps an existing unstamped v2.0.5 database and keeps every row", async () => {
+    const a = legacyRow("OLDA", 42);
+    const b = legacyRow("OLDB", 7);
+    await reopen((db) => seed(db, a, b));
+
+    expect(fakeDb.pragma.userVersion).toBe(CURRENT_SCHEMA_STAMP);
+    expect(fakeDb.table.size).toBe(2);
+    expect(fakeDb.table.get("1:OLDA")).toEqual(a);
+    expect(fakeDb.table.get("1:OLDB")).toEqual(b);
+    expect(getCachedCitationCount(mockItem("OLDA"))).toBe(42);
+    expect(getCachedCitationCount(mockItem("OLDB"))).toBe(7);
+    // Opening it ran only idempotent DDL and the stamp — nothing touched a row.
+    expect(
+      writeStatements().filter((s) => !/^CREATE\s+TABLE|^PRAGMA\s+user_version\s*=/i.test(s)),
+    ).toEqual([]);
+  });
+
+  it("reads and writes normally under a newer minor, and never lowers its stamp", async () => {
+    const newerMinor = CURRENT_SCHEMA_STAMP + 1;
+    await reopen((db) => {
+      db.pragma.userVersion = newerMinor;
+      seed(db, legacyRow("MINOR", 3));
+    });
+
+    expect(getCachedCitationCount(mockItem("MINOR"))).toBe(3);
+    await cacheWorkData(mockItem("NEWROW"), work, null);
+    await cacheItemAuthors({ libraryID: 1, key: "NEWROW" }, [authorship]);
+    expect(fakeDb.table.has("1:NEWROW")).toBe(true);
+    expect(getCachedCitationCount(mockItem("NEWROW"))).toBe(9);
+    expect(await getItemAuthors(1, "NEWROW")).toHaveLength(1);
+    expect(fakeDb.pragma.userVersion).toBe(newerMinor);
+    expect(recorded("CG-DB03")).toBe(0);
+  });
+
+  it("opens a newer major read-only: reads serve the mirror, no write changes a row, CG-DB03 once", async () => {
+    const matchLine = "Citegeist match ID: W100";
+    // KEPT carries no curated state, so an unguarded orphan GC would delete it.
+    const kept = legacyRow("KEPT", 42);
+    const confirmed: ItemCacheRow = {
+      ...legacyRow("CONF", 5),
+      confirmed_open_alex_id: "W100",
+      match_method: "title-match",
+    };
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+      seed(db, kept, confirmed);
+      db.progress.set("1:KEPT", "2026-01-01T00:00:00.000Z");
+    });
+    const snapshot = () =>
+      JSON.stringify({
+        table: [...fakeDb.table.entries()],
+        progress: [...fakeDb.progress.entries()],
+      });
+    const before = snapshot();
+
+    const keptItem = mockItem("KEPT");
+    const confItem = mockItem("CONF", matchLine);
+    const legacyExtra = "Citegeist.openAlexId: W1234\nCitegeist.citedByCount: 3";
+    const legacyItem = mockItem("LEGACY", legacyExtra);
+    mockZotero.Items.getAll.mockResolvedValue([legacyItem]);
+
+    // Every write entry point resolves — none throws — and none writes.
+    await cacheWorkData(keptItem, work, null);
+    await writeNoMatch(mockItem("NOPE"));
+    await writePendingSuggestion(
+      keptItem,
+      {
+        id: "https://openalex.org/W777",
+        display_name: "A suggested work",
+        cited_by_count: 1,
+        fwci: null,
+        publication_year: 2020,
+        doi: null,
+      },
+      "high",
+      0.95,
+    );
+    await clearPendingSuggestion(keptItem);
+    await confirmTitleMatch(keptItem, "high");
+    await clearCache(confItem);
+    await cacheItemAuthors(keptItem, [authorship]);
+    await updateAuthorMetrics("A5023888391", {
+      worksCount: 1,
+      citedByCount: 1,
+      hIndex: 1,
+      i10Index: 1,
+      lastFetched: "2026-09-13T00:00:00.000Z",
+    });
+    await reconcileAuthorMerge("A5023888391", "A5000000001");
+    await garbageCollectOrphans({ force: true });
+    expect(await migrateFromExtraV1()).toBe(false);
+
+    expect(snapshot()).toBe(before);
+    expect(fakeDb.authors.size).toBe(0);
+    expect(fakeDb.itemAuthors.size).toBe(0);
+    expect(fakeDb.pragma.userVersion).toBe(newerMajor);
+    expect(writeStatements()).toEqual([]);
+    // The Extra field is untouched too: no confirmation strip, no migration strip.
+    expect(items.get("CONF")!.extra).toBe(matchLine);
+    expect(items.get("LEGACY")!.extra).toBe(legacyExtra);
+    // Reads serve the mirror exactly as the newer build left it.
+    expect(getCachedCitationCount(keptItem)).toBe(42);
+    expect(getCachedCitationCount(confItem)).toBe(5);
+    expect(recorded("CG-DB03")).toBe(1);
+    expect(recorded("CG-DB01")).toBe(0);
+  });
+
+  it("sets query_only on a newer major, so a writer that skipped its gate is refused by SQLite", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+      db.itemAuthors.set("1:K:A1", {
+        library_id: 1,
+        item_key: "K",
+        author_id: "A1",
+        author_position: 0,
+        is_curated: 0,
+      });
+    });
+
+    expect(fakeDb.pragma.queryOnly).toBe(true);
+    await expect(
+      garbageCollectOrphanAuthors(fakeDb as unknown as _ZoteroTypes.DBConnection, [
+        { libraryID: 1, itemKey: "K" },
+      ]),
+    ).rejects.toThrow(/readonly/);
+    expect(fakeDb.itemAuthors.size).toBe(1);
+  });
+
+  it("keeps a read-only cache usable when a newer major's item_cache can't be read", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+      failOn(db, /^SELECT\s+\*\s+FROM\s+item_cache/i, "no such table: item_cache");
+    });
+
+    expect(getCachedData(mockItem("ANY"))).toBeNull();
+    expect(recorded("CG-DB03")).toBe(1);
+    expect(recorded("CG-DB02")).toBe(0);
+  });
+
+  it("finishes init and logs the failure when the stamp write fails", async () => {
+    await reopen((db) => failOn(db, /^PRAGMA\s+user_version\s*=/i, "database is locked"));
+
+    expect(fakeDb.pragma.userVersion).toBe(0);
+    expect(recentDiagnostics()).toContainEqual(
+      expect.objectContaining({ code: "CG-DB01", context: "cache schema stamp" }),
+    );
+    // The database is still compatible, so the session stays writable.
+    await cacheWorkData(mockItem("AFTER"), work, null);
+    expect(fakeDb.table.has("1:AFTER")).toBe(true);
+  });
+
+  it("fails init as CG-DB02, before any DDL, when the stamp can't be read", async () => {
+    await closeCache();
+    fakeDb = makeFakeDb();
+    failOn(fakeDb, /^PRAGMA\s+user_version\s*$/i, "file is not a database");
+
+    await expect(initCache()).rejects.toMatchObject({ code: "CG-DB02" });
+    expect(writeStatements()).toEqual([]);
+  });
+
+  it("records a stamp of an unexpected type and treats it as unstamped", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = "1000" as unknown as number;
+    });
+
+    expect(recentDiagnostics()).toContainEqual(
+      expect.objectContaining({ code: "CG-BUG01", context: "cache schema stamp read" }),
+    );
+    expect(fakeDb.pragma.userVersion).toBe(CURRENT_SCHEMA_STAMP);
+  });
+
+  it("closeCache clears read-only mode, so the next compatible open writes again", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+    });
+    await cacheWorkData(mockItem("RO"), work, null);
+    expect(fakeDb.table.has("1:RO")).toBe(false);
+
+    const closeSpy = vi.spyOn(fakeDb, "closeDatabase");
+    await reopen((db) => {
+      db.pragma.userVersion = CURRENT_SCHEMA_STAMP;
+    });
+    expect(closeSpy).toHaveBeenCalledWith(true);
+    await cacheWorkData(mockItem("RW"), work, null);
+    expect(fakeDb.table.has("1:RW")).toBe(true);
   });
 });

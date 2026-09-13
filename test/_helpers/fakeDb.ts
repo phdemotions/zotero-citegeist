@@ -43,14 +43,36 @@ export function makeFakeDb() {
     };
   }
 
+  // Connection/header state set through PRAGMA. `userVersion` persists with the
+  // "file" (seed it to model a stamped database); `queryOnly` is per connection.
+  const pragma = { userVersion: 0, queryOnly: false };
+
   return {
     table,
     progress,
     authors,
     itemAuthors,
+    pragma,
     queryAsync: vi.fn(async (sql: string, params?: unknown[]) => {
       const s = sql.trim();
       const p = (params ?? []) as unknown[];
+
+      // ── PRAGMA ──
+      if (/^PRAGMA\s+user_version\s*$/i.test(s)) return [{ user_version: pragma.userVersion }];
+      if (/^PRAGMA\s+query_only\s*=\s*ON\s*$/i.test(s)) {
+        pragma.queryOnly = true;
+        return [];
+      }
+      // SQLite's query_only refuses anything that would change the file; model
+      // it so a writer that skips its read-only gate fails loudly here.
+      if (pragma.queryOnly && !/^SELECT\b/i.test(s)) {
+        throw new Error("attempt to write a readonly database");
+      }
+      const stamp = /^PRAGMA\s+user_version\s*=\s*(-?\d+)\s*$/i.exec(s);
+      if (stamp) {
+        pragma.userVersion = Number(stamp[1]);
+        return [];
+      }
 
       if (/^CREATE\s+(TABLE|INDEX)/i.test(s)) return [];
       if (/^DROP\s+INDEX/i.test(s)) return [];

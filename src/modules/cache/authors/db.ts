@@ -2,8 +2,9 @@
  * Author-table schema + garbage collection.
  *
  * Additive-only: two `CREATE TABLE IF NOT EXISTS` statements run from the
- * cache's `doInit` (no schema-version gate, no ALTER TABLE — see the plan's
- * KTD4). There is no in-memory mirror for authors in v1: reads (`read.ts`)
+ * cache's `doInit` (no ALTER TABLE — see the plan's KTD4). `doInit` skips them
+ * when the schema stamp names a newer major, because that database is opened
+ * read-only. There is no in-memory mirror for authors in v1: reads (`read.ts`)
  * query SQLite asynchronously, which the item pane can do in `onAsyncRender`.
  */
 

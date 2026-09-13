@@ -14,10 +14,22 @@
  * • Writes to the same `(libraryID, itemKey)` are serialized via a small
  *   per-key promise chain so that mirror state never diverges from SQLite.
  * • `closeCache` waits for all pending writes before closing the DB.
+ *
+ * Schema stamp (plan KTD11)
+ * ─────────────────────────
+ * • The database records the schema that wrote it in `PRAGMA user_version`
+ *   (major × 1000 + minor). Init stamps an unstamped or older database, leaves
+ *   a newer minor alone, and opens a newer major read-only: every write entry
+ *   point checks `cacheWriteRefused` first and resolves as a no-op.
  */
 
-import { CLOSE_CACHE_DRAIN_TIMEOUT_MS } from "../../constants";
-import { CacheError, DatabaseOpenError } from "../utils";
+import {
+  CACHE_SCHEMA_MAJOR,
+  CACHE_SCHEMA_MINOR,
+  CACHE_SCHEMA_STAMP_MULTIPLIER,
+  CLOSE_CACHE_DRAIN_TIMEOUT_MS,
+} from "../../constants";
+import { CacheError, CitegeistError, DatabaseOpenError, logError, normalizeError } from "../utils";
 import { COLUMNS, type ItemCacheRow, mirrorKey, rowToParams } from "./types";
 import { createAuthorSchema } from "./authors/db";
 
@@ -69,9 +81,36 @@ CREATE TABLE IF NOT EXISTS migration_progress (
 );
 `;
 
+/** The `PRAGMA user_version` this build writes. Schema 1.0 is 1000. */
+export const CURRENT_SCHEMA_STAMP =
+  CACHE_SCHEMA_MAJOR * CACHE_SCHEMA_STAMP_MULTIPLIER + CACHE_SCHEMA_MINOR;
+
+/**
+ * What init does with the schema stamp it finds:
+ * - `stamp`: unstamped (0, which every v2.0.x database holds) or an older
+ *   schema. Ensure the schema, then write the current stamp.
+ * - `compatible`: this schema, or a newer minor of the same major. Ensure the
+ *   schema and leave the stamp alone, so a newer minor is never lowered.
+ * - `newer-major`: written by a build whose changes this one can't know. Open
+ *   read-only.
+ */
+export type SchemaStampVerdict = "stamp" | "compatible" | "newer-major";
+
+export function classifySchemaStamp(stored: number): SchemaStampVerdict {
+  if (Math.floor(stored / CACHE_SCHEMA_STAMP_MULTIPLIER) > CACHE_SCHEMA_MAJOR) {
+    return "newer-major";
+  }
+  return stored < CURRENT_SCHEMA_STAMP ? "stamp" : "compatible";
+}
+
 let db: _ZoteroTypes.DBConnection | null = null;
 let mirror: Map<string, ItemCacheRow> = new Map();
 let initialized = false;
+/**
+ * True when init opened a database stamped with a newer schema major
+ * (CG-DB03). Assigned together with `db`; cleared by `closeCache`.
+ */
+let readOnly = false;
 let initPromise: Promise<void> | null = null;
 
 /** Per-(libraryID,itemKey) write tail. Each new write awaits the prior tail. */
@@ -80,8 +119,9 @@ const writeTails: Map<string, Promise<void>> = new Map();
 const pendingWrites: Set<Promise<void>> = new Set();
 
 /**
- * Initialize the cache: open the DB, ensure schema, load the in-memory mirror.
- * Must be called from `onStartup` before any read function runs.
+ * Initialize the cache: open the DB, check the schema stamp, ensure schema,
+ * load the in-memory mirror. Must be called from `onStartup` before any read
+ * function runs.
  *
  * Race-safe: concurrent callers share the same in-flight promise instead of
  * each opening their own `DBConnection`.
@@ -100,30 +140,116 @@ async function doInit(): Promise<void> {
   // until schema + mirror load have all succeeded, so a `closeCache()`
   // racing against init can't null-out a half-initialized connection.
   let conn: _ZoteroTypes.DBConnection;
-  let rows: ItemCacheRow[];
+  let stored: number;
   try {
     // A corrupt/quarantined citegeist.sqlite fails here — code it CG-DB02 so
     // the startup path records the actionable "couldn't open the database"
-    // guidance rather than the generic CG-BUG01.
+    // guidance rather than the generic CG-BUG01. The stamp is read before any
+    // CREATE runs, because a newer major must not receive even idempotent DDL.
     conn = new Zotero.DBConnection("citegeist");
-    await conn.queryAsync(SCHEMA);
-    await conn.queryAsync(CREATE_PROGRESS_TABLE);
-    // Author identity tables (additive, idempotent — plan KTD4). No mirror is
-    // loaded for them: author reads query SQLite async in the pane.
-    await createAuthorSchema(conn);
-    // The initial mirror load is part of "opening the database": a corrupt
-    // item_cache fails this SELECT too, and it must code CG-DB02, not CG-BUG01.
-    rows = await conn.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
+    stored = await readSchemaStamp(conn);
   } catch (e) {
     throw new DatabaseOpenError("could not open the Citegeist database", e);
   }
+
+  const verdict = classifySchemaStamp(stored);
+  const rows =
+    verdict === "newer-major"
+      ? await openReadOnly(conn, stored)
+      : await openWritable(conn, verdict === "stamp");
 
   const nextMirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
 
   db = conn;
   mirror = nextMirror;
+  readOnly = verdict === "newer-major";
   initialized = true;
-  Zotero.debug(`[Citegeist] cache initialized: ${mirror.size} rows`);
+  Zotero.debug(
+    `[Citegeist] cache initialized: ${mirror.size} rows, schema stamp ${stored}${readOnly ? " (read-only)" : ""}`,
+  );
+}
+
+/** Ensure the schema, stamp it when asked, and load the mirror rows. */
+async function openWritable(
+  conn: _ZoteroTypes.DBConnection,
+  needsStamp: boolean,
+): Promise<ItemCacheRow[]> {
+  try {
+    await conn.queryAsync(SCHEMA);
+    await conn.queryAsync(CREATE_PROGRESS_TABLE);
+    // Author identity tables (additive, idempotent — plan KTD4). No mirror is
+    // loaded for them: author reads query SQLite async in the pane.
+    await createAuthorSchema(conn);
+    // After the DDL, so the stamp never names tables the file doesn't hold yet.
+    if (needsStamp) await stampSchema(conn);
+    // The initial mirror load is part of "opening the database": a corrupt
+    // item_cache fails this SELECT too, and it must code CG-DB02, not CG-BUG01.
+    return await conn.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
+  } catch (e) {
+    throw new DatabaseOpenError("could not open the Citegeist database", e);
+  }
+}
+
+/**
+ * Open a database that a newer schema major wrote. Nothing here writes: no
+ * DDL, no stamp. `query_only` makes SQLite itself refuse a write from any path
+ * that misses its `cacheWriteRefused` gate, and the mirror still loads so reads
+ * serve what the file already holds.
+ */
+async function openReadOnly(
+  conn: _ZoteroTypes.DBConnection,
+  stored: number,
+): Promise<ItemCacheRow[]> {
+  logError(
+    "cache schema check",
+    new CitegeistError(
+      `schema stamp ${stored} is a newer major than this build's ${CURRENT_SCHEMA_STAMP}; cache writes disabled`,
+      "CG-DB03",
+    ),
+  );
+  try {
+    await conn.queryAsync("PRAGMA query_only = ON");
+  } catch (e) {
+    // The write entry points still refuse on their own; this is the backstop.
+    Zotero.debug(`[Citegeist] PRAGMA query_only failed: ${normalizeError(e)}`);
+  }
+  try {
+    return await conn.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
+  } catch (e) {
+    // A newer major may have reshaped item_cache. CG-DB03 already names the
+    // cause, so start with an empty mirror rather than report CG-DB02.
+    Zotero.debug(
+      `[Citegeist] read-only cache: item_cache unreadable, mirror left empty: ${normalizeError(e)}`,
+    );
+    return [];
+  }
+}
+
+/**
+ * Read `PRAGMA user_version`. A query failure propagates, because a database
+ * that can't answer it can't be opened. A value that isn't an integer means the
+ * host returned a row shape this code doesn't recognise: that is recorded and
+ * treated as unstamped, so the cache keeps working.
+ */
+async function readSchemaStamp(conn: _ZoteroTypes.DBConnection): Promise<number> {
+  const rows = await conn.queryAsync<{ user_version: unknown }>("PRAGMA user_version");
+  const value = rows[0]?.user_version;
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  logError("cache schema stamp read", new Error(`PRAGMA user_version returned ${typeof value}`));
+  return 0;
+}
+
+/**
+ * Write the current stamp. A failure is logged, never thrown: the database is
+ * compatible either way, and the next startup stamps it.
+ */
+async function stampSchema(conn: _ZoteroTypes.DBConnection): Promise<void> {
+  try {
+    // PRAGMA takes no bound parameters; the value is a build-time integer.
+    await runQuery(conn, `PRAGMA user_version = ${CURRENT_SCHEMA_STAMP}`);
+  } catch (e) {
+    logError("cache schema stamp", e);
+  }
 }
 
 /**
@@ -167,6 +293,7 @@ export async function closeCache(): Promise<void> {
   mirror = new Map();
   writeTails.clear();
   pendingWrites.clear();
+  readOnly = false;
   initialized = false;
 }
 
@@ -178,6 +305,7 @@ export function _resetForTesting(fakeDb?: _ZoteroTypes.DBConnection): void {
   mirror = new Map();
   writeTails.clear();
   pendingWrites.clear();
+  readOnly = false;
   initialized = false;
   initPromise = null;
 }
@@ -192,6 +320,19 @@ export function requireDb(): _ZoteroTypes.DBConnection {
     throw new Error("[Citegeist] cache not initialized — call initCache() first");
   }
   return db;
+}
+
+/**
+ * The read-only gate (plan KTD11). Every cache write entry point calls this
+ * first and returns straight away when it answers true, so a refused write
+ * touches neither SQLite, the mirror nor an item's Extra field, and resolves
+ * like a write with nothing to do: service functions stay total. CG-DB03 was
+ * recorded once, when init opened the database; this leaves only a debug line.
+ */
+export function cacheWriteRefused(operation: string): boolean {
+  if (!readOnly) return false;
+  Zotero.debug(`[Citegeist] ${operation} skipped: the cache is read-only (CG-DB03)`);
+  return true;
 }
 
 export function getRow(libraryID: number, itemKey: string): ItemCacheRow | undefined {
@@ -303,6 +444,7 @@ export async function runQuery<T = unknown>(
 }
 
 export async function upsertRow(row: ItemCacheRow): Promise<void> {
+  if (cacheWriteRefused("upsertRow")) return;
   await withKeyLock(row.library_id, row.item_key, async () => {
     const conn = requireDb();
     await runQuery(conn, UPSERT_SQL, rowToParams(row));
@@ -314,6 +456,7 @@ export async function upsertRow(row: ItemCacheRow): Promise<void> {
 }
 
 export async function deleteRow(libraryID: number, itemKey: string): Promise<void> {
+  if (cacheWriteRefused("deleteRow")) return;
   await withKeyLock(libraryID, itemKey, async () => {
     const conn = requireDb();
     await runQuery(conn, `DELETE FROM item_cache WHERE library_id = ? AND item_key = ?`, [
@@ -344,13 +487,14 @@ export async function deleteRow(libraryID: number, itemKey: string): Promise<voi
  * row as it exists AT THE MOMENT the lock is granted, not at call time —
  * so a concurrent `clearCache` between the caller's call and the lock
  * acquisition is observed correctly. Return `null` from `transform` to
- * leave the row unchanged.
+ * leave the row unchanged. On a read-only cache the transform never runs.
  */
 export async function mutateRow(
   libraryID: number,
   itemKey: string,
   transform: (existing: ItemCacheRow | undefined) => ItemCacheRow | null,
 ): Promise<void> {
+  if (cacheWriteRefused("mutateRow")) return;
   await withKeyLock(libraryID, itemKey, async () => {
     const existing = mirror.get(mirrorKey(libraryID, itemKey));
     const next = transform(existing);

@@ -26,7 +26,7 @@ import {
   SHOW_PROGRESS_UI_THRESHOLD,
 } from "../../constants";
 import { logError, normalizeError, safeParseFloat, safeParseIntOrNull } from "../utils";
-import { deleteMirrorEntries, mirrorSnapshot, requireDb, upsertRow } from "./db";
+import { cacheWriteRefused, deleteMirrorEntries, mirrorSnapshot, requireDb, upsertRow } from "./db";
 import { setExtraConfirmedMatch } from "./write";
 import { garbageCollectOrphanAuthors } from "./authors/db";
 import {
@@ -435,6 +435,11 @@ const MIN_ZOTERO_VERSION_FOR_MIGRATION = "7.0.10";
  * prompt appears.
  */
 export async function migrateFromExtraV1(): Promise<boolean> {
+  // A read-only cache (newer schema major, CG-DB03) must refuse up front, not
+  // per row: migration strips Extra only after its SQLite write, so letting the
+  // loop run against no-op writes would delete legacy data with no copy kept.
+  if (cacheWriteRefused("migrateFromExtraV1")) return false;
+
   // REL-002 silent-data-loss guard: the pref says "we already migrated", but
   // if SQLite is empty AND any library still contains legacy Citegeist data
   // in Extra, something went wrong (manual SQLite deletion, antivirus
@@ -902,6 +907,7 @@ async function checkpointItem(
  * — group-library items get SQLite rows too, and we must not purge them.
  */
 export async function garbageCollectOrphans(options: { force?: boolean } = {}): Promise<void> {
+  if (cacheWriteRefused("garbageCollectOrphans")) return;
   const lastRunRaw = Zotero.Prefs.get(PREF_LAST_ORPHAN_GC_AT);
   const lastRun = typeof lastRunRaw === "number" ? lastRunRaw : 0;
   if (!options.force && Date.now() - lastRun < ORPHAN_GC_MIN_INTERVAL_MS) return;

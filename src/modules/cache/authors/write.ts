@@ -14,9 +14,12 @@
  * (U6 profile fetch) updates only metric columns. No read-modify-write of the
  * shared author row is required, so cross-item author writes are safe without a
  * dedicated author-id lock.
+ *
+ * Every exported writer checks `cacheWriteRefused` first, so a database stamped
+ * with a newer schema major (CG-DB03) receives no author write.
  */
 
-import { requireDb, runQuery, withKeyLock } from "../db";
+import { cacheWriteRefused, requireDb, runQuery, withKeyLock } from "../db";
 import type { CacheItemKey } from "../types";
 import { parseAuthorId } from "./types";
 
@@ -67,6 +70,7 @@ export async function cacheItemAuthors(
   item: CacheItemKey,
   authorships: ReadonlyArray<CacheAuthorshipInput>,
 ): Promise<void> {
+  if (cacheWriteRefused("cacheItemAuthors")) return;
   const { libraryID, key: itemKey } = item;
 
   // Validate + order at the trust boundary. Position is the array index
@@ -135,6 +139,7 @@ export async function setCuratedItemAuthor(
   authorId: string,
   position: number | null,
 ): Promise<void> {
+  if (cacheWriteRefused("setCuratedItemAuthor")) return;
   const id = parseAuthorId(authorId);
   if (!id) return;
   await withKeyLock(item.libraryID, item.key, async () => {
@@ -167,6 +172,7 @@ export async function updateAuthorMetrics(
   authorId: string,
   metrics: AuthorMetricsInput,
 ): Promise<void> {
+  if (cacheWriteRefused("updateAuthorMetrics")) return;
   const id = parseAuthorId(authorId);
   if (!id) return;
   const conn = requireDb();
@@ -203,6 +209,7 @@ export async function updateAuthorMetrics(
  * confirm (curation).
  */
 export async function reconcileAuthorMerge(fromId: string, toId: string): Promise<void> {
+  if (cacheWriteRefused("reconcileAuthorMerge")) return;
   const from = parseAuthorId(fromId);
   const to = parseAuthorId(toId);
   if (!from || !to || from === to) return;

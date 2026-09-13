@@ -22,7 +22,7 @@ import {
   toDbBool,
 } from "./types";
 import { saveItemGuarded } from "../utils";
-import { deleteRow, mutateRow } from "./db";
+import { cacheWriteRefused, deleteRow, mutateRow } from "./db";
 import { isMigrationInProgress } from "./migration";
 
 /** Pending-suggestion fields cleared together on confirm/dismiss. */
@@ -137,6 +137,9 @@ export async function cacheWorkData(
  * a full `_ZoteroTypes.Item` get the mirror cleanup.
  */
 export async function clearCache(item: CacheItemKey | _ZoteroTypes.Item): Promise<void> {
+  // Refuse before the Extra strip too: on a read-only cache the row keeps its
+  // confirmation, so stripping Extra alone would split the two copies.
+  if (cacheWriteRefused("clearCache")) return;
   await deleteRow(item.libraryID, item.key);
   // Detect whether the caller passed a full Item (with getField/saveTx) vs.
   // just the structural { libraryID, key } shape used by tests + internal code.

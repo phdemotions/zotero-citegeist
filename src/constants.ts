@@ -113,6 +113,27 @@ export const MAX_BACKUP_FILES = 5;
 /** Minimum interval between orphan-GC sweeps at startup. */
 export const ORPHAN_GC_MIN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+// ── SQLite cache schema version (plan KTD11) ──
+/**
+ * Schema major of `citegeist.sqlite`. Bump it for any change an older build of
+ * the same major could damage by writing to the database: dropping, renaming or
+ * retyping a table or column, or changing what a column means. A build that
+ * opens a database stamped with a newer major refuses every write (CG-DB03).
+ * The additive-only rule lives in docs/DESIGN.md.
+ */
+export const CACHE_SCHEMA_MAJOR = 1;
+/**
+ * Schema minor: counts additive changes (a new table or index) within a major.
+ * A newer minor changes nothing for an older build of the same major. Must stay
+ * below {@link CACHE_SCHEMA_STAMP_MULTIPLIER}.
+ */
+export const CACHE_SCHEMA_MINOR = 0;
+/**
+ * `PRAGMA user_version` stores major × this + minor, so schema 1.0 is 1000 and
+ * SQLite's default of 0 always means "unstamped".
+ */
+export const CACHE_SCHEMA_STAMP_MULTIPLIER = 1000;
+
 // ── Timeouts ──
 /** Per-item saveTx timeout during migration. A single locked item must
  *  not stall the entire migration loop. */

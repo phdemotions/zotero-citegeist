@@ -106,6 +106,7 @@ describe("diagnostic code registry", () => {
       "CG-API50",
       "CG-DB01",
       "CG-DB02",
+      "CG-DB03",
       "CG-MATCH01",
       "CG-MATCH02",
       "CG-ID01",
