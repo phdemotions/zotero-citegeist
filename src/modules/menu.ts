@@ -8,7 +8,7 @@
  *    via `pluginID`.
  *  - Manual DOM injection (Zotero 7.0.x, where `Zotero.MenuManager` is
  *    undefined) — the proven fallback. Plain string labels, `popupshowing`
- *    for visibility, explicit node removal on teardown.
+ *    for visibility, explicit node and listener removal on teardown.
  *
  * `registerMenus` feature-detects and prefers MenuManager; if it's absent or
  * a registration is rejected, it falls back to the DOM path so behaviour is
@@ -29,7 +29,8 @@ import { bindGuarded, guard } from "./diagnostics";
 import {
   collectionTargetsFromMenuContext,
   collectionTargetsFromPane,
-  menuCommandWindow,
+  paneForWindow,
+  selectedItemsInWindow,
   type CollectionTarget,
 } from "./host/selection";
 import { logError } from "./utils";
@@ -60,7 +61,7 @@ type NetworkMode = "citing" | "references";
  * throws for a multi-row selection.
  */
 interface MenuManagerContext extends _ZoteroTypes.MenuSelectionContext {
-  /** Selected items — present on the `main/library/item` target. */
+  /** Selected items in the right-clicked pane — present on the `main/library/item` target. */
   items?: _ZoteroTypes.Item[];
   setVisible: (visible: boolean) => void;
   setEnabled: (enabled: boolean) => void;
@@ -221,25 +222,23 @@ async function gatherTargetItems(
         out.set(item.id, item);
       }
     }
+    // Hand the event loop back between targets, so the "Gathering items…"
+    // progress window paints and Zotero stays responsive while a large
+    // selection loads.
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
   return out;
 }
 
 /**
  * How the empty-state alerts name what was right-clicked: "this collection",
- * "these 2 collections", "this library", "these 2 libraries", or, for a mix,
- * "these 3 collections and libraries".
+ * "these 2 collections", "this library" or "these 2 libraries". Targets never
+ * mix the two: `host/selection.ts` hides the entries for that selection.
  */
 function selectionPhrase(targets: readonly CollectionTarget[]): string {
-  const libraries = targets.filter((t) => t.kind === "library").length;
-  if (targets.length === 1) return libraries === 1 ? "this library" : "this collection";
-  const noun =
-    libraries === 0
-      ? "collections"
-      : libraries === targets.length
-        ? "libraries"
-        : "collections and libraries";
-  return `these ${targets.length} ${noun}`;
+  const libraries = targets.every((t) => t.kind === "library");
+  if (targets.length === 1) return libraries ? "this library" : "this collection";
+  return `these ${targets.length} ${libraries ? "libraries" : "collections"}`;
 }
 
 /** "This collection is empty." / "These 2 collections are empty." */
@@ -249,22 +248,42 @@ function emptySelectionMessage(targets: readonly CollectionTarget[]): string {
   return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)} ${verb} empty.`;
 }
 
-/** Count of currently-selected items Citegeist can resolve to an OpenAlex work. */
-function eligibleSelectedCount(): number {
-  return Zotero.getActiveZoteroPane().getSelectedItems().filter(canResolveWork).length;
+/** True when `items` is exactly one item the browser can resolve to a work. */
+function isSingleResolvable(items: readonly _ZoteroTypes.Item[]): boolean {
+  return items.length === 1 && canResolveWork(items[0]);
 }
 
-/** True when exactly one item is selected and the browser can resolve it to a work. */
-function singleSelectedResolvable(): boolean {
-  const items = Zotero.getActiveZoteroPane().getSelectedItems();
-  return items.length === 1 && canResolveWork(items[0]);
+/**
+ * Whether the collection menu's Citegeist entries show: only when the selection
+ * resolved to targets Citegeist acts on. Both onShowing handlers and the DOM
+ * popupshowing decide through here, so the three cannot drift apart.
+ */
+function collectionEntriesVisible(targets: readonly CollectionTarget[] | null): boolean {
+  return targets !== null;
+}
+
+/**
+ * The window a menu event came from, so the action reads that window's selection
+ * and opens its progress window and alerts where the user right-clicked rather
+ * than in the main window. Prefers the MenuManager context's `menuElem`, then the
+ * event's target, then the main window.
+ */
+function menuWindow(
+  event: Event | null | undefined,
+  ctx: _ZoteroTypes.MenuSelectionContext | null | undefined,
+): Window {
+  return windowOf(ctx?.menuElem) ?? windowOf(event?.target) ?? Zotero.getMainWindow();
+}
+
+function windowOf(target: unknown): Window | null {
+  if (typeof target !== "object" || target === null) return null;
+  return (target as { ownerDocument?: Document | null }).ownerDocument?.defaultView ?? null;
 }
 
 // ── Actions (shared by DOM + MenuManager handlers) ───────────────────────────
 
-async function runFetchSelected(win: Window): Promise<void> {
-  const pane = Zotero.getActiveZoteroPane();
-  const items = pane.getSelectedItems();
+/** Fetch citations for `items`, the selection in the right-clicked window. */
+async function runFetchSelected(win: Window, items: readonly _ZoteroTypes.Item[]): Promise<void> {
   if (items.length === 0) return;
 
   const eligible = items.filter(canResolveWork);
@@ -275,9 +294,7 @@ async function runFetchSelected(win: Window): Promise<void> {
     Services.prompt.alert(
       win,
       "Citegeist: Nothing to fetch",
-      items.length === 0
-        ? "No items selected."
-        : `None of the ${items.length} selected item${items.length === 1 ? "" : "s"} has a recognized identifier (DOI, PMID, arXiv ID, or ISBN).`,
+      `None of the ${items.length} selected item${items.length === 1 ? "" : "s"} has a recognized identifier (DOI, PMID, arXiv ID, or ISBN).`,
     );
     return;
   }
@@ -338,8 +355,7 @@ async function runFetchSelected(win: Window): Promise<void> {
   }
 }
 
-function runViewNetwork(mode: NetworkMode): void {
-  const items = Zotero.getActiveZoteroPane().getSelectedItems();
+function runViewNetwork(items: readonly _ZoteroTypes.Item[], mode: NetworkMode): void {
   if (items.length === 1) {
     showCitationNetwork(items[0], mode).catch((e) => logError("menu showCitationNetwork", e));
   }
@@ -348,17 +364,32 @@ function runViewNetwork(mode: NetworkMode): void {
 /**
  * Fetch every item under the selected collections and libraries.
  *
- * `targets` comes from `host/selection.ts`. `null` means the selection held a
- * row Citegeist does not act on (the entry is hidden for it), so nothing starts:
- * falling back to the library root would fetch a whole library the user never
- * chose.
+ * `targets` comes from `host/selection.ts`. Callers start nothing when it is
+ * `null`: falling back to the library root would fetch a whole library the user
+ * never chose.
+ *
+ * The progress window opens before the items are gathered, so a large selection
+ * shows "Gathering items…" instead of nothing while Zotero loads it.
  */
 async function runFetchCollection(
   win: Window,
-  targets: readonly CollectionTarget[] | null,
+  targets: readonly CollectionTarget[],
 ): Promise<void> {
-  if (!targets) return;
-  const allItems = await gatherTargetItems(targets);
+  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
+  progressWin.changeHeadline("Citegeist: Fetching Citations");
+  const progress = new progressWin.ItemProgress(iconURL("icon-16-color.png"), "Gathering items…");
+  progressWin.show();
+
+  let allItems: Map<number, _ZoteroTypes.Item>;
+  try {
+    allItems = await gatherTargetItems(targets);
+  } catch (e) {
+    logError("menu fetch-collection gather", e);
+    progress.setProgress(100);
+    progress.setText("Citegeist: fetch failed — see Debug Output");
+    progressWin.startCloseTimer(PROGRESS_WINDOW_ERROR_CLOSE_MS);
+    return;
+  }
   const totalItems = allItems.size;
   const eligible = [...allItems.values()].filter(canResolveWork);
 
@@ -366,6 +397,7 @@ async function runFetchCollection(
   // notification is easy to miss, leaving the user thinking the click did
   // nothing. A modal alert makes the empty result unambiguous + says WHY.
   if (eligible.length === 0) {
+    progressWin.close();
     Services.prompt.alert(
       win,
       "Citegeist: Nothing to fetch",
@@ -376,13 +408,7 @@ async function runFetchCollection(
     return;
   }
 
-  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
-  progressWin.changeHeadline("Citegeist: Fetching Citations");
-  const progress = new progressWin.ItemProgress(
-    iconURL("icon-16-color.png"),
-    `Fetching ${eligible.length} item${eligible.length === 1 ? "" : "s"}…`,
-  );
-  progressWin.show();
+  progress.setText(`Fetching ${eligible.length} item${eligible.length === 1 ? "" : "s"}…`);
 
   let result: FetchBatchResult = {
     fresh: 0,
@@ -427,9 +453,11 @@ async function runFetchCollection(
   }
 }
 
-async function runResolveAuthorsSelected(win: Window): Promise<void> {
-  const pane = Zotero.getActiveZoteroPane();
-  const items = pane.getSelectedItems();
+/** Resolve author identities for `items`, the selection in the right-clicked window. */
+async function runResolveAuthorsSelected(
+  win: Window,
+  items: readonly _ZoteroTypes.Item[],
+): Promise<void> {
   if (items.length === 0) return;
 
   const eligible = items.filter(canResolveWork);
@@ -469,16 +497,34 @@ async function runResolveAuthorsSelected(win: Window): Promise<void> {
   progressWin.startCloseTimer(PROGRESS_WINDOW_DONE_CLOSE_MS);
 }
 
-/** Resolve author identities for every item under the targets. `null` starts nothing (see runFetchCollection). */
+/**
+ * Resolve author identities for every item under the targets. Callers start
+ * nothing for `null` targets, and the progress window opens before gathering
+ * (see runFetchCollection).
+ */
 async function runResolveAuthorsCollection(
   win: Window,
-  targets: readonly CollectionTarget[] | null,
+  targets: readonly CollectionTarget[],
 ): Promise<void> {
-  if (!targets) return;
-  const allItems = await gatherTargetItems(targets);
+  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
+  progressWin.changeHeadline("Citegeist: Resolving Author Identities");
+  const progress = new progressWin.ItemProgress(iconURL("icon-16-color.png"), "Gathering items…");
+  progressWin.show();
+
+  let allItems: Map<number, _ZoteroTypes.Item>;
+  try {
+    allItems = await gatherTargetItems(targets);
+  } catch (e) {
+    logError("menu resolve-authors-collection gather", e);
+    progress.setProgress(100);
+    progress.setText("Citegeist: resolve failed — see Debug Output");
+    progressWin.startCloseTimer(PROGRESS_WINDOW_ERROR_CLOSE_MS);
+    return;
+  }
   const totalItems = allItems.size;
   const eligible = [...allItems.values()].filter(canResolveWork);
   if (eligible.length === 0) {
+    progressWin.close();
     Services.prompt.alert(
       win,
       "Citegeist: Nothing to resolve",
@@ -489,13 +535,9 @@ async function runResolveAuthorsCollection(
     return;
   }
 
-  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
-  progressWin.changeHeadline("Citegeist: Resolving Author Identities");
-  const progress = new progressWin.ItemProgress(
-    iconURL("icon-16-color.png"),
+  progress.setText(
     `Resolving authors for ${eligible.length} item${eligible.length === 1 ? "" : "s"}…`,
   );
-  progressWin.show();
 
   let result: AuthorBackfillResult;
   try {
@@ -539,43 +581,34 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
         // window by hooks.ensureCitegeistFTL.
         l10nID: "citegeist-menu-fetch",
         icon: iconURL("icon-16.svg"),
-        onShowing: (_e, ctx) =>
-          // Use the supplied context items when present; only fall back to the
-          // pane selection when ctx omits them — avoids a second eligibility
-          // pass when ctx.items is present but all-ineligible.
-          ctx.setVisible(
-            ctx.items && ctx.items.length > 0
-              ? ctx.items.some(canResolveWork)
-              : eligibleSelectedCount() > 0,
-          ),
+        // ctx.items is authoritative when present, so an all-ineligible context
+        // hides the entry even if another window's selection is eligible.
+        onShowing: (e, ctx) => ctx.setVisible(contextItems(e, ctx).some(canResolveWork)),
         onCommand: (e, ctx) => {
-          runFetchSelected(menuCommandWindow(e, ctx)).catch((err) => logError("menu fetch", err));
+          runFetchSelected(menuWindow(e, ctx), contextItems(e, ctx)).catch((err) =>
+            logError("menu fetch", err),
+          );
         },
       },
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-citing",
-        onShowing: (_e, ctx) => ctx.setVisible(itemsSingleResolvable(ctx.items)),
-        onCommand: () => runViewNetwork("citing"),
+        onShowing: (e, ctx) => ctx.setVisible(isSingleResolvable(contextItems(e, ctx))),
+        onCommand: (e, ctx) => runViewNetwork(contextItems(e, ctx), "citing"),
       },
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-refs",
-        onShowing: (_e, ctx) => ctx.setVisible(itemsSingleResolvable(ctx.items)),
-        onCommand: () => runViewNetwork("references"),
+        onShowing: (e, ctx) => ctx.setVisible(isSingleResolvable(contextItems(e, ctx))),
+        onCommand: (e, ctx) => runViewNetwork(contextItems(e, ctx), "references"),
       },
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-resolve-authors",
         icon: iconURL("icon-16.svg"),
-        onShowing: (_e, ctx) =>
-          ctx.setVisible(
-            ctx.items && ctx.items.length > 0
-              ? ctx.items.some(canResolveWork)
-              : eligibleSelectedCount() > 0,
-          ),
+        onShowing: (e, ctx) => ctx.setVisible(contextItems(e, ctx).some(canResolveWork)),
         onCommand: (e, ctx) => {
-          runResolveAuthorsSelected(menuCommandWindow(e, ctx)).catch((err) =>
+          runResolveAuthorsSelected(menuWindow(e, ctx), contextItems(e, ctx)).catch((err) =>
             logError("menu resolve-authors", err),
           );
         },
@@ -593,26 +626,30 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
         menuType: "menuitem",
         l10nID: "citegeist-menu-fetch-collection",
         icon: iconURL("icon-16.svg"),
-        // Hidden unless every selected row is a collection or library, so a
-        // saved search, feed, Unfiled or Trash row never reaches the fetch.
-        onShowing: (_e, ctx) => ctx.setVisible(collectionTargetsFromMenuContext(ctx) !== null),
+        // Hidden unless the selection is collections only or libraries only, so
+        // a saved search, feed, Unfiled or Trash row never reaches the fetch.
+        onShowing: (_e, ctx) =>
+          ctx.setVisible(collectionEntriesVisible(collectionTargetsFromMenuContext(ctx))),
         onCommand: (e, ctx) => {
-          runFetchCollection(
-            menuCommandWindow(e, ctx),
-            collectionTargetsFromMenuContext(ctx),
-          ).catch((err) => logError("menu fetch-collection", err));
+          const targets = collectionTargetsFromMenuContext(ctx);
+          if (!targets) return;
+          runFetchCollection(menuWindow(e, ctx), targets).catch((err) =>
+            logError("menu fetch-collection", err),
+          );
         },
       },
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-resolve-collection",
         icon: iconURL("icon-16.svg"),
-        onShowing: (_e, ctx) => ctx.setVisible(collectionTargetsFromMenuContext(ctx) !== null),
+        onShowing: (_e, ctx) =>
+          ctx.setVisible(collectionEntriesVisible(collectionTargetsFromMenuContext(ctx))),
         onCommand: (e, ctx) => {
-          runResolveAuthorsCollection(
-            menuCommandWindow(e, ctx),
-            collectionTargetsFromMenuContext(ctx),
-          ).catch((err) => logError("menu resolve-authors-collection", err));
+          const targets = collectionTargetsFromMenuContext(ctx);
+          if (!targets) return;
+          runResolveAuthorsCollection(menuWindow(e, ctx), targets).catch((err) =>
+            logError("menu resolve-authors-collection", err),
+          );
         },
       },
     ]),
@@ -632,15 +669,15 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
 }
 
 /**
- * Visibility helper for the MenuManager item menu. Prefers the context's
- * `items` (the documented access path) but falls back to the active pane's
- * selection if the context omits them.
+ * The items a MenuManager item-menu handler acts on. The context's `items` (the
+ * documented access path) belong to the right-clicked pane. When the context
+ * omits them, the selection in the window the menu opened in stands in, never
+ * the most recent window's.
  */
-function itemsSingleResolvable(items: _ZoteroTypes.Item[] | undefined): boolean {
-  if (items && items.length > 0) {
-    return items.length === 1 && canResolveWork(items[0]);
-  }
-  return singleSelectedResolvable();
+function contextItems(event: Event, ctx: MenuManagerContext): readonly _ZoteroTypes.Item[] {
+  return ctx.items && ctx.items.length > 0
+    ? ctx.items
+    : selectedItemsInWindow(menuWindow(event, ctx));
 }
 
 // ── DOM path (Zotero 7.0.x fallback) ─────────────────────────────────────────
@@ -676,6 +713,26 @@ export function itemMenuVisibility(items: _ZoteroTypes.Item[]): {
   };
 }
 
+/** One AbortController per window with DOM-injected menus, aborted by `unregisterMenus`. */
+const domListenerControllers = new WeakMap<Window, AbortController>();
+
+/**
+ * A fresh signal for `win`'s DOM menu listeners, aborting any earlier one. Built
+ * from the window's own `AbortController`: every chrome window has one, while
+ * Zotero's plugin sandbox is not guaranteed to expose it as a global.
+ */
+function listenerSignal(win: Window): AbortSignal | undefined {
+  domListenerControllers.get(win)?.abort();
+  domListenerControllers.delete(win);
+  const Controller =
+    (win as { AbortController?: typeof AbortController }).AbortController ??
+    (typeof AbortController === "function" ? AbortController : undefined);
+  if (!Controller) return undefined;
+  const controller = new Controller();
+  domListenerControllers.set(win, controller);
+  return controller.signal;
+}
+
 function registerViaDOM(win: Window): void {
   const doc = win.document;
   const itemMenu = doc.getElementById("zotero-itemmenu");
@@ -691,6 +748,12 @@ function registerViaDOM(win: Window): void {
     return;
   }
 
+  // Every listener below carries this window's signal, so unregisterMenus
+  // removes them with one abort, including the popupshowing listeners on
+  // Zotero's own popups, which outlive the removed entries. Every selection
+  // read goes to this window's pane, not the most recent window's.
+  const signal = listenerSignal(win);
+
   if (itemMenu) {
     const sep = (doc as XULDocument).createXULElement("menuseparator");
     sep.id = MENU_IDS.separator;
@@ -704,21 +767,39 @@ function registerViaDOM(win: Window): void {
     // E, C are taken; G is unused — pick G for the "citeGeist" mnemonic. View
     // Citing/References get no accesskey (infrequent; Tab + Enter works).
     fetchItem.setAttribute("accesskey", "G");
-    bindGuarded(fetchItem, "command", "menu fetch item", () => {
-      runFetchSelected(win).catch((e) => logError("menu fetch", e));
-    });
+    bindGuarded(
+      fetchItem,
+      "command",
+      "menu fetch item",
+      () => {
+        runFetchSelected(win, selectedItemsInWindow(win)).catch((e) => logError("menu fetch", e));
+      },
+      { signal },
+    );
     itemMenu.appendChild(fetchItem);
 
     const citingItem = (doc as XULDocument).createXULElement("menuitem");
     citingItem.id = MENU_IDS.viewCiting;
     citingItem.setAttribute("label", "View Citing Works…");
-    bindGuarded(citingItem, "command", "menu view citing", () => runViewNetwork("citing"));
+    bindGuarded(
+      citingItem,
+      "command",
+      "menu view citing",
+      () => runViewNetwork(selectedItemsInWindow(win), "citing"),
+      { signal },
+    );
     itemMenu.appendChild(citingItem);
 
     const refsItem = (doc as XULDocument).createXULElement("menuitem");
     refsItem.id = MENU_IDS.viewRefs;
     refsItem.setAttribute("label", "View References…");
-    bindGuarded(refsItem, "command", "menu view references", () => runViewNetwork("references"));
+    bindGuarded(
+      refsItem,
+      "command",
+      "menu view references",
+      () => runViewNetwork(selectedItemsInWindow(win), "references"),
+      { signal },
+    );
     itemMenu.appendChild(refsItem);
 
     const resolveItem = (doc as XULDocument).createXULElement("menuitem");
@@ -727,23 +808,41 @@ function registerViaDOM(win: Window): void {
     resolveItem.setAttribute("image", iconURL("icon-16.svg"));
     // 'A' (Authors) is free on the default item context menu alongside 'G'.
     resolveItem.setAttribute("accesskey", "A");
-    bindGuarded(resolveItem, "command", "menu resolve authors", () => {
-      runResolveAuthorsSelected(win).catch((e) => logError("menu resolve-authors", e));
-    });
+    bindGuarded(
+      resolveItem,
+      "command",
+      "menu resolve authors",
+      () => {
+        runResolveAuthorsSelected(win, selectedItemsInWindow(win)).catch((e) =>
+          logError("menu resolve-authors", e),
+        );
+      },
+      { signal },
+    );
     itemMenu.appendChild(resolveItem);
 
     // Gate every entry — and the separator — on the current selection, so a
     // no-op click never looks like the feature is broken and no stray empty
     // section is left behind (issue #72). Visibility rule lives in the pure,
-    // tested itemMenuVisibility().
-    bindGuarded(itemMenu, "popupshowing", "menu item popupshowing", () => {
-      const v = itemMenuVisibility(Zotero.getActiveZoteroPane().getSelectedItems());
-      fetchItem.hidden = !v.fetch;
-      resolveItem.hidden = !v.resolveAuthors;
-      citingItem.hidden = !v.citing;
-      refsItem.hidden = !v.references;
-      sep.hidden = !v.separator;
-    });
+    // tested itemMenuVisibility(). Hidden first, so a selection read that
+    // throws leaves no stale entries showing.
+    bindGuarded(
+      itemMenu,
+      "popupshowing",
+      "menu item popupshowing",
+      () => {
+        for (const entry of [sep, fetchItem, citingItem, refsItem, resolveItem]) {
+          entry.hidden = true;
+        }
+        const v = itemMenuVisibility(selectedItemsInWindow(win));
+        fetchItem.hidden = !v.fetch;
+        resolveItem.hidden = !v.resolveAuthors;
+        citingItem.hidden = !v.citing;
+        refsItem.hidden = !v.references;
+        sep.hidden = !v.separator;
+      },
+      { signal },
+    );
   }
 
   if (collectionMenu) {
@@ -758,11 +857,17 @@ function registerViaDOM(win: Window): void {
     // 'L' may collide with 'New Collection' on some builds; 'I' (citegeIst
     // mnemonic) is unused on the default collection context menu.
     fetchAll.setAttribute("accesskey", "I");
-    bindGuarded(fetchAll, "command", "menu fetch collection", () => {
-      runFetchCollection(win, collectionTargetsFromPane(Zotero.getActiveZoteroPane())).catch((e) =>
-        logError("menu fetch-collection", e),
-      );
-    });
+    bindGuarded(
+      fetchAll,
+      "command",
+      "menu fetch collection",
+      () => {
+        const targets = collectionTargetsFromPane(paneForWindow(win));
+        if (!targets) return;
+        runFetchCollection(win, targets).catch((e) => logError("menu fetch-collection", e));
+      },
+      { signal },
+    );
     collectionMenu.appendChild(fetchAll);
 
     const resolveAll = (doc as XULDocument).createXULElement("menuitem");
@@ -770,22 +875,37 @@ function registerViaDOM(win: Window): void {
     resolveAll.setAttribute("label", "Resolve All Author Identities (Citegeist)");
     resolveAll.setAttribute("image", iconURL("icon-16.svg"));
     resolveAll.setAttribute("accesskey", "A");
-    bindGuarded(resolveAll, "command", "menu resolve collection", () => {
-      runResolveAuthorsCollection(
-        win,
-        collectionTargetsFromPane(Zotero.getActiveZoteroPane()),
-      ).catch((e) => logError("menu resolve-authors-collection", e));
-    });
+    bindGuarded(
+      resolveAll,
+      "command",
+      "menu resolve collection",
+      () => {
+        const targets = collectionTargetsFromPane(paneForWindow(win));
+        if (!targets) return;
+        runResolveAuthorsCollection(win, targets).catch((e) =>
+          logError("menu resolve-authors-collection", e),
+        );
+      },
+      { signal },
+    );
     collectionMenu.appendChild(resolveAll);
 
     // The MenuManager path's onShowing rule, for the DOM menu: hide the entries
-    // (and their separator) unless every selected row is a collection or library.
-    bindGuarded(collectionMenu, "popupshowing", "menu collection popupshowing", () => {
-      const hidden = collectionTargetsFromPane(Zotero.getActiveZoteroPane()) === null;
-      sep.hidden = hidden;
-      fetchAll.hidden = hidden;
-      resolveAll.hidden = hidden;
-    });
+    // (and their separator) unless the selection is collections only or
+    // libraries only. Hidden first, so a selection read that throws leaves no
+    // stale entries showing.
+    bindGuarded(
+      collectionMenu,
+      "popupshowing",
+      "menu collection popupshowing",
+      () => {
+        const entries = [sep, fetchAll, resolveAll];
+        for (const entry of entries) entry.hidden = true;
+        const visible = collectionEntriesVisible(collectionTargetsFromPane(paneForWindow(win)));
+        for (const entry of entries) entry.hidden = !visible;
+      },
+      { signal },
+    );
   }
 
   Zotero.debug("[Citegeist] Menus registered (DOM)");
@@ -822,7 +942,8 @@ export function registerMenus(win: Window): void {
 
 /**
  * Per-window teardown. Removes any DOM-injected menu nodes from THIS window
- * only. Runs on every window unload.
+ * only, and aborts their listeners, including the popupshowing listeners on
+ * Zotero's own popups, which outlive the nodes. Runs on every window unload.
  *
  * Deliberately does NOT touch the process-global MenuManager registration:
  * doing so would remove Citegeist's context menu from every other still-open
@@ -831,6 +952,8 @@ export function registerMenus(win: Window): void {
  * `unregisterGlobalMenus()` and runs once, at plugin shutdown.
  */
 export function unregisterMenus(win: Window): void {
+  domListenerControllers.get(win)?.abort();
+  domListenerControllers.delete(win);
   const doc = win.document;
   for (const id of Object.values(MENU_IDS)) {
     doc.getElementById(id)?.remove();

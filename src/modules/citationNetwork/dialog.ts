@@ -35,7 +35,7 @@ import {
   buildCollectionTree,
 } from "./collectionPicker";
 import { resolveHostScheme } from "../ui/theme";
-import { selectedCollectionsFromPane } from "../host/selection";
+import { paneForWindow, selectedCollectionsFromPane } from "../host/selection";
 import { fetchAuthorProfile, type OpenAlexAuthorProfile } from "../openalexAuthors";
 import {
   buildProfileViewModel,
@@ -59,21 +59,15 @@ export let activeDialog: HTMLElement | null = null;
 let activeState: NetworkState | null = null;
 
 /**
- * The dialog's default filing collection: the selected collection when exactly
- * one is selected, otherwise none. With several selected, no single one is
- * clearly where the user wants new items to go.
+ * The dialog's default filing collection: the collection selected in `win`'s
+ * pane when exactly one is selected, otherwise none. With several selected, no
+ * single one is clearly where the user wants new items to go. The read never
+ * throws: a selection it cannot read gives no default, and `host/selection.ts`
+ * records why.
  */
-export function defaultCollectionIdsFromPane(): Set<number> {
-  const ids = new Set<number>();
-  try {
-    const selected = selectedCollectionsFromPane(Zotero.getActiveZoteroPane());
-    if (selected.length === 1) ids.add(selected[0].id);
-  } catch (e) {
-    // The selection read is total for every supported Zotero; a throw here is a
-    // host-contract break. The dialog still opens, with no default collection.
-    logError("network dialog default collection", e);
-  }
-  return ids;
+export function defaultCollectionIdsFromPane(win?: Window | null): Set<number> {
+  const selected = selectedCollectionsFromPane(paneForWindow(win));
+  return new Set(selected.length === 1 ? [selected[0].id] : []);
 }
 
 /**
@@ -270,7 +264,7 @@ export async function showCitationNetwork(
   // Fetch work + existing DOIs in parallel (user sees skeleton)
   phase = "loading-data";
   const allCollections = buildCollectionTree();
-  const defaultCollectionIds = defaultCollectionIdsFromPane();
+  const defaultCollectionIds = defaultCollectionIdsFromPane(win);
 
   let work;
   let existingDOIs;
@@ -439,7 +433,7 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
   const body = dialog.querySelector(".cg-dialog-body") as HTMLElement;
   if (body) renderSkeletonRows(body);
 
-  const defaultCollectionIds = defaultCollectionIdsFromPane();
+  const defaultCollectionIds = defaultCollectionIdsFromPane(win);
 
   const state: NetworkState = {
     phase: "ready",

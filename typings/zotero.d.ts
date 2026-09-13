@@ -72,6 +72,7 @@ declare namespace _ZoteroTypes {
     changeHeadline(text: string): void;
     show(): void;
     startCloseTimer(ms: number): void;
+    close(): void;
     ItemProgress: new (icon: string, text: string) => ProgressWindowItem;
   }
 
@@ -105,14 +106,35 @@ declare namespace _ZoteroTypes {
    * The selection fields of a `Zotero.MenuManager` context on the library
    * targets. Zotero 8 and 9 supply `collectionTreeRow`. Zotero 10 adds
    * `collectionTreeRows`, the full selection, and turns `collectionTreeRow` into
-   * a getter that throws on a multi-row selection, so it may be read only when
-   * `collectionTreeRows` is absent.
+   * a getter that throws on a multi-row selection and otherwise logs a
+   * removed-API warning, on release and beta builds alike, so it may be read
+   * only when `collectionTreeRows` is absent.
    */
   interface MenuSelectionContext {
     readonly collectionTreeRows?: readonly CollectionTreeRow[];
     readonly collectionTreeRow?: CollectionTreeRow | null;
     /** The menu element the context belongs to; its document's window is the right-clicked window. */
     readonly menuElem?: Element | null;
+  }
+
+  /**
+   * A main window's Zotero pane (`window.ZoteroPane`), limited to what Citegeist
+   * reads. Read the selection only through `src/modules/host/selection.ts`
+   * (`test/selection-guard-invariants.test.ts` enforces it): Zotero 10's singular
+   * collection-tree getters throw on a multi-row selection and otherwise log a
+   * removed-API warning, on release and beta builds alike.
+   */
+  interface ZoteroPane {
+    getSelectedItems(asIDs?: boolean): Item[];
+    /** The selected collection; `false`/`undefined` when the row is not a collection. Singular: see above. */
+    getSelectedCollection(): Collection | false | null | undefined;
+    /** Zotero 10+: every selected collection, in selection order. */
+    getSelectedCollections?(): Collection[];
+    /** The focused collection-tree row, or a falsy value when none. Singular: see above. */
+    getCollectionTreeRow?(): CollectionTreeRow | false | 0 | null | undefined;
+    /** Zotero 10+: every selected collection-tree row, in tree order. Safe with any selection. */
+    getCollectionTreeRows?(): CollectionTreeRow[];
+    itemsView?: ItemsView;
   }
 
   // Item pane section registration types
@@ -228,25 +250,8 @@ declare const Zotero: {
   locale?: string;
   debug(msg: string, level?: number): void;
   log(msg: string): void;
-  // Collection-tree selection getters: read them only through
-  // src/modules/host/selection.ts. On Zotero 10 the singular ones throw for a
-  // multi-row selection, and on its beta and dev builds for any selection.
-  getActiveZoteroPane(): {
-    getSelectedItems(asIDs?: boolean): _ZoteroTypes.Item[];
-    /** The selected collection; `false`/`undefined` when the row is not a collection. Throws on Zotero 10 (see above). */
-    getSelectedCollection(): _ZoteroTypes.Collection | false | null | undefined;
-    /** Zotero 10+: every selected collection, in tree order. */
-    getSelectedCollections?(): _ZoteroTypes.Collection[];
-    /** The library ID of the selected row. Throws on Zotero 10 (see above). */
-    getSelectedLibraryID?(): number | false | undefined;
-    /** Zotero 10+: the distinct library IDs of every selected row. */
-    getSelectedLibraryIDs?(): number[];
-    /** The focused collection-tree row, or a falsy value when none. Throws on Zotero 10 (see above). */
-    getCollectionTreeRow?(): _ZoteroTypes.CollectionTreeRow | false | 0 | null | undefined;
-    /** Zotero 10+: every selected collection-tree row, in tree order. Safe with any selection. */
-    getCollectionTreeRows?(): _ZoteroTypes.CollectionTreeRow[];
-    itemsView?: _ZoteroTypes.ItemsView;
-  };
+  /** The most recent main window's pane, or `null` when no main window is open. */
+  getActiveZoteroPane(): _ZoteroTypes.ZoteroPane | null;
   Item: new (itemType: string) => _ZoteroTypes.Item;
   Items: {
     get(id: number): _ZoteroTypes.Item | false;
@@ -337,7 +342,6 @@ declare const Zotero: {
 
 declare const ZoteroPane: {
   getSelectedItems(asIDs?: boolean): _ZoteroTypes.Item[];
-  getSelectedCollection(): _ZoteroTypes.Collection | null;
   itemsView?: _ZoteroTypes.ItemsView;
 };
 
