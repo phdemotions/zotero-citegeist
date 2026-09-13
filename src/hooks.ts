@@ -3,8 +3,19 @@
  * Called by bootstrap.js — manages startup, shutdown, and window events.
  */
 
-import { registerCitationColumn, unregisterCitationColumn } from "./modules/citationColumn";
+import {
+  registerCitationColumn,
+  unregisterCitationColumn,
+  invalidateColumnCache,
+} from "./modules/citationColumn";
 import { registerCitationPane, unregisterCitationPane } from "./modules/citationPane";
+import {
+  canResolveWork,
+  fetchAndCacheItems,
+  resolveAuthorsForItems,
+  type AuthorBackfillResult,
+  type FetchBatchResult,
+} from "./modules/citationService";
 import {
   registerMenus,
   unregisterMenus,
@@ -22,7 +33,12 @@ import {
   purgeAllAuthorRelations,
 } from "./modules/cache";
 import { logError } from "./modules/utils";
-import { buildDiagnosticReport, clearDiagnostics, setPluginVersion } from "./modules/diagnostics";
+import {
+  buildDiagnosticReport,
+  clearDiagnostics,
+  guardAsync,
+  setPluginVersion,
+} from "./modules/diagnostics";
 import { PREF_AUTHOR_RELATIONS_PURGED, PREF_LAST_BACKUP_PATH, SETTINGS_PANE_ID } from "./constants";
 
 // Bare FTL filename. Zotero auto-registers the plugin's locale/<locale>/*.ftl
@@ -40,23 +56,79 @@ const FTL_FILE = "citegeist.ftl";
 declare const __BUILD_ID__: string;
 
 /**
- * Expose the diagnostics API on a namespaced global.
+ * Expose Citegeist on the namespaced `Zotero.Citegeist` global.
  *
- * The settings pane is a standalone XHTML document with an inline script — it
- * cannot import from the bundle. Rather than duplicate the report builder
- * there (where it would immediately drift), the pane calls through this one
- * object. Namespaced under `Zotero` so it is reachable from any Zotero
+ * Two callers reach Citegeist without importing the bundle. The settings pane is
+ * a standalone XHTML document with an inline script, so it calls the
+ * diagnostics API through here rather than duplicating the report builder
+ * (where it would immediately drift). The real-Zotero suite (`test/real-zotero/`,
+ * Mocha specs running inside Zotero) waits on `ready` before any spec runs and
+ * drives the fetch and resolve commands by item ID.
+ *
+ * Frozen, and `ready` has no setter, so no caller can flip the flag or swap an
+ * entry point. Namespaced under `Zotero` so it is reachable from any Zotero
  * document, and removed on shutdown so a disabled plugin leaves nothing behind.
  */
-function installDiagnosticsBridge(): void {
-  (Zotero as unknown as Record<string, unknown>).Citegeist = {
+function installBridge(): void {
+  (Zotero as unknown as Record<string, unknown>).Citegeist = Object.freeze({
     buildDiagnosticReport,
     clearDiagnostics,
-  };
+    /** True once startup finished: the cache is open and all cache-dependent UI registered. */
+    get ready(): boolean {
+      return cacheReady;
+    },
+    fetchItems: (itemIDs: unknown) =>
+      guardAsync("bridge fetchItems", () => fetchItemsByID(itemIDs)),
+    resolveAuthors: (itemIDs: unknown) =>
+      guardAsync("bridge resolveAuthors", () => resolveAuthorsByID(itemIDs)),
+  });
 }
 
-function removeDiagnosticsBridge(): void {
+function removeBridge(): void {
   delete (Zotero as unknown as Record<string, unknown>).Citegeist;
+}
+
+/**
+ * The regular items behind `itemIDs` that Citegeist can resolve to an OpenAlex
+ * work — the eligibility the menu commands apply. Anything that is not a
+ * positive integer is dropped before it reaches Zotero.
+ */
+async function resolvableItems(itemIDs: unknown): Promise<_ZoteroTypes.Item[]> {
+  if (!Array.isArray(itemIDs)) return [];
+  const ids = [...new Set(itemIDs.filter((id) => Number.isInteger(id) && id > 0))] as number[];
+  if (ids.length === 0) return [];
+  const items = await Zotero.Items.getAsync(ids);
+  return items.filter((item) => item && canResolveWork(item));
+}
+
+/**
+ * Bridge entry point: the "Fetch Citations" command for explicit item IDs,
+ * including the per-item and final column repaint the menu command performs.
+ * Resolves `undefined` before startup completes, and on any failure (guarded).
+ */
+async function fetchItemsByID(itemIDs: unknown): Promise<FetchBatchResult | undefined> {
+  if (!cacheReady) {
+    Zotero.debug("[Citegeist] Bridge fetchItems ignored: startup has not completed");
+    return undefined;
+  }
+  const items = await resolvableItems(itemIDs);
+  const result = await fetchAndCacheItems(items, undefined, (itemId, status) => {
+    if (status === "ok" || status === "suggestion") void invalidateColumnCache(itemId);
+  });
+  if (items.length > 0) await invalidateColumnCache(items.map((item) => item.id));
+  return result;
+}
+
+/**
+ * Bridge entry point: the "Resolve Author Identities" command for explicit item
+ * IDs. Resolves `undefined` before startup completes, and on any failure.
+ */
+async function resolveAuthorsByID(itemIDs: unknown): Promise<AuthorBackfillResult | undefined> {
+  if (!cacheReady) {
+    Zotero.debug("[Citegeist] Bridge resolveAuthors ignored: startup has not completed");
+    return undefined;
+  }
+  return resolveAuthorsForItems(await resolvableItems(itemIDs));
 }
 
 interface PluginData {
@@ -79,7 +151,7 @@ export async function onStartup(data: PluginData): Promise<void> {
   cacheReady = false;
   setMenuPluginID(pluginID);
   setPluginVersion(data.version);
-  installDiagnosticsBridge();
+  installBridge();
   Zotero.debug(`[Citegeist] Starting v${data.version} (build ${__BUILD_ID__})`);
 
   // Initialize the plugin-owned SQLite cache and warm the in-memory mirror
@@ -260,7 +332,7 @@ function showStartupAlert(title: string, body: string): void {
 export async function onShutdown(_data: PluginData): Promise<void> {
   Zotero.debug("[Citegeist] Shutting down");
   cacheReady = false;
-  removeDiagnosticsBridge();
+  removeBridge();
 
   const win = Zotero.getMainWindow() as Window | null;
   // Each UI-teardown step is best-effort: a throw in any one of them must not
