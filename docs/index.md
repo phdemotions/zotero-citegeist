@@ -40,6 +40,7 @@ JOSS-exempt.
 - [SQLite cache migration (feat)](plans/2026-05-27-001-feat-sqlite-cache-migration-plan.md)
 - [MenuManager registration lifecycle (fix)](plans/2026-07-06-001-fix-menu-manager-registration-lifecycle-plan.md)
 - [Author identity layer (feat)](plans/2026-07-16-001-feat-author-identity-layer-plan.md)
+- [Zotero 10 compatibility, host bugs, Zotero-version gate (fix)](plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md)
 
 ## Brainstorms & ideation
 
