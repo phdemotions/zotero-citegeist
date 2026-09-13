@@ -2,8 +2,8 @@
 type: checklist
 title: Citegeist — release gate checklist
 description: Manual verification gates that must pass before tagging any v* release.
-timestamp: 2026-08-02
-tags: [citegeist, release, checklist, quality-gate]
+timestamp: 2026-09-13
+tags: [citegeist, release, checklist, quality-gate, review-loop]
 ---
 
 # Citegeist — Release Gate Checklist
@@ -25,6 +25,47 @@ the automated gate.
 Each check below is tied to a **known failure mode** — this is a regression
 gate, not a formality. Install the **built XPI** (`npm run build`), not a proxy
 file (proxy install is unreliable in practice).
+
+---
+
+## Review loop — every code change, before merge
+
+The maintainer runs this on every pull request that changes code, and posts the
+round log as a comment on the pull request. Outside contributors are not asked to
+run it. It is the bar #77 cleared before merge, written down so every change
+meets it.
+
+**Lenses, one finder each:**
+
+- **Correctness** — logic errors, edge cases, intent versus implementation.
+- **Adversarial** — construct the input or sequence that breaks the change.
+- **Security** — the API key, redaction, the update channel, CI tokens.
+- **Reliability** — shutdown, timers, unawaited promises, retries, cleanup.
+- **Host compatibility** — every Zotero or Firefox API the change touches,
+  checked against Zotero's own source. The finding names the source file and
+  the Zotero tag it was read at, such as `chrome/content/zotero/xpcom/pluginAPI/menuManager.js`
+  at `10.0.2`.
+- **Testing** — missing scenarios, weak assertions, mocks hiding a host contract.
+- **Maintainability** — duplication, dead code, names that hide intent.
+
+**Each round:**
+
+1. Every finder reviews the full diff and reports findings with a quoted line
+   of evidence and a severity from P0 to P3.
+2. Each finding goes to a separate verifier told to refute it. Only findings the
+   verifier fails to refute count as confirmed.
+3. Fix every confirmed P0, P1 and P2 finding before the next round starts.
+
+**Exit rule:** the loop ends after **two consecutive full rounds with no
+confirmed P2 or higher finding**. A confirmed P0 or P1 resets the count to zero.
+
+**Round log** (one line per round in the pull request comment):
+
+```text
+Round 3 · 7 lenses · raised 9, confirmed 2 (P2 ×1, P3 ×1) · fixed in 1a2b3c4 · not clean
+Round 4 · 7 lenses · raised 4, confirmed 0 · clean (1 of 2)
+Round 5 · 7 lenses · raised 3, confirmed 1 (P3 ×1) · clean (2 of 2) · exit
+```
 
 ---
 
