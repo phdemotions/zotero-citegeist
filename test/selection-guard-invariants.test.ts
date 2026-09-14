@@ -2,7 +2,7 @@
  * Guard for reading the Zotero selection.
  *
  * Two host facts make a stray selection read a bug that shows only on a real
- * Zotero. On Zotero 10 the singular collection-tree getters throw on a multi-row
+ * Zotero. On Zotero 10 the singular selection getters throw on a multi-row
  * selection and otherwise log a removed-API warning, on release and beta builds
  * alike. And `Zotero.getActiveZoteroPane()` is the most recent window's pane,
  * while Zotero's own context menus act on the right-clicked window's.
@@ -14,30 +14,32 @@
  * failure mode is a call that exists, which no mocked runtime test observes. The
  * scan runs on the TypeScript AST (test/_helpers/sourceGuard.ts), so a comment or
  * a string can neither hide a read nor fake one, and an exemption names the
- * function and member it covers rather than a line.
+ * function and member it covers rather than a line. Every way of reaching a
+ * member (brackets, destructuring, aliases, keys held in constants) is covered
+ * by the scanner's own tests in sourceGuard.test.ts; this file tests the rules.
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import {
-  ACCESS_FORMS,
   allowanceMismatches,
   describeHit,
   readRepoFile,
   repoSources,
   scanSources,
   unallowedHits,
-  type AccessForm,
   type Allowance,
   type GuardSpec,
-  type ScanOptions,
   type SourceHit,
 } from "./_helpers/sourceGuard";
 
 const SELECTION_MODULE = "src/modules/host/selection.ts";
 
-/** Zotero 10's singular getters and context field: each throws on a multi-row selection. */
+/** Singular getters and context fields: each throws on a multi-row selection on Zotero 10. */
 const SINGULAR_READS = [
   "getSelectedCollection",
   "getSelectedLibraryID",
+  "getSelectedSavedSearch",
+  "getSelectedSearch",
+  "getSelectedGroup",
   "getCollectionTreeRow",
   "collectionTreeRow",
 ];
@@ -46,6 +48,8 @@ const SINGULAR_READS = [
 const OTHER_READS = [
   "getSelectedCollections",
   "getSelectedLibraryIDs",
+  "getSelectedSavedSearches",
+  "getSelectedSearches",
   "getCollectionTreeRows",
   "collectionTreeRows",
   "getSelectedItems",
@@ -72,14 +76,14 @@ const SINGULAR_FALLBACKS: readonly Allowance[] = [
     fn: "collectionTargetsFromPane",
     member: "getCollectionTreeRow",
     count: 2,
-    why: "Zotero 7 to 9 panes: a typeof check, then the call, only when getCollectionTreeRows is absent",
+    why: "DOM fallback panes without getCollectionTreeRows: a typeof check, then the call",
   },
   {
     file: SELECTION_MODULE,
     fn: "selectedCollectionsFromPane",
     member: "getSelectedCollection",
     count: 2,
-    why: "Zotero 7 to 9 panes: a typeof check, then the call, only when getSelectedCollections is absent",
+    why: "Zotero 8 and 9 panes: a typeof check, then the call, only when getSelectedCollections is absent",
   },
 ];
 
@@ -106,14 +110,11 @@ function split(sources: Readonly<Record<string, string>>): {
 }
 
 /** Every selection read in `sources` that the rules above do not allow. */
-function selectionViolations(
-  sources: Readonly<Record<string, string>>,
-  options?: ScanOptions,
-): SourceHit[] {
+function selectionViolations(sources: Readonly<Record<string, string>>): SourceHit[] {
   const { inModule, outside } = split(sources);
   return [
-    ...unallowedHits(scanSources(inModule, SINGULAR, options), SINGULAR_FALLBACKS),
-    ...unallowedHits(scanSources(outside, ANY_SELECTION_READ, options), OUTSIDE_ALLOWED),
+    ...unallowedHits(scanSources(inModule, SINGULAR), SINGULAR_FALLBACKS),
+    ...unallowedHits(scanSources(outside, ANY_SELECTION_READ), OUTSIDE_ALLOWED),
   ];
 }
 
@@ -172,177 +173,72 @@ describe("the Zotero selection is read only in src/modules/host/selection.ts", (
   });
 });
 
-describe("the selection guard catches every way around it", () => {
+/**
+ * Every getter Zotero 10 routes through `_requireSingleSelection`, which throws
+ * for a multi-row selection and warns for one, and the menu context field that
+ * does the same. Listed from the host source, not from SINGULAR_READS, so a
+ * name dropped from the guard fails here:
+ * zoteroPane.js@10.0.2 getCollectionTreeRow 2198, getSelectedLibraryID 3486,
+ * getSelectedCollection 3505, getSelectedSavedSearch 3517, getSelectedGroup 3530,
+ * menu context collectionTreeRow 4139 and 4690;
+ * collectionTree.jsx@10.0.2 (`_requireSingleSelection` 1420) getSelectedLibraryID
+ * 1428, getSelectedCollection 1452, getSelectedSearch 1469, getSelectedGroup 1487.
+ */
+const ZOTERO_10_SINGLE_SELECTION_READS = [
+  "getCollectionTreeRow",
+  "getSelectedLibraryID",
+  "getSelectedCollection",
+  "getSelectedSavedSearch",
+  "getSelectedGroup",
+  "getSelectedSearch",
+  "collectionTreeRow",
+] as const;
+
+describe("every single-selection read Zotero 10 retired is guarded as singular", () => {
+  it.each(ZOTERO_10_SINGLE_SELECTION_READS)(
+    "%s is flagged in the selection module outside its fallbacks, and in any other module",
+    (member) => {
+      const source = `export function read(pane: Pane) {\n  return pane.${member};\n}`;
+      expect(selectionViolations({ [SELECTION_MODULE]: source }).map((h) => h.member)).toEqual([
+        member,
+      ]);
+      expect(
+        selectionViolations({ "src/modules/fixture.ts": source }).map((h) => h.member),
+      ).toEqual([member]);
+    },
+  );
+});
+
+describe("the allowances cover their sites and nothing else", () => {
   const FIXTURE_FILE = "src/modules/fixture.ts";
 
-  interface Evasion {
-    readonly name: string;
-    /** Scanned as this file; an ordinary module by default. */
-    readonly file?: string;
-    readonly source: string;
-    readonly member: string;
-    /** The forms that must flag it, and without which it goes unflagged. */
-    readonly forms: readonly AccessForm[];
-  }
-
-  const EVASIONS: readonly Evasion[] = [
-    {
-      name: "a direct call",
-      source: "export const col = pane.getSelectedCollection();",
-      member: "getSelectedCollection",
-      forms: ["property"],
-    },
-    {
-      name: "an optional call",
-      source: "export const row = pane?.getCollectionTreeRow?.();",
-      member: "getCollectionTreeRow",
-      forms: ["property"],
-    },
-    {
-      name: "a context field",
-      source: "export const row = ctx.collectionTreeRow;",
-      member: "collectionTreeRow",
-      forms: ["property"],
-    },
-    {
-      name: "an alias made with bind",
-      source: "export const read = pane.getSelectedLibraryID.bind(pane);",
-      member: "getSelectedLibraryID",
-      forms: ["property"],
-    },
-    {
-      name: "an alias made by assignment",
-      source: "let read: unknown;\nread = pane.getCollectionTreeRow;",
-      member: "getCollectionTreeRow",
-      forms: ["property"],
-    },
-    {
-      name: "bracket access",
-      source: 'export const row = pane["getCollectionTreeRow"]();',
-      member: "getCollectionTreeRow",
-      forms: ["element"],
-    },
-    {
-      name: "optional bracket access with a template key",
-      source: "export const col = pane?.[`getSelectedCollection`]?.();",
-      member: "getSelectedCollection",
-      forms: ["element"],
-    },
-    {
-      name: "bracket access with a concatenated key",
-      source: 'export const id = pane["getSelected" + "LibraryID"]();',
-      member: "getSelectedLibraryID",
-      forms: ["element"],
-    },
-    {
-      name: "a key held in a constant",
-      source: 'const key = "getCollectionTreeRow";\nexport const row = pane[key]();',
-      member: "getCollectionTreeRow",
-      forms: ["string", "element"],
-    },
-    {
-      name: "Reflect.get",
-      source: 'export const read = Reflect.get(pane, "getSelectedCollection");',
-      member: "getSelectedCollection",
-      forms: ["element"],
-    },
-    {
-      name: "an in check on the context",
-      source: 'export const has = "collectionTreeRow" in ctx;',
-      member: "collectionTreeRow",
-      forms: ["element"],
-    },
-    {
-      name: "destructuring",
-      source:
-        "const { getSelectedCollection } = pane;\nexport const col = getSelectedCollection();",
-      member: "getSelectedCollection",
-      forms: ["destructuring"],
-    },
-    {
-      name: "renamed destructuring",
-      source: "const { getCollectionTreeRow: read } = pane;",
-      member: "getCollectionTreeRow",
-      forms: ["destructuring"],
-    },
-    {
-      name: "destructuring a parameter",
-      source: "export function rowOf({ collectionTreeRow }: Ctx) {\n  return collectionTreeRow;\n}",
-      member: "collectionTreeRow",
-      forms: ["destructuring"],
-    },
-    {
-      name: "destructuring assignment",
-      source: "let read: unknown;\n({ getSelectedLibraryID: read } = pane);",
-      member: "getSelectedLibraryID",
-      forms: ["destructuring-assignment"],
-    },
-    {
-      name: "code after a line comment holding /*",
-      source:
-        "// a stray /* in a line comment\nexport const col = pane.getSelectedCollection();\n// closes */",
-      member: "getSelectedCollection",
-      forms: ["property"],
-    },
-    {
-      name: "code between strings holding /* and */",
-      source:
-        'const open = "/*";\nexport const row = pane.getCollectionTreeRow();\nconst close = "*/";',
-      member: "getCollectionTreeRow",
-      forms: ["property"],
-    },
-    {
-      name: "code on a line that a template string starts with //",
-      source: "const note = `\n// `; export const col = pane.getSelectedCollection();",
-      member: "getSelectedCollection",
-      forms: ["property"],
-    },
-    {
-      name: "a read on the same line as an allowed one",
-      file: "src/modules/citationColumn.ts",
-      source:
-        "function scheduleColumnRepaint(): void {\n  const view = Zotero.getActiveZoteroPane()?.itemsView; const col = pane.getSelectedCollection();\n}",
-      member: "getSelectedCollection",
-      forms: ["property"],
-    },
-    {
-      name: "a second read of the allowed member in the allowed function",
-      file: "src/modules/citationColumn.ts",
-      source:
-        "function scheduleColumnRepaint(): void {\n  const view = Zotero.getActiveZoteroPane()?.itemsView;\n  const pane = Zotero.getActiveZoteroPane();\n}",
-      member: "getActiveZoteroPane",
-      forms: ["property"],
-    },
-    {
-      name: "a singular read in the selection module outside its fallbacks",
-      file: SELECTION_MODULE,
-      source:
-        "export function defaultCollection(pane: Pane) {\n  return pane.getSelectedCollection();\n}",
-      member: "getSelectedCollection",
-      forms: ["property"],
-    },
-    {
-      name: "a plural read outside the selection module",
-      source: "export const rows = pane.getCollectionTreeRows();",
-      member: "getCollectionTreeRows",
-      forms: ["property"],
-    },
-  ];
-
-  const cases = EVASIONS.map((evasion) => [evasion.name, evasion] as const);
-  const flaggedForms = (evasion: Evasion, options?: ScanOptions) =>
-    selectionViolations({ [evasion.file ?? FIXTURE_FILE]: evasion.source }, options)
-      .filter((hit) => hit.member === evasion.member)
-      .map((hit) => hit.form)
-      .sort();
-
-  it.each(cases)("flags %s", (_name, evasion) => {
-    expect(flaggedForms(evasion)).toEqual([...evasion.forms].sort());
-  });
-
-  it.each(cases)("%s goes unflagged without the detectors that catch it", (_name, evasion) => {
-    const without = new Set(ACCESS_FORMS.filter((form) => !evasion.forms.includes(form)));
-    expect(flaggedForms(evasion, { forms: without })).toEqual([]);
+  it.each<[string, string, string, string]>([
+    [
+      "a read on the same line as an allowed one",
+      "src/modules/citationColumn.ts",
+      "function scheduleColumnRepaint(): void {\n  const view = Zotero.getActiveZoteroPane()?.itemsView; const col = pane.getSelectedCollection();\n}",
+      "getSelectedCollection",
+    ],
+    [
+      "a second read of the allowed member in the allowed function",
+      "src/modules/citationColumn.ts",
+      "function scheduleColumnRepaint(): void {\n  const view = Zotero.getActiveZoteroPane()?.itemsView;\n  const pane = Zotero.getActiveZoteroPane();\n}",
+      "getActiveZoteroPane",
+    ],
+    [
+      "a singular read in the selection module outside its fallbacks",
+      SELECTION_MODULE,
+      "export function defaultCollection(pane: Pane) {\n  return pane.getSelectedCollection();\n}",
+      "getSelectedCollection",
+    ],
+    [
+      "a plural read outside the selection module",
+      FIXTURE_FILE,
+      "export const rows = pane.getCollectionTreeRows();",
+      "getCollectionTreeRows",
+    ],
+  ])("flags %s", (_name, file, source, member) => {
+    expect(selectionViolations({ [file]: source }).map((hit) => hit.member)).toEqual([member]);
   });
 
   it("flags nothing that only names a getter: plural reads in the selection module, comments, strings and types", () => {

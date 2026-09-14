@@ -21,8 +21,8 @@
  * metered OpenAlex budget.
  */
 
-import { recentDiagnostics } from "../diagnostics";
-import { CitegeistError, logError, normalizeError, redactSensitive } from "../utils";
+import { logErrorUnlessBuffered } from "../diagnostics";
+import { CitegeistError } from "../utils";
 
 /** What a batch collection action runs on. A library target covers the whole library. */
 export type CollectionTarget =
@@ -54,9 +54,10 @@ export function selectedItemsInWindow(win: Window | null | undefined): _ZoteroTy
  * Targets for the collection menu's MenuManager handlers.
  *
  * Reads `collectionTreeRows` where the context has it (Zotero 10) and
- * `collectionTreeRow` otherwise (Zotero 8 and 9). The singular field is never
- * touched when the plural one exists: on Zotero 10 it throws for a multi-row
- * selection.
+ * `collectionTreeRow` otherwise (Zotero 8 and 9, which have no plural field). The
+ * singular field is never touched when the plural one exists: on Zotero 10 it is
+ * a getter that throws for a multi-row selection and logs a removed-API warning
+ * for one row (zoteroPane.js@10.0.2, 4138-4151).
  *
  * Returns `null` when the entries should be hidden and nothing started: an empty
  * selection, an unsupported row or mix of rows, or a context that can't be read
@@ -72,6 +73,7 @@ export function collectionTargetsFromMenuContext(
       ? targetsForRows(plural)
       : reportUnreadable(MENU, "menu context collectionTreeRows is not an array");
   }
+  // Zotero 8 and 9 contexts: remove when the Zotero floor is 10.
   const singular = attempt(() =>
     ctx && "collectionTreeRow" in ctx ? { row: ctx.collectionTreeRow } : null,
   );
@@ -86,10 +88,10 @@ export function collectionTargetsFromMenuContext(
 }
 
 /**
- * Targets for the DOM menu path, which has no MenuManager context: Zotero 7,
- * and Zotero 8+ when MenuManager rejects the registration.
+ * Targets for the DOM menu fallback, which has no MenuManager context (see
+ * `menu/registration.ts` for when it runs).
  *
- * DOM path only; delete with registerViaDOM (U9).
+ * Zotero 7 DOM fallback: delete with registerViaDOM (U9)
  *
  * Reads the pane's collection-tree rows, so the row type decides exactly as it
  * does on the MenuManager path. `getCollectionTreeRows()` is used where it
@@ -144,6 +146,7 @@ export function selectedCollectionsFromPane(
       ? collections
       : (reportUnreadable(DIALOG, "pane getSelectedCollections did not return an array") ?? []);
   }
+  // Zotero 8 and 9 panes, which have no plural getter: remove when the Zotero floor is 10.
   if (typeof pane.getSelectedCollection !== "function") {
     return (
       reportUnreadable(
@@ -245,30 +248,14 @@ function isCollection(value: unknown): value is _ZoteroTypes.Collection {
 }
 
 /**
- * Record CG-UI02, unless the same failure is still in the diagnostics buffer:
- * the same surface (`context`) and the same failed read (`detail`). The menu
- * opens many times, and a repeat of one host-contract break would push older,
- * more useful entries out of the buffer. A different failed read, or a read
- * failing on the other surface, is a separate fact about the host and records
- * its own entry. Once an entry has aged out (or the user cleared the buffer),
- * the same failure records again, so a report never hides a failure that is
- * still happening.
+ * Record CG-UI02 for a selection that can't be read, once while the entry is
+ * still in the diagnostics buffer: the menu opens many times, and each surface
+ * (`context`) and each failed read (`detail`) is its own fact about the host.
  *
  * `detail` is a fixed string naming the read that failed, never host error text:
  * a Zotero error message could carry a collection name into the shareable report.
- * The comparison uses the context and detail exactly as `logError` stores them
- * (redacted and normalized), so it matches what an earlier call recorded.
  */
 function reportUnreadable(context: string, detail: string): null {
-  const error = new CitegeistError(detail, "CG-UI02");
-  const recordedContext = redactSensitive(context);
-  const recordedDetail = normalizeError(error);
-  const alreadyRecorded = recentDiagnostics().some(
-    (entry) =>
-      entry.code === "CG-UI02" &&
-      entry.context === recordedContext &&
-      entry.detail === recordedDetail,
-  );
-  if (!alreadyRecorded) logError(context, error);
+  logErrorUnlessBuffered(context, new CitegeistError(detail, "CG-UI02"));
   return null;
 }

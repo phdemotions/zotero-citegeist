@@ -13,7 +13,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeDb, mockZotero, resetCacheHarness } from "./_helpers/cacheHarness";
-import { FakeDocument, type FakeElement } from "./_helpers/fakeDom";
+import { FakePaneDocument, type FakePaneElement } from "./_helpers/fakeDom";
 import type * as OpenAlexModule from "../src/modules/openalex";
 import type * as OpenAlexAuthorsModule from "../src/modules/openalexAuthors";
 
@@ -81,7 +81,7 @@ const SUGGESTION = {
 };
 
 interface PaneArgs {
-  body: FakeElement;
+  body: FakePaneElement;
   item: _ZoteroTypes.Item;
   setSectionSummary: (summary: string) => void;
 }
@@ -134,8 +134,8 @@ function paneItem(key: string, fields: Record<string, string> = {}): _ZoteroType
  * A section body holding the `#citegeist-content` container the pane renders
  * into, drawn in `win` when one is given.
  */
-function paneBody(item: _ZoteroTypes.Item, win?: Window): PaneArgs & { content: FakeElement } {
-  const doc = new FakeDocument();
+function paneBody(item: _ZoteroTypes.Item, win?: Window): PaneArgs & { content: FakePaneElement } {
+  const doc = new FakePaneDocument();
   if (win) Object.assign(doc, { defaultView: win });
   const body = doc.createElement("div");
   const content = body.appendChild(doc.createElement("div"));
@@ -150,7 +150,7 @@ async function reopenAt(stamp: number): Promise<void> {
   await initCache();
 }
 
-async function suggestionOnScreen(key: string): Promise<PaneArgs & { content: FakeElement }> {
+async function suggestionOnScreen(key: string): Promise<PaneArgs & { content: FakePaneElement }> {
   const item = paneItem(key);
   await writePendingSuggestion(item, SUGGESTION, "high", 0.93);
   const pane = paneBody(item);
@@ -349,7 +349,7 @@ describe("a dialog the pane opens belongs to the pane's own window", () => {
   }
 
   /** Click the pane's "Citing works" button. */
-  async function openCitingWorks(pane: { content: FakeElement }): Promise<void> {
+  async function openCitingWorks(pane: { content: FakePaneElement }): Promise<void> {
     const button = pane.content
       .querySelectorAll("button")
       .find((b) => b.textContent.startsWith("Citing works"));
@@ -358,7 +358,7 @@ describe("a dialog the pane opens belongs to the pane's own window", () => {
   }
 
   /** Click the pane's first author row, once the async author region has drawn it. */
-  async function openAuthorWorks(pane: { content: FakeElement }): Promise<void> {
+  async function openAuthorWorks(pane: { content: FakePaneElement }): Promise<void> {
     await vi.waitFor(() => expect(pane.content.querySelector(".cg-authorrow")).not.toBeNull());
     await pane.content.querySelector(".cg-authorrow")!.click();
   }

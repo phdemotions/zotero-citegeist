@@ -9,8 +9,8 @@
  * before they're asked.
  *
  * Layering (no cycles): `codes` imports nothing · `record` imports constants ·
- * `utils` imports both and is the single funnel that records · `guard` and
- * `report` sit on top.
+ * `utils` imports both and is the single funnel that records · `guard`,
+ * `logOnce` and `report` sit on top.
  */
 
 export {
@@ -29,5 +29,6 @@ export {
 } from "./record";
 export { setSessionCondition, sessionConditions } from "./status";
 export { guard, guardAsync, bindGuarded, type GuardFallback } from "./guard";
+export { logErrorUnlessBuffered } from "./logOnce";
 export { buildDiagnosticReport, setPluginVersion, type ReportContext } from "./report";
 export { buildDiagnosticElement, copyToClipboard, showCodedNotice } from "./surface";

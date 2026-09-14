@@ -1,6 +1,13 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { PREF_AUTHOR_RELATIONS_PURGED, PREF_LAST_BACKUP_PATH } from "../src/constants";
+import {
+  CACHE_READ_ONLY_HEADLINE,
+  PREF_AUTHOR_RELATIONS_PURGED,
+  PREF_LAST_BACKUP_PATH,
+} from "../src/constants";
 import { ZOTERO_PREF_BRANCH, makeFakePrefs, type FakePrefs } from "./_helpers/fakePrefs";
+import { MODULE_LOAD_TIMEOUT_MS, backfillResult, batchResult } from "./_helpers/menuHarness";
 
 const cacheMocks = vi.hoisted(() => ({
   initCache: vi.fn(async () => {}),
@@ -38,26 +45,6 @@ const openAlexAuthorsMocks = vi.hoisted(() => ({
   clearAuthorProfileCache: vi.fn(),
 }));
 
-const BATCH = {
-  fresh: 1,
-  cached: 0,
-  suggestion: 0,
-  errors: 0,
-  budgetStopped: 0,
-  authStopped: 0,
-  unwritableStopped: 0,
-};
-const BACKFILL = {
-  resolved: 1,
-  already: 0,
-  unresolved: 0,
-  budgetStopped: 0,
-  authStopped: 0,
-  unwritableStopped: 0,
-  errors: 0,
-  cancelled: false,
-};
-
 type FakeItem = { id: number; resolvable: boolean };
 
 const serviceMocks = vi.hoisted(() => ({
@@ -79,11 +66,24 @@ vi.mock("../src/modules/menu", () => menuMocks);
 vi.mock("../src/modules/openalex", () => openAlexMocks);
 vi.mock("../src/modules/openalexAuthors", () => openAlexAuthorsMocks);
 vi.mock("../src/modules/citationService", () => serviceMocks);
+// The real batch actions, with the shared fetch wrapped in a spy, so a test can
+// see the bridge run the same fetch the menu commands run.
+vi.mock("../src/modules/menu/batchActions", async (importOriginal) => {
+  const actual = await importOriginal<typeof BatchActionsModule>();
+  return { ...actual, fetchItemsAndRepaint: vi.fn(actual.fetchItemsAndRepaint) };
+});
+
+import type * as BatchActionsModule from "../src/modules/menu/batchActions";
+import type * as HooksModule from "../src/hooks";
+
+type Hooks = typeof HooksModule;
 
 const STARTUP = { id: "citegeist@opusvita.org", version: "2.0.0", rootURI: "root/", reason: 1 };
 
+let hooks: Hooks;
+
 describe("hooks", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
     vi.stubGlobal("Services", {
@@ -108,7 +108,8 @@ describe("hooks", () => {
       getMainWindow: vi.fn(() => mainWindow),
       getMainWindows: vi.fn(() => [mainWindow]),
     });
-  });
+    hooks = await import("../src/hooks");
+  }, MODULE_LOAD_TIMEOUT_MS);
 
   it("shows one non-modal coded notice when the cache opened read-only, and no alert", async () => {
     cacheMocks.cacheWriteRefusalCode.mockReturnValueOnce("CG-DB03");
@@ -122,12 +123,14 @@ describe("hooks", () => {
       return notice;
     });
     (Zotero as unknown as { ProgressWindow: unknown }).ProgressWindow = ProgressWindow;
-    const { onStartup } = await import("../src/hooks");
 
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     expect(ProgressWindow).toHaveBeenCalledTimes(1);
     expect(notice.changeHeadline).toHaveBeenCalledWith(expect.stringContaining("CG-DB03"));
+    expect(notice.changeHeadline).toHaveBeenCalledWith(
+      expect.stringContaining(CACHE_READ_ONLY_HEADLINE),
+    );
     expect(notice.addDescription).toHaveBeenCalledWith(
       expect.stringContaining("written by a newer version of Citegeist"),
     );
@@ -138,9 +141,7 @@ describe("hooks", () => {
   });
 
   it("does not show a migration-complete alert on fresh installs with no candidates", async () => {
-    const { onStartup } = await import("../src/hooks");
-
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     expect(cacheMocks.migrateFromExtraV1).toHaveBeenCalled();
     expect(Services.prompt.alert).not.toHaveBeenCalled();
@@ -148,10 +149,9 @@ describe("hooks", () => {
 
   it("keeps cache-dependent UI disabled when cache startup fails", async () => {
     cacheMocks.initCache.mockRejectedValueOnce(new Error("locked"));
-    const { onStartup, onMainWindowLoad } = await import("../src/hooks");
 
-    await onStartup(STARTUP);
-    onMainWindowLoad({ document: { getElementById: vi.fn() } } as unknown as Window);
+    await hooks.onStartup(STARTUP);
+    hooks.onMainWindowLoad({ document: { getElementById: vi.fn() } } as unknown as Window);
 
     expect(Zotero.PreferencePanes.register).toHaveBeenCalled();
     expect(columnMocks.registerCitationColumn).not.toHaveBeenCalled();
@@ -166,10 +166,9 @@ describe("hooks", () => {
 
   it("fails closed when Zotero rejects runtime UI registration", async () => {
     columnMocks.registerCitationColumn.mockRejectedValueOnce(new Error("column failed"));
-    const { onStartup, onMainWindowLoad } = await import("../src/hooks");
 
-    await onStartup(STARTUP);
-    onMainWindowLoad({ document: { getElementById: vi.fn() } } as unknown as Window);
+    await hooks.onStartup(STARTUP);
+    hooks.onMainWindowLoad({ document: { getElementById: vi.fn() } } as unknown as Window);
 
     expect(cacheMocks.closeCache).toHaveBeenCalled();
     expect(columnMocks.unregisterCitationColumn).toHaveBeenCalled();
@@ -182,13 +181,37 @@ describe("hooks", () => {
     );
   });
 
+  it("takes the menus down in every window and in MenuManager when a later window's menus fail to register", async () => {
+    const windows = [{}, {}, {}] as unknown as Window[];
+    vi.mocked(Zotero.getMainWindows).mockReturnValue(windows);
+    menuMocks.registerMenus.mockImplementation((win: Window) => {
+      if (win === windows[1]) throw new Error("the item popup is missing");
+    });
+
+    await hooks.onStartup(STARTUP);
+
+    expect(menuMocks.registerMenus.mock.calls.map(([w]) => windows.indexOf(w))).toEqual([0, 1]);
+    expect(menuMocks.unregisterMenus.mock.calls.map(([w]) => windows.indexOf(w))).toEqual([
+      0, 1, 2,
+    ]);
+    expect(menuMocks.unregisterGlobalMenus).toHaveBeenCalledTimes(1);
+    expect(paneMocks.unregisterCitationPane).toHaveBeenCalledTimes(1);
+    expect(columnMocks.unregisterCitationColumn).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.closeCache).toHaveBeenCalledTimes(1);
+    expect(Services.prompt.alert).toHaveBeenCalledWith(
+      expect.anything(),
+      "Citegeist: UI unavailable",
+      expect.anything(),
+    );
+    expect((Zotero as unknown as { Citegeist: { ready: boolean } }).Citegeist.ready).toBe(false);
+  });
+
   it("closes the cache even when UI unregister throws", async () => {
     columnMocks.unregisterCitationColumn.mockImplementationOnce(() => {
       throw new Error("column unregister failed");
     });
-    const { onShutdown } = await import("../src/hooks");
 
-    await onShutdown(STARTUP);
+    await hooks.onShutdown(STARTUP);
 
     expect(cacheMocks.closeCache).toHaveBeenCalled();
   });
@@ -197,9 +220,8 @@ describe("hooks", () => {
     const insertFTLIfNeeded = vi.fn();
     const windows = [1, 2].map(() => ({ MozXULElement: { insertFTLIfNeeded } }));
     vi.mocked(Zotero.getMainWindows).mockReturnValue(windows as unknown as Window[]);
-    const { onStartup } = await import("../src/hooks");
 
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     expect(menuMocks.registerMenus).toHaveBeenCalledTimes(2);
     expect(menuMocks.registerMenus.mock.calls[0][0]).toBe(windows[0]);
@@ -213,9 +235,8 @@ describe("hooks", () => {
     menuMocks.unregisterMenus.mockImplementationOnce(() => {
       throw new Error("window is closing");
     });
-    const { onShutdown } = await import("../src/hooks");
 
-    await onShutdown(STARTUP);
+    await hooks.onShutdown(STARTUP);
 
     expect(menuMocks.unregisterMenus.mock.calls.map(([w]) => windows.indexOf(w))).toEqual([
       0, 1, 2,
@@ -228,13 +249,36 @@ describe("hooks", () => {
     vi.mocked(Zotero.getMainWindows).mockImplementation(() => {
       throw new Error("no window mediator");
     });
-    const { onShutdown } = await import("../src/hooks");
 
-    await onShutdown(STARTUP);
+    await hooks.onShutdown(STARTUP);
 
     expect(menuMocks.unregisterMenus).not.toHaveBeenCalled();
     expect(menuMocks.unregisterGlobalMenus).toHaveBeenCalledTimes(1);
     expect(cacheMocks.closeCache).toHaveBeenCalled();
+  });
+});
+
+describe("the read-only cache headline", () => {
+  function srcFiles(dir = "src"): string[] {
+    const abs = fileURLToPath(new URL(`../${dir}`, import.meta.url));
+    return readdirSync(abs, { withFileTypes: true }).flatMap((entry) => {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) return srcFiles(rel);
+      return entry.name.endsWith(".ts") ? [rel] : [];
+    });
+  }
+
+  it("is written once, in src/constants.ts, so the startup notice and the batch summaries cannot drift apart", () => {
+    const read = (rel: string) =>
+      readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), "utf8");
+    const files = srcFiles();
+    expect(files.length, "expected to scan the whole src tree").toBeGreaterThan(20);
+    expect(files.filter((f) => read(f).includes(CACHE_READ_ONLY_HEADLINE))).toEqual([
+      "src/constants.ts",
+    ]);
+    for (const user of ["src/hooks.ts", "src/modules/menu/batchActions.ts"]) {
+      expect(read(user), `${user} uses the constant`).toContain("CACHE_READ_ONLY_HEADLINE");
+    }
   });
 });
 
@@ -254,8 +298,11 @@ describe("Zotero.Citegeist bridge", () => {
   };
   const bridge = () => (Zotero as unknown as { Citegeist?: Bridge }).Citegeist;
   const fakeItem = (id: number): FakeItem => ({ id, resolvable: id !== 99 });
+  const BATCH = batchResult({ fresh: 1 });
+  const BACKFILL = backfillResult({ resolved: 1 });
+  let sharedFetch: typeof BatchActionsModule.fetchItemsAndRepaint;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
     serviceMocks.fetchAndCacheItems.mockResolvedValue(BATCH);
@@ -269,11 +316,12 @@ describe("Zotero.Citegeist bridge", () => {
       getMainWindow: vi.fn(() => null),
       getMainWindows: vi.fn(() => []),
     });
-  });
+    hooks = await import("../src/hooks");
+    ({ fetchItemsAndRepaint: sharedFetch } = await import("../src/modules/menu/batchActions"));
+  }, MODULE_LOAD_TIMEOUT_MS);
 
   it("keeps the diagnostics API the settings pane calls", async () => {
-    const { onStartup } = await import("../src/hooks");
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     expect(typeof bridge()?.buildDiagnosticReport).toBe("function");
     expect(typeof bridge()?.clearDiagnostics).toBe("function");
@@ -284,37 +332,33 @@ describe("Zotero.Citegeist bridge", () => {
     columnMocks.registerCitationColumn.mockImplementationOnce(async () => {
       readyMidStartup = bridge()?.ready;
     });
-    const { onStartup, onShutdown } = await import("../src/hooks");
 
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
     expect(readyMidStartup).toBe(false);
     expect(bridge()?.ready).toBe(true);
 
-    await onShutdown(STARTUP);
+    await hooks.onShutdown(STARTUP);
     expect(bridge()).toBeUndefined();
   });
 
   it("never reports ready when the cache fails to open", async () => {
     cacheMocks.initCache.mockRejectedValueOnce(new Error("locked"));
-    const { onStartup } = await import("../src/hooks");
 
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     expect(bridge()?.ready).toBe(false);
   });
 
   it("never reports ready when Zotero rejects a UI registration", async () => {
     columnMocks.registerCitationColumn.mockRejectedValueOnce(new Error("column failed"));
-    const { onStartup } = await import("../src/hooks");
 
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     expect(bridge()?.ready).toBe(false);
   });
 
   it("cannot be flipped or rewired by a caller", async () => {
-    const { onStartup } = await import("../src/hooks");
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
     const b = bridge() as Bridge;
 
     expect(Object.isFrozen(b)).toBe(true);
@@ -327,13 +371,14 @@ describe("Zotero.Citegeist bridge", () => {
     expect(b.ready).toBe(true);
   });
 
-  it("fetchItems fetches the resolvable items and repaints their columns", async () => {
-    const { onStartup } = await import("../src/hooks");
-    await onStartup(STARTUP);
+  it("fetchItems runs the menu commands' fetch on the resolvable items, repaints their columns, and returns its result", async () => {
+    await hooks.onStartup(STARTUP);
 
     const result = await bridge()?.fetchItems([11, 12, 99]);
 
     expect(Zotero.Items.getAsync).toHaveBeenCalledWith([11, 12, 99]);
+    expect(sharedFetch).toHaveBeenCalledTimes(1);
+    expect(sharedFetch).toHaveBeenCalledWith([fakeItem(11), fakeItem(12)]);
     expect(serviceMocks.fetchAndCacheItems).toHaveBeenCalledWith(
       [fakeItem(11), fakeItem(12)],
       undefined,
@@ -344,8 +389,7 @@ describe("Zotero.Citegeist bridge", () => {
   });
 
   it("fetchItems repaints a row as soon as its data lands, not for failures", async () => {
-    const { onStartup } = await import("../src/hooks");
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
     await bridge()?.fetchItems([11]);
     const onItemDone = serviceMocks.fetchAndCacheItems.mock.calls[0][2];
     columnMocks.invalidateColumnCache.mockClear();
@@ -358,8 +402,7 @@ describe("Zotero.Citegeist bridge", () => {
   });
 
   it("fetchItems drops IDs that are not positive integers before asking Zotero", async () => {
-    const { onStartup } = await import("../src/hooks");
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     await bridge()?.fetchItems([11, 11, "12", -3, 0, 1.5, null]);
     expect(Zotero.Items.getAsync).toHaveBeenCalledWith([11]);
@@ -367,16 +410,11 @@ describe("Zotero.Citegeist bridge", () => {
     vi.mocked(Zotero.Items.getAsync).mockClear();
     await bridge()?.fetchItems("11");
     expect(Zotero.Items.getAsync).not.toHaveBeenCalled();
-    expect(serviceMocks.fetchAndCacheItems).toHaveBeenLastCalledWith(
-      [],
-      undefined,
-      expect.any(Function),
-    );
+    expect(sharedFetch).toHaveBeenLastCalledWith([]);
   });
 
   it("resolveAuthors runs the author backfill for the resolvable items", async () => {
-    const { onStartup } = await import("../src/hooks");
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     const result = await bridge()?.resolveAuthors([21, 99]);
 
@@ -389,9 +427,8 @@ describe("Zotero.Citegeist bridge", () => {
     columnMocks.registerCitationColumn.mockImplementationOnce(async () => {
       pending = Promise.all([bridge()?.fetchItems([11]), bridge()?.resolveAuthors([11])]);
     });
-    const { onStartup } = await import("../src/hooks");
 
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     expect(await pending).toEqual([undefined, undefined]);
     expect(serviceMocks.fetchAndCacheItems).not.toHaveBeenCalled();
@@ -400,8 +437,7 @@ describe("Zotero.Citegeist bridge", () => {
 
   it("contains a failing command: resolves undefined and logs instead of throwing", async () => {
     serviceMocks.fetchAndCacheItems.mockRejectedValueOnce(new Error("boom"));
-    const { onStartup } = await import("../src/hooks");
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     await expect(bridge()?.fetchItems([11])).resolves.toBeUndefined();
     expect(Zotero.debug).toHaveBeenCalledWith(
@@ -411,11 +447,11 @@ describe("Zotero.Citegeist bridge", () => {
 });
 
 /**
- * U18: earlier builds stored Citegeist's one-shot flags under a doubled pref
- * name (`extensions.zotero.extensions.zotero.citegeist.*`). Startup must still
- * see them, or every existing profile repeats work that was meant to happen once.
+ * Earlier builds stored Citegeist's one-shot flags under a doubled pref name
+ * (`extensions.zotero.extensions.zotero.citegeist.*`). Startup must still see
+ * them, or every existing profile repeats work that was meant to happen once.
  */
-describe("startup with flags under the doubled pref name (U18)", () => {
+describe("startup with flags under the doubled pref name", () => {
   let prefs: FakePrefs;
   const doubled = (name: string) => ZOTERO_PREF_BRANCH + name;
   const ready = () => (Zotero as unknown as { Citegeist?: { ready: boolean } }).Citegeist?.ready;
@@ -431,17 +467,17 @@ describe("startup with flags under the doubled pref name (U18)", () => {
     });
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
     vi.stubGlobal("Services", { prompt: { alert: vi.fn() } });
-  });
+    hooks = await import("../src/hooks");
+  }, MODULE_LOAD_TIMEOUT_MS);
 
   it("skips the relation purge when its flag exists only under the doubled name", async () => {
     stubZotero(makeFakePrefs({ user: { [doubled(PREF_AUTHOR_RELATIONS_PURGED)]: true } }));
-    const { onStartup } = await import("../src/hooks");
 
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     expect(cacheMocks.purgeAllAuthorRelations).not.toHaveBeenCalled();
     expect(prefs.user.get(PREF_AUTHOR_RELATIONS_PURGED), "copied to the real name").toBe(true);
@@ -456,9 +492,8 @@ describe("startup with flags under the doubled pref name (U18)", () => {
         },
       }),
     );
-    const { onStartup } = await import("../src/hooks");
 
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     expect(cacheMocks.purgeAllAuthorRelations).toHaveBeenCalledTimes(1);
     expect(prefs.user.get(PREF_AUTHOR_RELATIONS_PURGED)).toBe(true);
@@ -469,9 +504,8 @@ describe("startup with flags under the doubled pref name (U18)", () => {
     prefs.set.mockImplementation(() => {
       throw new Error("prefs.js is locked");
     });
-    const { onStartup } = await import("../src/hooks");
 
-    await expect(onStartup(STARTUP)).resolves.toBeUndefined();
+    await expect(hooks.onStartup(STARTUP)).resolves.toBeUndefined();
 
     expect(
       cacheMocks.purgeAllAuthorRelations,
@@ -494,9 +528,8 @@ describe("startup with flags under the doubled pref name (U18)", () => {
       }),
     );
     cacheMocks.migrateFromExtraV1.mockResolvedValueOnce(true);
-    const { onStartup } = await import("../src/hooks");
 
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     expect(Services.prompt.alert).toHaveBeenCalledWith(
       expect.anything(),
@@ -518,9 +551,8 @@ describe("startup with flags under the doubled pref name (U18)", () => {
       }),
     );
     cacheMocks.migrateFromExtraV1.mockResolvedValueOnce(true);
-    const { onStartup } = await import("../src/hooks");
 
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     const body = vi.mocked(Services.prompt.alert).mock.calls[0]?.[2];
     expect(body).toContain(currentPath);

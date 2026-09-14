@@ -80,6 +80,12 @@ export const PROGRESS_WINDOW_ERROR_CLOSE_MS = 5000;
 /** How long the batch ProgressWindow lingers after a successful summary before auto-closing. */
 export const PROGRESS_WINDOW_DONE_CLOSE_MS = 6000;
 /**
+ * The words for a cache Citegeist can read but must not write (CG-DB03, CG-DB04).
+ * They head the notice startup shows once, and they give the reason a batch
+ * summary names for the items it skipped, so the two read as one condition.
+ */
+export const CACHE_READ_ONLY_HEADLINE = "Citegeist is showing saved data only";
+/**
  * Debounce for the coalesced column repaint. A burst of per-item cache
  * invalidations (a collection/library fetch resolving item by item) collapses
  * into ONE `refreshAndMaintainSelection()` shortly after the last one, so rows

@@ -631,8 +631,8 @@ describe("in-Zotero spec identifiers mirror src/", () => {
     expect(new Set(declared)).toEqual(new Set(COLUMN_DATA_KEYS));
   });
 
-  it("item context-menu l10nIDs are registered in menu.ts", () => {
-    const menu = repoFile("src/modules/menu.ts");
+  it("item context-menu l10nIDs are registered in menu/registration.ts", () => {
+    const menu = repoFile("src/modules/menu/registration.ts");
     for (const l10nID of ITEM_MENU_L10N_IDS) {
       expect(menu).toContain(`l10nID: "${l10nID}"`);
     }

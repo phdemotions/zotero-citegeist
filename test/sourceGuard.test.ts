@@ -270,6 +270,54 @@ const FIXTURES: readonly Fixture[] = [
     ],
   },
   {
+    name: "a member watched on any receiver, as a context field",
+    spec: SELECTION,
+    source: "export const col = ctx.getSelectedCollection;",
+    hits: [{ member: "getSelectedCollection", form: "property", line: 1 }],
+  },
+  {
+    name: "a member watched on any receiver, through an alias made with bind",
+    spec: SELECTION,
+    source: "export const read = pane.getSelectedCollection.bind(pane);",
+    hits: [{ member: "getSelectedCollection", form: "property", line: 1 }],
+  },
+  {
+    name: "a member watched on any receiver, through bracket access",
+    spec: SELECTION,
+    source: 'export const col = pane["getSelectedCollection"]();',
+    hits: [{ member: "getSelectedCollection", form: "element", line: 1 }],
+  },
+  {
+    name: "a member watched on any receiver, through optional bracket access with a template key",
+    spec: SELECTION,
+    source: "export const col = pane?.[`getSelectedCollection`]?.();",
+    hits: [{ member: "getSelectedCollection", form: "element", line: 1 }],
+  },
+  {
+    name: "a member watched on any receiver, through a concatenated key",
+    spec: SELECTION,
+    source: 'export const col = pane["getSelected" + "Collection"]();',
+    hits: [{ member: "getSelectedCollection", form: "element", line: 1 }],
+  },
+  {
+    name: "a member watched on any receiver, through Reflect.get",
+    spec: SELECTION,
+    source: 'export const read = Reflect.get(pane, "getSelectedCollection");',
+    hits: [{ member: "getSelectedCollection", form: "element", line: 1 }],
+  },
+  {
+    name: "a member watched on any receiver, in an in check",
+    spec: SELECTION,
+    source: 'export const has = "getSelectedCollection" in ctx;',
+    hits: [{ member: "getSelectedCollection", form: "element", line: 1 }],
+  },
+  {
+    name: "a member watched on any receiver, through renamed destructuring",
+    spec: SELECTION,
+    source: "const { getSelectedCollection: read } = pane;",
+    hits: [{ member: "getSelectedCollection", form: "destructuring", line: 1 }],
+  },
+  {
     name: "a member watched on any receiver, destructured from a parameter",
     spec: SELECTION,
     source:

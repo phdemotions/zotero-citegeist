@@ -9,7 +9,6 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DIAGNOSTIC_RING_BUFFER_SIZE } from "../src/constants";
 import { buildDiagnosticReport } from "../src/modules/diagnostics";
 import {
   collectionTargetsFromMenuContext,
@@ -18,7 +17,6 @@ import {
   selectedCollectionsFromPane,
   selectedItemsInWindow,
 } from "../src/modules/host/selection";
-import { logError } from "../src/modules/utils";
 import {
   UNSUPPORTED_ROW_TYPES,
   clearRecordedFailures,
@@ -30,6 +28,9 @@ import {
   otherRow,
   recordedFailures,
   selectionUnreadableReports,
+  takeRemovedApiWarnings,
+  zotero10CollectionContext,
+  zotero9CollectionContext,
 } from "./_helpers/menuHarness";
 
 type Ctx = _ZoteroTypes.MenuSelectionContext;
@@ -159,38 +160,54 @@ describe("collectionTargetsFromMenuContext — Zotero 10 collectionTreeRows", ()
     await expectNothingRecorded();
   });
 
-  it("never reads collectionTreeRow when collectionTreeRows is present (the Zotero 10 getter throws on a multi-row selection)", () => {
-    const ctx = {
-      collectionTreeRows: [collectionRow(makeCollection([])), collectionRow(makeCollection([]))],
-      get collectionTreeRow(): never {
-        throw new Error("collectionTreeRow was removed -- use collectionTreeRows");
-      },
-    };
-    expect(collectionTargetsFromMenuContext(ctx)).toHaveLength(2);
+  it("never reads Zotero 10's collectionTreeRow getter, which throws for two rows and warns for one", async () => {
+    const two = zotero10CollectionContext([
+      collectionRow(makeCollection([])),
+      collectionRow(makeCollection([])),
+    ]);
+    expect(collectionTargetsFromMenuContext(two)).toHaveLength(2);
+    expect(collectionTargetsFromMenuContext(zotero10CollectionContext([libraryRow(1)]))).toEqual([
+      { kind: "library", libraryID: 1 },
+    ]);
+    expect(takeRemovedApiWarnings()).toEqual([]);
+    await expectNothingRecorded();
+  });
+
+  it("the Zotero 10 fake does model the getter (positive control)", () => {
+    expect(() => ({ ...zotero10CollectionContext([libraryRow(1), libraryRow(2)]) })).toThrow(
+      /collectionTreeRow was removed/,
+    );
+    expect(JSON.stringify(zotero10CollectionContext([libraryRow(1)]))).toContain(
+      "collectionTreeRow",
+    );
+    expect(takeRemovedApiWarnings()).toEqual(["Menu context collectionTreeRow"]);
   });
 });
 
+// Zotero 8 and 9 contexts: remove when the Zotero floor is 10.
 describe("collectionTargetsFromMenuContext — Zotero 8/9 collectionTreeRow", () => {
   it("returns the one right-clicked collection", () => {
     const col = makeCollection([]);
-    expect(collectionTargetsFromMenuContext({ collectionTreeRow: collectionRow(col) })).toEqual([
+    expect(collectionTargetsFromMenuContext(zotero9CollectionContext(collectionRow(col)))).toEqual([
       { kind: "collection", collection: col },
     ]);
   });
 
   it("returns the right-clicked library root", () => {
-    expect(collectionTargetsFromMenuContext({ collectionTreeRow: libraryRow(1) })).toEqual([
+    expect(collectionTargetsFromMenuContext(zotero9CollectionContext(libraryRow(1)))).toEqual([
       { kind: "library", libraryID: 1 },
     ]);
   });
 
   it("refuses a saved search row and records nothing", async () => {
-    expect(collectionTargetsFromMenuContext({ collectionTreeRow: otherRow("search") })).toBeNull();
+    expect(
+      collectionTargetsFromMenuContext(zotero9CollectionContext(otherRow("search"))),
+    ).toBeNull();
     await expectNothingRecorded();
   });
 
   it("returns null, without a diagnostic, when the field is present but empty", async () => {
-    expect(collectionTargetsFromMenuContext({ collectionTreeRow: null })).toBeNull();
+    expect(collectionTargetsFromMenuContext(zotero9CollectionContext(null))).toBeNull();
     await expectNothingRecorded();
   });
 });
@@ -277,33 +294,22 @@ describe("collectionTargetsFromMenuContext — unreadable context (CG-UI02)", ()
     expect(await recordedFailures()).toHaveLength(1);
   });
 
-  it("records again once the earlier record has left the diagnostics buffer", async () => {
-    collectionTargetsFromMenuContext({});
-    expect(await selectionUnreadableReports()).toHaveLength(1);
-
-    for (let i = 0; i < DIAGNOSTIC_RING_BUFFER_SIZE; i++) {
-      logError(`later failure ${i}`, new Error("unrelated"));
-    }
-    expect(await selectionUnreadableReports()).toHaveLength(0);
-
-    collectionTargetsFromMenuContext({});
-    expect(await selectionUnreadableReports()).toHaveLength(1);
-  });
-
-  it("records again after the diagnostics are cleared", async () => {
-    collectionTargetsFromMenuContext({});
-    await clearRecordedFailures();
-    collectionTargetsFromMenuContext({});
-    expect(await selectionUnreadableReports()).toHaveLength(1);
-  });
+  // When a repeat records again (the entry aged out, or the buffer was cleared)
+  // is the diagnostics helper's rule, tested in diagnostics-logOnce.test.ts.
 
   it("records a dialog failure while a menu failure is still in the buffer, each once", async () => {
-    collectionTargetsFromPane({ getCollectionTreeRows: boom });
+    const throwingRows = () =>
+      ({
+        get collectionTreeRows(): never {
+          return boom();
+        },
+      }) as unknown as Ctx;
+    collectionTargetsFromMenuContext(throwingRows());
     selectedCollectionsFromPane({
       getSelectedCollections: boom,
       getSelectedCollection: () => false,
     });
-    collectionTargetsFromPane({ getCollectionTreeRows: boom });
+    collectionTargetsFromMenuContext(throwingRows());
     selectedCollectionsFromPane({
       getSelectedCollections: boom,
       getSelectedCollection: () => false,
@@ -385,6 +391,7 @@ describe("a failed selection read never carries host error text into the report"
   });
 });
 
+// Zotero 7 DOM fallback: delete with registerViaDOM (U9)
 describe("collectionTargetsFromPane — Zotero 10 getCollectionTreeRows", () => {
   const removedSingular = () =>
     vi.fn(() => {
@@ -464,6 +471,7 @@ describe("collectionTargetsFromPane — Zotero 10 getCollectionTreeRows", () => 
   });
 });
 
+// Zotero 7 DOM fallback: delete with registerViaDOM (U9)
 describe("collectionTargetsFromPane — Zotero 7 to 9 getCollectionTreeRow", () => {
   it("returns the focused collection", () => {
     const col = makeCollection([]);

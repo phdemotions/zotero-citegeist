@@ -7,25 +7,27 @@
  * Setting `innerHTML` keeps only the text, which is all a test reads back from
  * the pane's plain empty-state markup. An unsupported selector throws, so a
  * pane change that outgrows the fake fails loudly instead of matching nothing.
+ *
+ * The menu tests have their own fake DOM (FakeMenuDocument in menuHarness.ts).
  */
 
 type Listener = (event: { preventDefault(): void }) => unknown;
 
-export class FakeElement {
+export class FakePaneElement {
   className = "";
   id = "";
   type = "";
   title = "";
   disabled = false;
   readonly style: Record<string, string> = {};
-  readonly childNodes: FakeElement[] = [];
-  parentElement: FakeElement | null = null;
+  readonly childNodes: FakePaneElement[] = [];
+  parentElement: FakePaneElement | null = null;
   private ownText = "";
   private readonly attributes = new Map<string, string>();
   private readonly listeners = new Map<string, Listener[]>();
 
   constructor(
-    readonly ownerDocument: FakeDocument,
+    readonly ownerDocument: FakePaneDocument,
     readonly tagName: string,
   ) {}
 
@@ -46,7 +48,7 @@ export class FakeElement {
     this.textContent = markup.replace(/<[^>]*>/g, "");
   }
 
-  appendChild<T extends FakeElement>(child: T): T {
+  appendChild<T extends FakePaneElement>(child: T): T {
     child.remove();
     child.parentElement = this;
     this.childNodes.push(child);
@@ -101,9 +103,9 @@ export class FakeElement {
     return true;
   }
 
-  querySelectorAll(selector: string): FakeElement[] {
-    const found: FakeElement[] = [];
-    const visit = (element: FakeElement): void => {
+  querySelectorAll(selector: string): FakePaneElement[] {
+    const found: FakePaneElement[] = [];
+    const visit = (element: FakePaneElement): void => {
       for (const child of element.childNodes) {
         if (child.matches(selector)) found.push(child);
         visit(child);
@@ -113,21 +115,21 @@ export class FakeElement {
     return found;
   }
 
-  querySelector(selector: string): FakeElement | null {
+  querySelector(selector: string): FakePaneElement | null {
     return this.querySelectorAll(selector)[0] ?? null;
   }
 }
 
-export class FakeDocument {
+export class FakePaneDocument {
   /** Timers never fire: the copy-feedback revert is not under test. */
   readonly defaultView = { setTimeout: (): number => 0 };
 
-  createElement(tagName: string): FakeElement {
-    return new FakeElement(this, tagName);
+  createElement(tagName: string): FakePaneElement {
+    return new FakePaneElement(this, tagName);
   }
 
-  createTextNode(text: string): FakeElement {
-    const node = new FakeElement(this, "#text");
+  createTextNode(text: string): FakePaneElement {
+    const node = new FakePaneElement(this, "#text");
     node.textContent = text;
     return node;
   }

@@ -12,7 +12,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { PREF_AUTHOR_RELATIONS_PURGED } from "../src/constants";
 import { makeFakePrefs } from "./_helpers/fakePrefs";
-import { fakeWindow, type FakeWindow } from "./_helpers/menuHarness";
+import { MODULE_LOAD_TIMEOUT_MS, fakeWindow, type FakeWindow } from "./_helpers/menuHarness";
 
 vi.mock("../src/modules/cache", () => ({
   initCache: vi.fn(async () => {}),
@@ -40,6 +40,10 @@ vi.mock("../src/modules/citationService", () => ({
 }));
 vi.mock("../src/modules/citationNetwork", () => ({ showCitationNetwork: vi.fn(async () => {}) }));
 
+import type * as HooksModule from "../src/hooks";
+
+type Hooks = typeof HooksModule;
+
 const STARTUP = { id: "citegeist@opusvita.org", version: "3.0.0", rootURI: "root/", reason: 1 };
 
 const ITEM_ENTRIES = [
@@ -58,6 +62,9 @@ const COLLECTION_ENTRIES = [
 let windows: FakeWindow[];
 let registerMenu: Mock;
 let unregisterMenu: Mock;
+/** The hooks module loaded in beforeEach, as a fresh bundle is on each plugin start. */
+let hooks: Hooks;
+let closeCache: Mock;
 
 function stubZotero(withMenuManager: boolean): void {
   registerMenu = vi.fn((options: { menuID: string }) => options.menuID);
@@ -75,9 +82,11 @@ function stubZotero(withMenuManager: boolean): void {
 }
 
 /** A fresh bundle, as a restart or an upgrade loads one. */
-async function loadHooks() {
+async function loadHooks(): Promise<Hooks> {
   vi.resetModules();
-  return import("../src/hooks");
+  const loaded = await import("../src/hooks");
+  closeCache = vi.mocked((await import("../src/modules/cache")).closeCache);
+  return loaded;
 }
 
 const popupIds = ["zotero-itemmenu", "zotero-collectionmenu"] as const;
@@ -94,31 +103,30 @@ function menuState(win: FakeWindow) {
 const ONE_SET = { item: ITEM_ENTRIES, collection: COLLECTION_ENTRIES, listeners: [1, 1] };
 const NONE = { item: [], collection: [], listeners: [0, 0] };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   windows = [fakeWindow(), fakeWindow()];
-});
+  hooks = await loadHooks();
+}, MODULE_LOAD_TIMEOUT_MS);
 
+// Zotero 7 DOM fallback: delete with registerViaDOM (U9)
 describe("two main windows on the DOM menu path", () => {
   beforeEach(() => stubZotero(false));
 
   it("startup gives each window one set of menus, not only the most recent", async () => {
-    const { onStartup } = await loadHooks();
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
     expect(windows.map(menuState)).toEqual([ONE_SET, ONE_SET]);
   });
 
   it("shutdown removes the entries and their popup listeners from every window", async () => {
-    const { onStartup, onShutdown } = await loadHooks();
-    await onStartup(STARTUP);
-    await onShutdown(STARTUP);
+    await hooks.onStartup(STARTUP);
+    await hooks.onShutdown(STARTUP);
     expect(windows.map(menuState)).toEqual([NONE, NONE]);
   });
 
   it("a restart leaves one set in each window, not two", async () => {
-    const first = await loadHooks();
-    await first.onStartup(STARTUP);
-    await first.onShutdown(STARTUP);
+    await hooks.onStartup(STARTUP);
+    await hooks.onShutdown(STARTUP);
 
     const second = await loadHooks();
     await second.onStartup(STARTUP);
@@ -127,30 +135,27 @@ describe("two main windows on the DOM menu path", () => {
   });
 
   it("a load event for a window startup already wired adds nothing", async () => {
-    const { onStartup, onMainWindowLoad } = await loadHooks();
-    await onStartup(STARTUP);
-    for (const win of windows) onMainWindowLoad(win);
+    await hooks.onStartup(STARTUP);
+    for (const win of windows) hooks.onMainWindowLoad(win);
     expect(windows.map(menuState)).toEqual([ONE_SET, ONE_SET]);
   });
 
   it("a window opened after startup gets its own set, and closing it leaves the others alone", async () => {
-    const { onStartup, onMainWindowLoad, onMainWindowUnload } = await loadHooks();
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
 
     const late = fakeWindow();
     windows.push(late);
-    onMainWindowLoad(late);
+    hooks.onMainWindowLoad(late);
     expect(menuState(late)).toEqual(ONE_SET);
 
     windows.pop();
-    onMainWindowUnload(late);
+    hooks.onMainWindowUnload(late);
     expect(menuState(late)).toEqual(NONE);
     expect(windows.map(menuState)).toEqual([ONE_SET, ONE_SET]);
   });
 
   it("a window whose teardown throws does not keep the other window's menus", async () => {
-    const { onStartup, onShutdown } = await loadHooks();
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
     const [closing, open] = windows;
     const itemMenu = popup(closing, "zotero-itemmenu");
     Object.defineProperty(closing, "document", {
@@ -161,7 +166,7 @@ describe("two main windows on the DOM menu path", () => {
       },
     });
 
-    await onShutdown(STARTUP);
+    await hooks.onShutdown(STARTUP);
 
     expect(menuState(open)).toEqual(NONE);
     // The closing window's controller was still aborted before its document threw.
@@ -170,22 +175,38 @@ describe("two main windows on the DOM menu path", () => {
       expect.stringContaining("[Citegeist] ERROR shutdown unregisterMenus"),
     );
   });
+
+  it("a window whose menus fail to register at startup takes the earlier window's menus down with the cache", async () => {
+    const [first, second] = windows;
+    Object.defineProperty(second, "document", {
+      value: {
+        getElementById: () => {
+          throw new Error("the popups are not built yet");
+        },
+        querySelector: () => null,
+      },
+    });
+
+    await hooks.onStartup(STARTUP);
+
+    expect(menuState(first)).toEqual(NONE);
+    expect(closeCache).toHaveBeenCalledTimes(1);
+    expect((Zotero as unknown as { Citegeist: { ready: boolean } }).Citegeist.ready).toBe(false);
+  });
 });
 
 describe("two main windows on the MenuManager path", () => {
   beforeEach(() => stubZotero(true));
 
   it("startup registers the menus once for the process and adds no DOM entries", async () => {
-    const { onStartup } = await loadHooks();
-    await onStartup(STARTUP);
+    await hooks.onStartup(STARTUP);
     expect(registerMenu).toHaveBeenCalledTimes(2);
     expect(windows.map(menuState)).toEqual([NONE, NONE]);
   });
 
   it("shutdown unregisters them, and a restart registers them once more", async () => {
-    const first = await loadHooks();
-    await first.onStartup(STARTUP);
-    await first.onShutdown(STARTUP);
+    await hooks.onStartup(STARTUP);
+    await hooks.onShutdown(STARTUP);
     expect(unregisterMenu.mock.calls.map(([id]) => id)).toEqual([
       "citegeist-item-menu",
       "citegeist-collection-menu",

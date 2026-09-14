@@ -376,6 +376,8 @@ Whatever the root cause, the shutdown sequence changes:
 - **Stopped summary.** `FetchBatchResult` gains a `cancelled` field. `summarizeBatch` then swaps "Done" for "Stopped" and keeps its counts, the same way the author backfill already does (`src/modules/menu.ts:190`, `src/modules/citationService.ts:557`).
 
 The quit and upgrade specs land in this unit's pull request.
+
+**Note (menu split):** The four menu commands run through two runners, `runOnItems` and `runOnTargets` in `src/modules/menu/batchActions.ts`, each driven by a `BatchAction` (`FETCH_CITATIONS`, `RESOLVE_AUTHORS`) and total, so a failure is recorded rather than thrown into the handler. Cancellation and the "Stopped" summary go into those runners and their summaries once, for all four commands. The `Zotero.Citegeist` bridge (`src/modules/bridge.ts`) runs the same `fetchItemsAndRepaint` as the fetch commands, so a cancellable fetch reaches the real-Zotero quit specs through it.
 **Execution note:** Characterization first. The real-Zotero quit spec must reproduce the hang before any change.
 **Test scenarios:**
 - Quitting with an idle cache exits Zotero within the deadline.
@@ -400,6 +402,8 @@ The quit and upgrade specs land in this unit's pull request.
 - Zotero 10's MenuManager DOM-removal fix changes teardown.
 
 The menu spec lands in this unit's pull request. U9 removes the DOM fallback, not this unit.
+
+**Note (menu split):** Both registration paths take item-menu visibility from one rule, `itemMenuVisibility` in `src/modules/menu/visibility.ts`, and the MenuManager `onShowing` handlers only apply its answer. An `onShowing` visibility fix goes into that rule, so the DOM fallback gets it too until U9 deletes that path. `guardMenus` and the handlers now live in `src/modules/menu/registration.ts`, and `test/_helpers/menuHarness.ts` models the Zotero 10 context, so a handler that spreads or serializes a context fails the unit tests.
 **Execution note:** Characterization first on Windows. macOS may not reproduce the bug.
 **Test scenarios:**
 - Covers AE4. Real Zotero, on the Linux matrix and on Windows through a runner or the manual gate.
@@ -440,10 +444,11 @@ The menu spec lands in this unit's pull request. U9 removes the DOM fallback, no
 **Goal:** v3.0.0 supports Zotero 8, 9 and 10, and every public claim says so.
 **Requirements:** R11, R9
 **Dependencies:** U1, U4, U7
-**Files:** `package.json`, `.github/workflows/real-zotero.yml`, `src/modules/menu.ts`, `src/modules/cache/migration.ts`, `src/modules/diagnostics/codes.ts`, `docs/ERROR-CODES.md`, `test/menu.test.ts`, `test/public-claims.test.ts` (new), `README.md`, `CITATION.cff`, `CLAUDE.md`, `docs/paper/paper.md`, `docs/RELEASE-CHECKLIST.md`, `docs/DESIGN.md`, `.github/ISSUE_TEMPLATE/`
+**Files:** `package.json`, `.github/workflows/real-zotero.yml`, `src/modules/menu.ts`, `src/modules/menu/registration.ts`, `src/modules/menu/visibility.ts`, `src/modules/host/selection.ts`, `src/hooks.ts`, `src/modules/cache/migration.ts`, `src/modules/diagnostics/codes.ts`, `docs/ERROR-CODES.md`, `test/menu.test.ts`, `test/collection-menu.test.ts`, `test/hooks-windows.test.ts`, `test/hostSelection.test.ts`, `test/selection-guard-invariants.test.ts`, `test/public-claims.test.ts` (new), `README.md`, `CITATION.cff`, `CLAUDE.md`, `docs/paper/paper.md`, `docs/RELEASE-CHECKLIST.md`, `docs/DESIGN.md`, `.github/ISSUE_TEMPLATE/`
 **Approach:**
 - **Floor.** Run a one-off sweep of the real-Zotero suite on Zotero 8.0.x builds, oldest first. Set `zoteroMinVersion` to the oldest green build and add that build as a permanent matrix cell.
-- **Menu fallback.** Delete `registerViaDOM`, its `popupshowing` listener and the fallback branches. A MenuManager rejection records a new `CG-*` code (KTD7).
+- **Menu fallback.** Delete every symbol marked `Zotero 7 DOM fallback: delete with registerViaDOM (U9)`: `registerViaDOM`, `MENU_IDS`, the listener controllers, `domFallbackChosen`, `unregisterMenus` (its export in `src/modules/menu.ts` and its calls in `src/hooks.ts`), the `separator` field of `itemMenuVisibility`, and `collectionTargetsFromPane` with its allowance in `test/selection-guard-invariants.test.ts`. Delete the tests marked the same way: the DOM fallback sections of `test/menu.test.ts` and `test/collection-menu.test.ts`, the DOM describe in `test/hooks-windows.test.ts`, and the `collectionTargetsFromPane` describes in `test/hostSelection.test.ts`. Shared behaviour is already tested through the MenuManager handlers, so nothing needs porting. A MenuManager rejection records a new `CG-*` code (KTD7).
+- **What stays.** Zotero 8 and 9 have no plural selection APIs, so two fallbacks outlive this unit, each marked `remove when the Zotero floor is 10`: the context `collectionTreeRow` read in `collectionTargetsFromMenuContext` and the pane `getSelectedCollection` read in `selectedCollectionsFromPane`, with their allowances. The rollback in `registerViaMenuManager` stays too, because a half-registered menu set is wrong with or without a fallback.
 - **Public claims.** Rewrite every "Zotero 7, 8 & 9" claim, and add a static test that checks named majors against the `package.json` range.
 
 **Test scenarios:**

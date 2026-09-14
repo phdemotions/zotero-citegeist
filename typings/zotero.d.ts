@@ -115,6 +115,46 @@ declare namespace _ZoteroTypes {
   }
 
   /**
+   * The context `Zotero.MenuManager` hands `onShowing` and `onCommand`.
+   *
+   * Zotero 10 builds it by copying property descriptors, so `collectionTreeRow`
+   * arrives as the getter that throws: spreading, serializing or
+   * `Object.assign`-ing a context reads it. Pass the context itself, and read its
+   * selection only through `src/modules/host/selection.ts`.
+   */
+  interface MenuManagerContext extends MenuSelectionContext {
+    /** Selected items in the right-clicked pane, on the `main/library/item` target. */
+    readonly items?: readonly Item[];
+    setVisible(visible: boolean): void;
+    setEnabled(enabled: boolean): void;
+  }
+
+  /** One entry of a `Zotero.MenuManager` menu tree. */
+  interface MenuManagerMenuData {
+    menuType: "menuitem" | "submenu" | "separator";
+    /** The FTL message the label comes from. MenuManager has no `label` field and drops one silently. */
+    l10nID?: string;
+    icon?: string;
+    onShowing?: (event: Event, context: MenuManagerContext) => void;
+    onCommand?: (event: Event, context: MenuManagerContext) => void;
+    menus?: MenuManagerMenuData[];
+  }
+
+  interface MenuManagerOptions {
+    menuID: string;
+    pluginID: string;
+    target: string;
+    menus: MenuManagerMenuData[];
+  }
+
+  /** `Zotero.MenuManager` (Zotero 8 and later), limited to what Citegeist calls. */
+  interface MenuManager {
+    /** The menu ID, or `false` when Zotero rejects the registration (a duplicate ID included). */
+    registerMenu(options: MenuManagerOptions): string | false;
+    unregisterMenu(menuID: string): boolean;
+  }
+
+  /**
    * A main window's Zotero pane (`window.ZoteroPane`), limited to what Citegeist
    * reads. Read the selection only through `src/modules/host/selection.ts`
    * (`test/selection-guard-invariants.test.ts` enforces it): Zotero 10's singular
@@ -330,6 +370,8 @@ declare const Zotero: {
     registerSection(options: _ZoteroTypes.RegisterSectionOptions): void;
     unregisterSection(paneID: string): void;
   };
+  /** Absent on Zotero 7. */
+  MenuManager?: _ZoteroTypes.MenuManager;
   PreferencePanes: {
     register(options: {
       pluginID: string;

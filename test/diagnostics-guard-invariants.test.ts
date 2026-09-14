@@ -356,7 +356,7 @@ describe("host entry points are guarded", () => {
   });
 
   it("menu handlers are guarded — MenuManager via guardMenus, DOM via bindGuarded", () => {
-    const menu = src("src/modules/menu.ts");
+    const menu = src("src/modules/menu/registration.ts");
     expect(menu).toContain("function guardMenus");
     // Both registered MenuManager trees pass through the wrapper.
     expect(menu.match(/menus: guardMenus\(\[/g) ?? []).toHaveLength(2);
