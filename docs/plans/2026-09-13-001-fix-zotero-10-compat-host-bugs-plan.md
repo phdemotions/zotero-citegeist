@@ -119,7 +119,7 @@ The tracker points the wrong way. `docs/ISSUES.md` says the v3.0.0 shutdown rewo
 
 - **KTD4. Menu actions read the selection and the window from the MenuManager context, not from the active pane.**
   - **Selection source:** `collectionTreeRows` where it exists (Zotero 10), otherwise `collectionTreeRow` (Zotero 8 and 9). On v2.0.5's Zotero 7 DOM path, which has no context, the pane's singular getters feed the same helper.
-  - **Supported rows:** collections and libraries only, and a library row subsumes its own collections. Any other row type hides the Citegeist collection entries.
+  - **Supported rows:** collections and libraries only. A selection of only collections (across any libraries) or only libraries is supported. A library row mixed with any collection row hides the Citegeist collection entries, mirroring Zotero 10's own `onCollectionSelected`, which trims that mix back to the focused row. Any other row type also hides the entries. (Revised during U2 review: the original text let a library subsume its collections.)
   - **Ruled out:** wrapping a throwing getter in catch-and-return-null. The null would read as "library root" and fetch the whole library against the OpenAlex budget.
 
   Better BibTeX shipped the same context-rows change for Zotero 10.
@@ -256,7 +256,7 @@ flowchart TB
 **Approach (KTD4):**
 - **Targets.** One module turns a selection source into supported targets plus a window. The source is a MenuManager context on Zotero 8+, or the pane's singular getters on the Zotero 7 DOM path.
 - **Menu visibility.** `onShowing` hides the collection entries when any selected row is unsupported.
-- **Batch actions.** `runFetchCollection` and `runResolveAuthorsCollection` iterate the targets, let a library subsume its collections, deduplicate item IDs, and run against the source's window instead of `Zotero.getMainWindow()`.
+- **Batch actions.** `runFetchCollection` and `runResolveAuthorsCollection` iterate the targets, deduplicate item IDs, and run against the source's window instead of `Zotero.getMainWindow()`. A library row mixed with collection rows never reaches them, because the selection is refused as unsupported.
 - **Empty-state alert.** The copy names what was selected ("these 2 collections", "this library") instead of a hard-coded "this collection".
 - **Dialog default.** A second helper returns selected collections for the dialog, preferring `getSelectedCollections()`, and sets a default filing collection only when exactly one is selected.
 - **On `maint/2.x`.** The same change applies to v2.0.5's `menu.ts:231`, `:242` and `dialog.ts:203`. Failures log through `logError`, because v2.0.5 has no diagnostics module.
@@ -264,7 +264,8 @@ flowchart TB
 **Patterns to follow:** Feature detection at `src/modules/citationColumn.ts:483` and `src/modules/menu.ts:151`; the `guard` boundary and `logError` funnel.
 **Test scenarios:**
 - Covers AE3. A context whose `collectionTreeRows` holds two collections fetches both collections' items, each ID once.
-- A library row plus one of its collections fetches the library alone.
+- A library row plus one of its collections, in either order, hides the collection entries and starts no fetch.
+- Two libraries, or collections from two different libraries, fetch every target, each item once.
 - A saved search, feed, Unfiled, Trash or Duplicates row, alone or mixed with a collection, hides the collection entries in `onShowing`, and invoking the command anyway starts no fetch.
 - A Zotero 9 context with only `collectionTreeRow` for one collection matches v2.0.5.
 - On the Zotero 7 DOM path with no context and one collection selected in the pane, the fetch runs on that collection.
@@ -439,7 +440,7 @@ The menu spec lands in this unit's pull request. U9 removes the DOM fallback, no
 **Goal:** v3.0.0 supports Zotero 8, 9 and 10, and every public claim says so.
 **Requirements:** R11, R9
 **Dependencies:** U1, U4, U7
-**Files:** `package.json`, `.github/workflows/ci.yml`, `src/modules/menu.ts`, `src/modules/cache/migration.ts`, `src/modules/diagnostics/codes.ts`, `docs/ERROR-CODES.md`, `test/menu.test.ts`, `test/public-claims.test.ts` (new), `README.md`, `CITATION.cff`, `CLAUDE.md`, `docs/paper/paper.md`, `docs/RELEASE-CHECKLIST.md`, `docs/DESIGN.md`, `.github/ISSUE_TEMPLATE/`
+**Files:** `package.json`, `.github/workflows/real-zotero.yml`, `src/modules/menu.ts`, `src/modules/cache/migration.ts`, `src/modules/diagnostics/codes.ts`, `docs/ERROR-CODES.md`, `test/menu.test.ts`, `test/public-claims.test.ts` (new), `README.md`, `CITATION.cff`, `CLAUDE.md`, `docs/paper/paper.md`, `docs/RELEASE-CHECKLIST.md`, `docs/DESIGN.md`, `.github/ISSUE_TEMPLATE/`
 **Approach:**
 - **Floor.** Run a one-off sweep of the real-Zotero suite on Zotero 8.0.x builds, oldest first. Set `zoteroMinVersion` to the oldest green build and add that build as a permanent matrix cell.
 - **Menu fallback.** Delete `registerViaDOM`, its `popupshowing` listener and the fallback branches. A MenuManager rejection records a new `CG-*` code (KTD7).
