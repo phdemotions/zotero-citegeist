@@ -14,7 +14,10 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
-/** Where CI unzips `build/citegeist-<version>.xpi`. */
+/**
+ * Where real-zotero.yml unzips the release XPI: the one `npm run build` made on a
+ * pull request, or the one release.yml's Verify job built, checked by digest, on a tag.
+ */
 export const STAGED_XPI_DIR = ".scaffold/xpi";
 /** scaffold's `dist`. Its build empties this directory on every run. */
 export const SCAFFOLD_DIST_DIR = ".scaffold/build";

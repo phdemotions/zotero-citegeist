@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -21,16 +22,21 @@ jobs:
         # and package.json `engines.node` is pinned to ">=22.0.0".
         node-version: [22]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
-      - run: npm install --no-audit --no-fund
+      # The install release.yml's Verify job runs: npm install, not npm ci
+      # (CLAUDE.md, CI Notes), with no dependency install script.
+      - run: npm install --no-audit --no-fund --ignore-scripts
+
+      - name: Lockfile unchanged by install
+        run: git diff --exit-code package-lock.json
 
       - name: Lint
         run: npm run lint
@@ -49,6 +55,7 @@ jobs:
 
   # The real-Zotero matrix (plan U4), defined once in real-zotero.yml and also
   # called by release.yml. Each cell reports as "Real Zotero / Zotero <version>".
+  # No inputs: pull requests build their own XPI and run the default matrix.
   real-zotero:
     name: Real Zotero
     permissions:
@@ -64,12 +71,17 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     permissions: {}
+    timeout-minutes: 5
     steps:
       - name: Every required job succeeded
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
           echo "Job results: $RESULTS"
+          if [ -z "$RESULTS" ]; then
+            echo "::error::No job results reached the gate"
+            exit 1
+          fi
           for result in $RESULTS; do
             if [ "$result" != "success" ]; then
               echo "::error::A required job ended with result '$result'"

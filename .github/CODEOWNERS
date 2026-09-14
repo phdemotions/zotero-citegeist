@@ -1,0 +1,8 @@
+# The maintainer reviews every change to what CI runs and to the scripts the
+# write-scoped Publish job executes. GitHub enforces this only while branch
+# protection has "Require review from Code Owners" on
+# (docs/RELEASE-CHECKLIST.md, section 0).
+/.github/workflows/ @phdemotions
+/.github/CODEOWNERS @phdemotions
+/scripts/check-channel-version.mjs @phdemotions
+/scripts/publish-update-channel.sh @phdemotions

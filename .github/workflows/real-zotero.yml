@@ -2,16 +2,57 @@
 # supported major with the unzipped release XPI and runs the Mocha specs in
 # test/real-zotero/ inside it via zotero-plugin-scaffold.
 #
-# One definition, called by ci.yml (pull requests and pushes to main) and by
-# release.yml (before a tag can publish). It runs scaffold and a downloaded
-# Zotero binary, so it never holds more than a read-only token (KTD13).
+# One definition, called by ci.yml (pull requests and pushes to main), by
+# release.yml (before a tag can publish) and later by the scheduled Zotero
+# watch (plan U10). It runs scaffold and a downloaded Zotero binary, so it never
+# holds more than a read-only token (KTD13).
 name: Real Zotero
 
 on:
   workflow_call:
+    inputs:
+      xpi-artifact:
+        description: >-
+          Name of an artifact in this run holding exactly one citegeist-*.xpi.
+          When set, every cell tests that XPI instead of building one, so a
+          release tests the bytes it publishes.
+        type: string
+        required: false
+        default: ""
+      xpi-sha256:
+        description: SHA-256 the xpi-artifact XPI must have. Required with xpi-artifact.
+        type: string
+        required: false
+        default: ""
+      zotero-versions:
+        description: >-
+          JSON array of Zotero release versions, one cell each. The default is the
+          supported matrix; test/buildMetadata.test.ts ties the cap to it.
+        type: string
+        required: false
+        default: '["8.0.4", "9.0.6", "10.0.2"]'
+      negative-control-version:
+        description: >-
+          The cell that also proves a build capped one major lower is refused.
+          It must be one of zotero-versions; empty skips the control.
+        type: string
+        required: false
+        default: "10.0.2"
+      channel:
+        description: Zotero download channel. Reserved for the scheduled watch (plan U10); only release is supported.
+        type: string
+        required: false
+        default: release
 
 permissions:
   contents: read
+
+env:
+  # SHA-256 of each Zotero tarball, so a replaced or corrupted download fails its
+  # cell. UNPINNED only warns and prints the computed hash; pin the values from
+  # the first green run (docs/RELEASE-CHECKLIST.md, section 0).
+  ZOTERO_TARBALL_SHA256: >-
+    {"8.0.4": "UNPINNED", "9.0.6": "UNPINNED", "10.0.2": "UNPINNED"}
 
 jobs:
   real-zotero:
@@ -21,14 +62,15 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-    timeout-minutes: 30
+    # Longer than the step deadlines below add up to, so a hung run still fails
+    # its step and uploads its logs.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        # Latest release-channel patch of each supported major, pinned so a new
-        # Zotero build never silently changes a pull request's result. Release
-        # builds only: beta and dev builds ignore strict_max_version.
-        zotero: ["8.0.4", "9.0.6", "10.0.2"]
+        # Release builds only, pinned so a new Zotero build never silently
+        # changes a result: beta and dev builds ignore strict_max_version.
+        zotero: ${{ fromJSON(inputs.zotero-versions) }}
     env:
       ZOTERO_VERSION: ${{ matrix.zotero }}
       # The activation spec fails unless Zotero reports exactly this version.
@@ -42,12 +84,33 @@ jobs:
       # The suite's root after-hook writes Debug Output and Zotero's errors here.
       CITEGEIST_REAL_ZOTERO_LOG_DIR: ${{ github.workspace }}/.scaffold/logs
       NO_UPDATE_NOTIFIER: "1"
+      XPI_ARTIFACT: ${{ inputs.xpi-artifact }}
+      XPI_SHA256: ${{ inputs.xpi-sha256 }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Check the caller's inputs
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          NEGATIVE_CONTROL_VERSION: ${{ inputs.negative-control-version }}
+          NEGATIVE_CONTROL_IN_MATRIX: ${{ inputs.negative-control-version == '' || contains(fromJSON(inputs.zotero-versions), inputs.negative-control-version) }}
+        run: |
+          if [ "$CHANNEL" != "release" ]; then
+            echo "::error::channel '$CHANNEL' is not supported: only release builds honour strict_max_version (plan U10 adds the others)"
+            exit 1
+          fi
+          if [ "$NEGATIVE_CONTROL_IN_MATRIX" != "true" ]; then
+            echo "::error::negative-control-version $NEGATIVE_CONTROL_VERSION is not in zotero-versions, so the cap negative control would never run"
+            exit 1
+          fi
+          if [ -n "$XPI_ARTIFACT" ] && ! [[ "$XPI_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::xpi-artifact is set, so xpi-sha256 must be the XPI's SHA-256 as 64 lowercase hex digits"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -57,29 +120,67 @@ jobs:
       # them, which test/realZoteroHarness.test.ts exercises.
       - run: npm install --no-audit --no-fund --ignore-scripts
 
+      - name: Lockfile unchanged by install
+        run: git diff --exit-code package-lock.json
+
       - name: Build the release XPI
+        if: ${{ inputs.xpi-artifact == '' }}
         run: npm run build
 
+      - name: Download the XPI under test
+        if: ${{ inputs.xpi-artifact != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.xpi-artifact }}
+          path: ${{ runner.temp }}/xpi-under-test
+
+      # A downloaded XPI must be the one the caller hashed: any job in the run can
+      # replace an artifact, including another cell running third-party code.
       - name: Stage the unzipped XPI for the runner
         run: |
           shopt -s failglob
-          xpis=(build/citegeist-*.xpi)
+          if [ -n "$XPI_ARTIFACT" ]; then
+            xpis=("$RUNNER_TEMP"/xpi-under-test/citegeist-*.xpi)
+          else
+            xpis=(build/citegeist-*.xpi)
+          fi
           if [ "${#xpis[@]}" -ne 1 ]; then echo "::error::Expected one XPI, found: ${xpis[*]}"; exit 1; fi
+          if [ -n "$XPI_ARTIFACT" ]; then
+            printf '%s  %s\n' "$XPI_SHA256" "${xpis[0]}" | sha256sum --check --strict
+          fi
           rm -rf .scaffold/xpi
           mkdir -p .scaffold/xpi .scaffold/logs
           unzip -q "${xpis[0]}" -d .scaffold/xpi
 
       - name: Install headless runtime dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             xvfb xauth x11-xkb-utils xkb-data libasound2t64 libdbus-glib-1-2
 
       - name: Download Zotero ${{ matrix.zotero }} for Linux
         run: |
-          curl --fail --silent --show-error --location --retry 3 --output zotero.tar.xz \
+          curl --fail --silent --show-error --location --retry 3 \
+            --connect-timeout 20 --max-time 300 --output zotero.tar.xz \
             "https://download.zotero.org/client/release/${ZOTERO_VERSION}/Zotero-${ZOTERO_VERSION}_linux-x86_64.tar.xz"
-          sha256sum zotero.tar.xz
+          actual=$(sha256sum zotero.tar.xz | cut -d' ' -f1)
+          expected=$(jq -r --arg version "$ZOTERO_VERSION" '.[$version] // "MISSING"' <<<"$ZOTERO_TARBALL_SHA256")
+          case "$expected" in
+            MISSING)
+              echo "::error::ZOTERO_TARBALL_SHA256 has no entry for Zotero $ZOTERO_VERSION; add one (this download hashed $actual)"
+              exit 1
+              ;;
+            UNPINNED)
+              echo "::warning::The Zotero $ZOTERO_VERSION tarball is not pinned. Its SHA-256 is $actual; pin it in ZOTERO_TARBALL_SHA256 in real-zotero.yml."
+              ;;
+            *)
+              if [ "$actual" != "$expected" ]; then
+                echo "::error::The Zotero $ZOTERO_VERSION tarball hashed $actual, not the pinned $expected"
+                exit 1
+              fi
+              echo "The Zotero $ZOTERO_VERSION tarball matches its pinned SHA-256"
+              ;;
+          esac
           mkdir -p .scaffold/zotero
           tar -xJf zotero.tar.xz -C .scaffold/zotero --strip-components=1
           test -x "$ZOTERO_PLUGIN_ZOTERO_BIN_PATH"
@@ -89,7 +190,7 @@ jobs:
       - name: Run the real-Zotero suite
         run: |
           set -o pipefail
-          timeout 15m xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+          timeout --kill-after=30s 15m xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             npm run test:zotero 2>&1 | tee ".scaffold/logs/runner-zotero-${ZOTERO_VERSION}.log"
 
       # scaffold exits 0 whenever Mocha reports no failure, even when no test ran.
@@ -98,45 +199,48 @@ jobs:
       - name: Check the run passed every collected test
         run: node test/real-zotero/harness/runLog.mjs passed ".scaffold/logs/runner-zotero-${ZOTERO_VERSION}.log"
 
-      # Negative control, Zotero 10 cell only. The same XPI with its cap lowered
-      # to 9.* must be refused. The step asserts that expected failure: it is
-      # green when the cap check works, and red if a wrongly capped build loads,
-      # finishes a clean run, or fails for some unrelated reason.
-      - name: "Negative control: a build capped 9.* is refused on Zotero 10"
-        if: ${{ !cancelled() && matrix.zotero == '10.0.2' }}
+      # Negative control, on the negative-control-version cell only. The same XPI
+      # with its cap lowered one major must be refused. The step asserts that
+      # expected failure: it is green when the cap check works, and red if a
+      # wrongly capped build loads, finishes a clean run, or fails for some
+      # unrelated reason.
+      - name: "Negative control: a build capped one major lower is refused"
+        if: ${{ !cancelled() && matrix.zotero == inputs.negative-control-version }}
         run: |
           pkill -f "$ZOTERO_PLUGIN_ZOTERO_BIN_PATH" || true
-          node -e '
+          cap="$(( ${ZOTERO_VERSION%%.*} - 1 )).*"
+          CAP="$cap" node -e '
             const fs = require("fs");
             const file = ".scaffold/xpi/manifest.json";
             const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-            manifest.applications.zotero.strict_max_version = "9.*";
+            manifest.applications.zotero.strict_max_version = process.env.CAP;
             fs.writeFileSync(file, JSON.stringify(manifest, null, 2));
           '
-          log=".scaffold/logs/negative-control-cap-9.log"
+          log=".scaffold/logs/negative-control-cap-${cap%.*}.log"
           set +e
-          timeout 10m xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+          timeout --kill-after=30s 10m xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             npm run test:zotero > "$log" 2>&1
           status=$?
           set -e
           pkill -f "$ZOTERO_PLUGIN_ZOTERO_BIN_PATH" || true
           cat "$log"
           if [ "$status" -eq 0 ]; then
-            echo "::error::A build capped 9.* passed on Zotero 10: the activation check misses cap bugs"
+            echo "::error::A build capped $cap passed on Zotero $ZOTERO_VERSION: the activation check misses cap bugs"
             exit 1
           fi
           node test/real-zotero/harness/runLog.mjs refused "$log"
           if ! grep -Eq "not compatible with application version|marked Citegeist incompatible" "$log"; then
-            echo "::error::The 9.*-capped build failed (exit $status) for a reason other than its cap"
+            echo "::error::The build capped $cap failed (exit $status) for a reason other than its cap"
             exit 1
           fi
-          echo "Negative control held: Zotero 10 refused the build capped 9.*"
+          echo "Negative control held: Zotero $ZOTERO_VERSION refused the build capped $cap"
 
       - name: Upload real-Zotero logs
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: real-zotero-${{ matrix.zotero }}-logs
+          # The attempt number keeps a re-run from colliding with an earlier attempt's logs.
+          name: real-zotero-${{ matrix.zotero }}-logs-${{ github.run_attempt }}
           path: .scaffold/logs/
           if-no-files-found: ignore
           retention-days: 14

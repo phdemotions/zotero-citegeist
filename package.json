@@ -12,7 +12,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:dev": "node scripts/build.mjs --dev",
-    "release": "bumpp --commit 'release: v%s' --all --no-tag --no-push",
+    "release": "node scripts/release-preflight.mjs && bumpp --commit 'release: v%s' --all --no-tag --no-push",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:zotero": "zotero-plugin test --exit-on-finish",
@@ -48,6 +48,7 @@
     "prettier": "^3.8.4",
     "typescript": "^6.0.0",
     "vitest": "^4.1.9",
+    "yaml": "2.9.0",
     "zotero-plugin-scaffold": "0.9.2"
   },
   "engines": {

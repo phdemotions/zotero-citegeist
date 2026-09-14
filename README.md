@@ -373,7 +373,7 @@ Create a proxy file in your Zotero profile's `extensions/` folder named `citegei
 ### Releasing
 
 ```bash
-npm run release   # Bumps version, tags, pushes
+npm run release   # Bumps the version and commits locally; tag after the release PR merges (docs/RELEASE-CHECKLIST.md)
 ```
 
 GitHub Actions builds the XPI and publishes the release.

@@ -81,7 +81,8 @@ If the automated gate is red, stop — nothing below matters yet.
 
 CI enforces the same commands, plus the real-Zotero matrix, on every pull request
 (`ci.yml`), and `release.yml` runs them again on the tag before anything
-publishes.
+publishes. On a tag, every real-Zotero cell tests the XPI `Verify` built, so the
+suite tests the bytes that ship.
 
 ### Branch protection (maintainer, one-time)
 
@@ -99,9 +100,44 @@ for `main`:
   reports, and every merge would block on it.
 - **Do not allow bypassing the above settings**, so release commits go through a
   pull request too.
+- **Require review from Code Owners** is a separate maintainer setting.
+  `.github/CODEOWNERS` assigns `.github/workflows/` and the two scripts
+  `Publish` runs to `@phdemotions`, and GitHub enforces that only while this
+  setting is on. GitHub does not let an author approve their own pull request,
+  so confirm a sole maintainer can still merge their own changes to those paths
+  before turning it on.
 
-GitHub offers only checks that have run on the repository recently, so let these
-workflows run on one pull request before setting the rule.
+Enable the rule only after `CI gate` has completed successfully on a pull request
+within the past seven days. GitHub lets a rule require a check only once it has
+reported in that window, and requiring `CI gate` before then blocks every merge.
+
+### First CI run proofs (once billing is unlocked)
+
+None of the workflow behaviour above has run on GitHub yet: Actions is blocked on
+billing. The first time it can run, prove each gate blocks:
+
+- [ ] **A lint error blocks a pull request.** Open a pull request with a
+      deliberate lint error: `test (22)` and `CI gate` are both red.
+- [ ] **A real-Zotero failure blocks a pull request.** Open a pull request that
+      makes one real-Zotero spec fail: that cell and `CI gate` are both red.
+- [ ] **A failing spec blocks a tag.** In a throwaway fork, push a tag that
+      matches `package.json`, on the commit that bumps it, with one spec failing:
+      `Verify` is green, that `Real Zotero / Zotero <version>` cell is red,
+      `Publish` is skipped, no Release is created, and the fork's `release`
+      channel is unchanged.
+- [ ] **A prerelease tag is refused.** In the fork, push `vX.Y.Z-rc.1`: `Verify`
+      fails and names plan U15.
+- [ ] **Verify's token cannot push.** In the fork, add a temporary last step to
+      `Verify` that runs
+      `git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" HEAD:refs/tags/token-probe`:
+      it fails with a 403, and no `token-probe` tag appears.
+- [ ] **A clean pull request passes.** Every check and `CI gate` are green.
+- [ ] **Pin the Zotero tarballs.** Each real-Zotero cell of that clean run warns
+      with its tarball's SHA-256. Copy the three values into
+      `ZOTERO_TARBALL_SHA256` in `real-zotero.yml` through a pull request; from
+      then on a changed tarball fails its cell.
+
+Recording each run's URL in `docs/STATUS.md` is the maintainer's job.
 
 ---
 
@@ -190,34 +226,51 @@ Do not tag if this gate has not been run against a real second device.
 
 ---
 
-## 5. Tag + release — mechanical (canonical steps in `CLAUDE.md` → Release Process)
+## 5. Tag + release — mechanical (canonical; `CLAUDE.md` → Release Process links here)
 
 `main` is protected (section 0), so the release commit lands through a pull
-request and the tag is pushed only after merge.
+request, and the tag goes on that pull request's merge commit.
 
 - [ ] Branch from an up-to-date `main`:
       `git switch main && git pull --ff-only && git switch -c release/vX.Y.Z`
 - [ ] Update `CITATION.cff` (`version`, `date-released`) and move `[Unreleased]`
       in `CHANGELOG.md` to the new version with today's date; add the comparison
       link. Leave both uncommitted.
-- [ ] `npm run release`. bumpp asks for the version, bumps `package.json` and
-      `package-lock.json` (top-level + `packages[""]`), and commits every tracked
-      change as `release: vX.Y.Z`. It does not tag or push. Confirm
+- [ ] `npm run release`. It first refuses to run while a tracked file other than
+      `CHANGELOG.md` and `CITATION.cff` has uncommitted changes, because bumpp
+      commits every tracked change. bumpp then asks for the version, bumps
+      `package.json` and `package-lock.json` (top-level + `packages[""]`), and
+      commits as `release: vX.Y.Z`. It does not tag or push. Confirm
       `package.json`, `package-lock.json` and `CITATION.cff` all match.
 - [ ] `git push -u origin release/vX.Y.Z`, open a pull request to `main`, and
       merge once `CI gate` is green.
-- [ ] Tag `main` after the merge, not the release branch (a squash or rebase
-      merge leaves the branch commit off `main`): `git switch main && git pull --ff-only`,
-      confirm `node -p "require('./package.json').version"` prints `X.Y.Z`,
-      then `git tag vX.Y.Z && git push origin vX.Y.Z`.
-- [ ] Watch the `Build & Release` run. `Verify` fails unless the tag is `v` +
-      the `package.json` version, and `Publish` starts only after `Verify` and
-      every `Real Zotero / Zotero <version>` cell pass. **A failed gate publishes
-      nothing.** If a job flaked, use **Re-run failed jobs** on the run page,
-      which also re-runs `Publish`. For a real failure, fix it on `main` through
-      a pull request, delete the tag
-      (`git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`), and tag the new
-      merge commit.
+- [ ] Tag the merge commit by its SHA, not whatever `main` points at now:
+      `git fetch origin`, then
+      `sha=$(gh pr view <pull-request-number> --json mergeCommit --jq .mergeCommit.oid)`,
+      confirm `git show "$sha:package.json"` shows `"version": "X.Y.Z"`, then
+      `git tag vX.Y.Z "$sha" && git push origin vX.Y.Z`. `Verify` refuses a tag
+      on any commit that does not itself change `package.json`'s version to
+      `X.Y.Z`, such as a pull request merged after the release. Only final
+      versions publish: `Verify` refuses `vX.Y.Z-rc.N` until plan U15 adds tag
+      classification.
+- [ ] Watch the `Build & Release` run. `Verify` checks the tag, runs every
+      automated gate and builds the XPI, and every `Real Zotero / Zotero <version>`
+      cell tests that XPI. `Publish` starts only after all of them pass, one
+      publish at a time across tags. It refuses a tag that no longer points at
+      the run's commit and a version not newer than every version the live
+      `update.json` lists, and it never overwrites a published versioned
+      release. **A failed gate publishes nothing.**
+- [ ] **Re-run only the newest tag's run.** If a job flaked, use **Re-run failed
+      jobs** on that run's page, which also re-runs `Publish`. Never re-run a
+      superseded tag's run: `Publish` refuses it once the tag has moved or the
+      channel carries a newer version.
+- [ ] **A real failure spends the version.** A fix merged afterwards cannot carry
+      the same tag, because `Verify` accepts only the commit that bumps the
+      version. Delete the failed tag
+      (`git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`), fix the problem
+      on `main` through a pull request, and release the next patch version from
+      the top of this section, folding the unreleased `X.Y.Z` CHANGELOG entry
+      into it.
 
 ---
 
