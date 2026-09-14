@@ -514,30 +514,38 @@ describe("run-log guard (harness/runLog.mjs)", () => {
     expect(problemsWithRefusedRun(log(12, "Test run completed - 12 passed"))).toHaveLength(1);
   });
 
-  it("sets the exit status the workflow steps rely on, through a symlinked path too", () => {
-    const root = tempTree({
-      "good.log": log(3, "Test run completed - 3 passed"),
-      "empty.log": log(0, "Test run completed - 0 passed"),
-      "unfinished.log": log(3, null),
-    });
-    const cli = join(SPEC_DIR, "harness/runLog-cli.mjs");
-    // A path whose real file differs is how an "is this the main module" test fails open.
-    const linked = join(root, "runLog-cli-link.mjs");
-    symlinkSync(cli, linked);
-    const status = (entry: string, ...args: string[]) =>
-      spawnSync(process.execPath, [entry, ...args], { encoding: "utf8" }).status;
+  // Sixteen Node processes run one after another here, so the default 5 s test
+  // budget is too tight under the parallel suite or on a small CI runner.
+  it(
+    "sets the exit status the workflow steps rely on, through a symlinked path too",
+    {
+      timeout: 60_000,
+    },
+    () => {
+      const root = tempTree({
+        "good.log": log(3, "Test run completed - 3 passed"),
+        "empty.log": log(0, "Test run completed - 0 passed"),
+        "unfinished.log": log(3, null),
+      });
+      const cli = join(SPEC_DIR, "harness/runLog-cli.mjs");
+      // A path whose real file differs is how an "is this the main module" test fails open.
+      const linked = join(root, "runLog-cli-link.mjs");
+      symlinkSync(cli, linked);
+      const status = (entry: string, ...args: string[]) =>
+        spawnSync(process.execPath, [entry, ...args], { encoding: "utf8" }).status;
 
-    for (const entry of [cli, linked]) {
-      expect(status(entry, "passed", join(root, "good.log")), entry).toBe(0);
-      expect(status(entry, "passed", join(root, "empty.log")), entry).toBe(1);
-      expect(status(entry, "passed", join(root, "unfinished.log")), entry).toBe(1);
-      expect(status(entry, "passed", join(root, "missing.log")), entry).toBe(1);
-      expect(status(entry, "refused", join(root, "good.log")), entry).toBe(1);
-      expect(status(entry, "refused", join(root, "empty.log")), entry).toBe(1);
-      expect(status(entry, "unknown", join(root, "good.log")), entry).toBe(1);
-      expect(status(entry), entry).toBe(1);
-    }
-  });
+      for (const entry of [cli, linked]) {
+        expect(status(entry, "passed", join(root, "good.log")), entry).toBe(0);
+        expect(status(entry, "passed", join(root, "empty.log")), entry).toBe(1);
+        expect(status(entry, "passed", join(root, "unfinished.log")), entry).toBe(1);
+        expect(status(entry, "passed", join(root, "missing.log")), entry).toBe(1);
+        expect(status(entry, "refused", join(root, "good.log")), entry).toBe(1);
+        expect(status(entry, "refused", join(root, "empty.log")), entry).toBe(1);
+        expect(status(entry, "unknown", join(root, "good.log")), entry).toBe(1);
+        expect(status(entry), entry).toBe(1);
+      }
+    },
+  );
 });
 
 describe("root-hook comparisons (shared/debugLines.ts)", () => {
