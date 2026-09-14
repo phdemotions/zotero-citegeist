@@ -126,6 +126,9 @@ import {
 } from "../src/modules/cache";
 import { OpenAlexNetworkError, OpenAlexBudgetError, OpenAlexAuthError } from "../src/modules/utils";
 import { cacheItemAuthors } from "../src/modules/cache";
+import { searchByMetadata } from "../src/modules/titleSearch";
+import { clearDiagnostics, recentDiagnostics } from "../src/modules/diagnostics";
+import { CACHE_SCHEMA_MAJOR, CACHE_SCHEMA_STAMP_MULTIPLIER } from "../src/constants";
 
 const mockedGetWorkByDOI = vi.mocked(getWorkByDOI);
 const mockedGetWorkByPMID = vi.mocked(getWorkByPMID);
@@ -814,5 +817,101 @@ describe("resolveAuthorsForItems (U4)", () => {
     const result = await resolveAuthorsForItems(items, undefined, undefined, () => true);
     expect(result.cancelled).toBe(true);
     expect(result.resolved + result.already + result.unresolved).toBe(0);
+  });
+});
+
+// ── A cache that refuses writes (plan U16) ───────────────────────────────────
+
+describe("fetching on a read-only cache", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockZotero.Prefs.get.mockImplementation((pref: string) => {
+      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
+      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
+      return 7;
+    });
+    fakeDb = makeFakeDb();
+    fakeDb.pragma.userVersion = (CACHE_SCHEMA_MAJOR + 1) * CACHE_SCHEMA_STAMP_MULTIPLIER;
+    _resetForTesting();
+    clearDiagnostics();
+    await initCache();
+  });
+
+  it("returns CG-DB03 before any OpenAlex request for an item with an identifier", async () => {
+    mockedGetWorkByDOI.mockResolvedValue(makeFakeWork());
+
+    const result = await fetchAndCacheItem(mockItem({ doi: "10.1234/test" }));
+
+    expect(result).toEqual({ status: "error", error: "cache-unwritable", code: "CG-DB03" });
+    expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
+    expect(mockedGetWorkById).not.toHaveBeenCalled();
+    expect(fakeDb.table.size).toBe(0);
+  });
+
+  it("returns CG-DB03 before a metered title search for an item with no identifier", async () => {
+    const result = await fetchAndCacheItem(mockItem());
+
+    expect(result).toEqual({ status: "error", error: "cache-unwritable", code: "CG-DB03" });
+    expect(vi.mocked(searchByMetadata)).not.toHaveBeenCalled();
+  });
+
+  it("returns CG-DB03 on the column queue's identifier-only path too, before any lookup", async () => {
+    mockedGetWorkByDOI.mockResolvedValue(makeFakeWork());
+
+    // The background column queue passes allowMetadataSearch: false. Its early
+    // returns (no-identifier, not-found) must not come before the read-only
+    // refusal, or the queue would report a calm outcome over CG-DB03.
+    const withIdentifier = await fetchAndCacheItem(mockItem({ doi: "10.1234/test" }), {
+      allowMetadataSearch: false,
+    });
+    const withoutIdentifier = await fetchAndCacheItem(mockItem(), { allowMetadataSearch: false });
+
+    for (const result of [withIdentifier, withoutIdentifier]) {
+      expect(result).toEqual({ status: "error", error: "cache-unwritable", code: "CG-DB03" });
+    }
+    expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
+    expect(vi.mocked(searchByMetadata)).not.toHaveBeenCalled();
+  });
+
+  it("stops a batch at its first item and counts the rest as not saved, not updated", async () => {
+    const items = [
+      mockItem({ doi: "10.1234/a" }),
+      mockItem({ doi: "10.1234/b" }),
+      mockItem({ doi: "10.1234/c" }),
+    ];
+    const onItemDone = vi.fn();
+
+    const result = await fetchAndCacheItems(items, undefined, onItemDone);
+
+    expect(result).toEqual({
+      fresh: 0,
+      cached: 0,
+      suggestion: 0,
+      errors: 0,
+      budgetStopped: 0,
+      authStopped: 0,
+      unwritableStopped: 3,
+    });
+    expect(onItemDone).toHaveBeenCalledTimes(1);
+    expect(onItemDone).toHaveBeenCalledWith(1, "cache-unwritable");
+    expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
+  });
+
+  it("stops the author backfill without a lookup", async () => {
+    const items = [mockItem({ doi: "10.1234/a" }), mockItem({ doi: "10.1234/b" })];
+
+    const result = await resolveAuthorsForItems(items);
+
+    expect(result.unwritableStopped).toBe(2);
+    expect(result.errors + result.unresolved + result.resolved).toBe(0);
+    expect(mockedGetWorkById).not.toHaveBeenCalled();
+    expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
+  });
+
+  it("records nothing per refused fetch: CG-DB03 stays the single entry init recorded", async () => {
+    await fetchAndCacheItems([mockItem({ doi: "10.1234/a" }), mockItem()]);
+    await resolveAuthorsForItems([mockItem({ doi: "10.1234/a" })]);
+
+    expect(recentDiagnostics().map((d) => d.code)).toEqual(["CG-DB03"]);
   });
 });

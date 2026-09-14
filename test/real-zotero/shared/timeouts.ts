@@ -67,6 +67,12 @@ export const BUDGETS = {
   lifecycleEnsureReady: sized(STARTUP_WAIT_TIMEOUT_MS),
   /** 90: the old copy's shutdown, the new copy's startup, then exactly one section. */
   lifecycleUpgrade: sized(SHUTDOWN_WAIT_TIMEOUT_MS, STARTUP_WAIT_TIMEOUT_MS, WAIT_TIMEOUT_MS),
+  /** 91: shutdown complete, then the add-on inactive, before the spec opens the database. */
+  schemaStampDisable: sized(SHUTDOWN_WAIT_TIMEOUT_MS, WAIT_TIMEOUT_MS),
+  /** 91: startup on the newer-major database. */
+  schemaStampEnable: sized(STARTUP_WAIT_TIMEOUT_MS),
+  /** 91 after hook: disable if still running, restore the stamp, then startup. */
+  schemaStampRestore: sized(SHUTDOWN_WAIT_TIMEOUT_MS, WAIT_TIMEOUT_MS, STARTUP_WAIT_TIMEOUT_MS),
   /** 92: row, item pane, section, Citing works button, then the citing-works request. */
   preferencePageSize: sized(
     WAIT_TIMEOUT_MS,

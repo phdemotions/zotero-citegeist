@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { resetCacheHarness, fakeDb } from "./_helpers/cacheHarness";
-import { initCache, _resetForTesting, deleteRow } from "../src/modules/cache/db";
+import { initCache, _resetForTesting, deleteRow, type WritableDb } from "../src/modules/cache/db";
 import {
   cacheItemAuthors,
   getItemAuthors,
@@ -139,7 +139,7 @@ describe("orphan GC", () => {
     await cacheItemAuthors({ libraryID: 1, key: "GONE" }, [authorship("A1")]);
     await cacheItemAuthors({ libraryID: 1, key: "STAY" }, [authorship("A2")]);
 
-    await garbageCollectOrphanAuthors(fakeDb as unknown as _ZoteroTypes.DBConnection, [
+    await garbageCollectOrphanAuthors(fakeDb as unknown as WritableDb, [
       { libraryID: 1, itemKey: "GONE" },
     ]);
 

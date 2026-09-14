@@ -15,11 +15,12 @@
  * shared author row is required, so cross-item author writes are safe without a
  * dedicated author-id lock.
  *
- * Every exported writer checks `cacheWriteRefused` first, so a database stamped
- * with a newer schema major (CG-DB03) receives no author write.
+ * Every exported writer gets its connection from `requireWritableDb`, so a
+ * cache that refuses writes (read-only CG-DB03/CG-DB04, or closed CG-DB02)
+ * rejects with that code before any author statement runs.
  */
 
-import { cacheWriteRefused, requireDb, runQuery, withKeyLock } from "../db";
+import { requireWritableDb, runQuery, withKeyLock, type WritableDb } from "../db";
 import type { CacheItemKey } from "../types";
 import { parseAuthorId } from "./types";
 
@@ -44,7 +45,7 @@ export interface AuthorMetricsInput {
 
 /** Ensure the author row exists, then set identity fields only (metric-preserving). */
 async function upsertAuthorIdentity(
-  conn: _ZoteroTypes.DBConnection,
+  conn: WritableDb,
   authorId: string,
   displayName: string | null,
   orcid: string | null,
@@ -70,7 +71,7 @@ export async function cacheItemAuthors(
   item: CacheItemKey,
   authorships: ReadonlyArray<CacheAuthorshipInput>,
 ): Promise<void> {
-  if (cacheWriteRefused("cacheItemAuthors")) return;
+  const conn = requireWritableDb("cacheItemAuthors");
   const { libraryID, key: itemKey } = item;
 
   // Validate + order at the trust boundary. Position is the array index
@@ -91,8 +92,6 @@ export async function cacheItemAuthors(
   });
 
   await withKeyLock(libraryID, itemKey, async () => {
-    const conn = requireDb();
-
     for (const v of valid) {
       await upsertAuthorIdentity(conn, v.id, v.name, v.orcid);
     }
@@ -139,11 +138,10 @@ export async function setCuratedItemAuthor(
   authorId: string,
   position: number | null,
 ): Promise<void> {
-  if (cacheWriteRefused("setCuratedItemAuthor")) return;
+  const conn = requireWritableDb("setCuratedItemAuthor");
   const id = parseAuthorId(authorId);
   if (!id) return;
   await withKeyLock(item.libraryID, item.key, async () => {
-    const conn = requireDb();
     await runQuery(conn, `INSERT OR IGNORE INTO authors (author_id) VALUES (?)`, [id]);
     // Override: clear whatever author previously occupied this creator slot so
     // the position ends up with exactly the confirmed id. The PK is
@@ -172,10 +170,9 @@ export async function updateAuthorMetrics(
   authorId: string,
   metrics: AuthorMetricsInput,
 ): Promise<void> {
-  if (cacheWriteRefused("updateAuthorMetrics")) return;
+  const conn = requireWritableDb("updateAuthorMetrics");
   const id = parseAuthorId(authorId);
   if (!id) return;
-  const conn = requireDb();
   await runQuery(conn, `INSERT OR IGNORE INTO authors (author_id) VALUES (?)`, [id]);
   await runQuery(
     conn,
@@ -209,11 +206,10 @@ export async function updateAuthorMetrics(
  * confirm (curation).
  */
 export async function reconcileAuthorMerge(fromId: string, toId: string): Promise<void> {
-  if (cacheWriteRefused("reconcileAuthorMerge")) return;
+  const conn = requireWritableDb("reconcileAuthorMerge");
   const from = parseAuthorId(fromId);
   const to = parseAuthorId(toId);
   if (!from || !to || from === to) return;
-  const conn = requireDb();
   // Move refs to the survivor where the item doesn't already carry it…
   await runQuery(conn, `UPDATE OR IGNORE item_authors SET author_id = ? WHERE author_id = ?`, [
     to,

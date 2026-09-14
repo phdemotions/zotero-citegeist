@@ -26,7 +26,7 @@ export type {
 // Note: `_resetForTesting` is intentionally NOT re-exported. Tests import
 // it from the deep `cache/db` path so production callers can't accidentally
 // nuke the cache layer via the public surface.
-export { closeCache, initCache } from "./db";
+export { cacheWriteRefusalCode, closeCache, initCache, isCacheReadOnly } from "./db";
 
 // ── Read ──
 export {

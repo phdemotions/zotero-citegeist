@@ -121,16 +121,24 @@ export const ORPHAN_GC_MIN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // ── SQLite cache schema version (plan KTD11) ──
 /**
  * Schema major of `citegeist.sqlite`. Bump it for any change an older build of
- * the same major could damage by writing to the database: dropping, renaming or
- * retyping a table or column, or changing what a column means. A build that
- * opens a database stamped with a newer major refuses every write (CG-DB03).
- * The additive-only rule lives in docs/DESIGN.md.
+ * the same major could damage by writing to the database:
+ * - adding a column to `item_cache` or `item_authors`. Older builds write those
+ *   tables with `INSERT OR REPLACE` and an explicit column list (upsertRow,
+ *   mutateRow, cacheItemAuthors, setCuratedItemAuthor), which deletes the row and
+ *   reinserts only the columns they know, so the new column's value is wiped;
+ * - tightening a constraint (NOT NULL, UNIQUE, CHECK) an older build's writes
+ *   can violate;
+ * - dropping, renaming or retyping a table or column, or changing what a column
+ *   means.
+ * A build that opens a database stamped with a newer major refuses every write
+ * (CG-DB03). The rule and its reasoning live in docs/DESIGN.md.
  */
 export const CACHE_SCHEMA_MAJOR = 1;
 /**
- * Schema minor: counts additive changes (a new table or index) within a major.
- * A newer minor changes nothing for an older build of the same major. Must stay
- * below {@link CACHE_SCHEMA_STAMP_MULTIPLIER}.
+ * Schema minor: counts additive changes that no older build's write can damage,
+ * such as a new table or index, within a major. A newer minor changes nothing
+ * for an older build of the same major. Must stay below
+ * {@link CACHE_SCHEMA_STAMP_MULTIPLIER}.
  */
 export const CACHE_SCHEMA_MINOR = 0;
 /**
@@ -138,6 +146,14 @@ export const CACHE_SCHEMA_MINOR = 0;
  * SQLite's default of 0 always means "unstamped".
  */
 export const CACHE_SCHEMA_STAMP_MULTIPLIER = 1000;
+/**
+ * A stored schema major at or above this was never written by any Citegeist
+ * release (it would take 99 major bumps). Such a stamp, like a negative or
+ * unreadable one, points at a damaged file or another tool rather than a newer
+ * Citegeist, so the read-only session says to move the file aside (CG-DB04)
+ * instead of "update Citegeist" (CG-DB03).
+ */
+export const CACHE_SCHEMA_UNRECOGNISED_MAJOR = 100;
 
 // ── Timeouts ──
 /** Per-item saveTx timeout during migration. A single locked item must
@@ -209,6 +225,10 @@ export const NO_MATCH_RETRY_DAYS = 30;
  * GitHub comment.
  */
 export const DIAGNOSTIC_RING_BUFFER_SIZE = 50;
+/** Delay before a startup notice opens, so the main window has finished drawing. */
+export const CODED_NOTICE_DELAY_MS = 2000;
+/** How long a coded notice (e.g. the read-only cache notice) stays up before it closes itself. */
+export const CODED_NOTICE_CLOSE_MS = 15_000;
 
 /** How long the diagnostic "Copy report" button shows "Copied" before reverting. */
 export const COPY_FEEDBACK_REVERT_MS = 2000;

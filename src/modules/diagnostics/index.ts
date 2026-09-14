@@ -27,6 +27,7 @@ export {
   clearDiagnostics,
   type DiagnosticEntry,
 } from "./record";
+export { setSessionCondition, sessionConditions } from "./status";
 export { guard, guardAsync, bindGuarded, type GuardFallback } from "./guard";
 export { buildDiagnosticReport, setPluginVersion, type ReportContext } from "./report";
-export { buildDiagnosticElement, copyToClipboard } from "./surface";
+export { buildDiagnosticElement, copyToClipboard, showCodedNotice } from "./surface";

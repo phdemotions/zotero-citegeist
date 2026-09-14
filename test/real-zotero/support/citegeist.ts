@@ -7,6 +7,7 @@
  * of these drift from the source.
  */
 import pkg from "../../../package.json";
+import { CACHE_SCHEMA_MAJOR } from "../../../src/constants";
 
 export const ADDON_ID: string = pkg.config.addonID;
 
@@ -47,3 +48,13 @@ export const SHUTDOWN_COMPLETE_DEBUG_LINE = "[Citegeist] Shutdown complete";
 
 /** How `logError` in src/modules/utils.ts starts the Debug Output line for every Citegeist failure. */
 export const ERROR_DEBUG_MARK = "[Citegeist] ERROR";
+
+/**
+ * The one ERROR line a startup on a database stamped one schema major ahead
+ * logs: CG-DB03 from `openReadOnly` in src/modules/cache/db.ts. Spec 91 allows
+ * exactly this line; test/cache.test.ts checks it against what init really logs.
+ */
+export const READ_ONLY_STARTUP_ERROR = new RegExp(
+  `\\[Citegeist\\] ERROR cache schema check: schema major ${CACHE_SCHEMA_MAJOR + 1}; ` +
+    `this build writes schema major ${CACHE_SCHEMA_MAJOR}; cache writes disabled`,
+);

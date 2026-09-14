@@ -311,6 +311,20 @@ export class CacheError extends CitegeistError {
 }
 
 /**
+ * A cache write refused before it reached SQLite, because the cache does not
+ * take writes right now: it was opened read-only (CG-DB03 for a newer schema
+ * major, CG-DB04 for a stamp no release writes) or it is closed (CG-DB02). The
+ * code comes from the cache's write state, so the caller learns the write did
+ * not happen and why, instead of carrying on as if it had.
+ */
+export class CacheWriteRefusedError extends CitegeistError {
+  constructor(operation: string, code: DiagnosticCode) {
+    super(`cache write refused: ${operation}`, code);
+    this.name = "CacheWriteRefusedError";
+  }
+}
+
+/**
  * The caller's OpenAlex daily budget is exhausted (July-2026 metered API).
  * Distinct from {@link OpenAlexNetworkError} so the UI can prompt the user to
  * add an API key rather than showing an "unreachable" dead end, and so a

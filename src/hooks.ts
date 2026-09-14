@@ -31,6 +31,7 @@ import {
   migrateFromExtraV1,
   garbageCollectOrphans,
   purgeAllAuthorRelations,
+  cacheWriteRefusalCode,
 } from "./modules/cache";
 import { getPref, setPref } from "./modules/prefs";
 import { logError } from "./modules/utils";
@@ -39,6 +40,7 @@ import {
   clearDiagnostics,
   guardAsync,
   setPluginVersion,
+  showCodedNotice,
 } from "./modules/diagnostics";
 import { PREF_AUTHOR_RELATIONS_PURGED, PREF_LAST_BACKUP_PATH, SETTINGS_PANE_ID } from "./constants";
 
@@ -180,6 +182,8 @@ export async function onStartup(data: PluginData): Promise<void> {
     // see the UI and can refetch. Better than refusing to load entirely.
   }
 
+  // Null unless init opened the database read-only (CG-DB03, CG-DB04).
+  const readOnlyCode = cacheInitFailed ? null : cacheWriteRefusalCode();
   if (cacheInitFailed) {
     showStartupAlert(
       "Citegeist: cache unavailable",
@@ -188,6 +192,10 @@ export async function onStartup(data: PluginData): Promise<void> {
         "If the problem persists, check that <profile>/citegeist.sqlite is " +
         "not locked or quarantined by antivirus.",
     );
+  } else if (readOnlyCode) {
+    // Once per launch. The pane and the diagnostic report keep the code in view
+    // for the rest of the session.
+    showCodedNotice("Citegeist is showing saved data only", readOnlyCode);
   } else if (didMigrate) {
     // First successful migration of this profile. Surface a one-time
     // alert pointing to the safety-net backup file so users know exactly

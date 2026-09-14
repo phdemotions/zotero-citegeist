@@ -96,6 +96,12 @@ export const DIAGNOSTIC_CODES = {
     message:
       "Citegeist's local database was written by a newer version of Citegeist, so this version shows what's already saved but won't change the file. Update Citegeist to start saving new citation data again.",
   },
+  "CG-DB04": {
+    code: "CG-DB04",
+    area: "DB",
+    message:
+      "Citegeist's local database carries a version stamp no Citegeist release writes, so the file may be damaged. This version shows what's already saved but won't change it. Quit Zotero, move citegeist.sqlite out of your Zotero data folder and restart: confirmed title matches come back from each item's Extra field, and citation data is fetched again. If this code comes back, report it on GitHub.",
+  },
   "CG-MATCH01": {
     code: "CG-MATCH01",
     area: "MATCH",

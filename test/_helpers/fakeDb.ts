@@ -21,6 +21,33 @@ function itemAuthorKey(lib: number | string, key: string, authorId: string): str
   return `${lib}:${key}:${authorId}`;
 }
 
+/**
+ * A result row the way Zotero's `queryAsync` hands one back: a Proxy that reads
+ * each property through `getResultByName`, which throws for a column the row
+ * doesn't have. A plain object would return `undefined` and hide a misnamed
+ * column.
+ */
+function hostRow(columns: Record<string, unknown>): Record<string, unknown> {
+  return new Proxy(columns, {
+    get(target, prop) {
+      if (typeof prop !== "string") return Reflect.get(target, prop);
+      if (!Object.prototype.hasOwnProperty.call(target, prop)) {
+        throw new Error(`DB column not found: ${prop}`);
+      }
+      return target[prop];
+    },
+  });
+}
+
+/**
+ * Statements SQLite's `query_only` refuses: CREATE, DELETE, DROP, INSERT and
+ * UPDATE (REPLACE and ALTER with them), plus a `user_version` assignment, which
+ * opens a write transaction. PRAGMA reads and connection settings still run, and
+ * Zotero's close-time WAL checkpoint (closeDatabase) is unaffected.
+ */
+const QUERY_ONLY_REFUSES =
+  /^(?:CREATE|DELETE|DROP|INSERT|UPDATE|REPLACE|ALTER)\b|^PRAGMA\s+user_version\s*=/i;
+
 export function makeFakeDb() {
   // Composite-keyed (`${library_id}:${item_key}`) maps mirroring SQLite.
   const table = new Map<string, FakeRow>();
@@ -44,8 +71,15 @@ export function makeFakeDb() {
   }
 
   // Connection/header state set through PRAGMA. `userVersion` persists with the
-  // "file" (seed it to model a stamped database); `queryOnly` is per connection.
-  const pragma = { userVersion: 0, queryOnly: false };
+  // "file" (seed it to model a stamped database, with any value the host could
+  // hand back); `queryOnly` is per connection; `column` is the name the PRAGMA
+  // row carries its value under, so a test can model a host that renames it.
+  const pragma: { userVersion: unknown; queryOnly: boolean; column: string } = {
+    userVersion: 0,
+    queryOnly: false,
+    column: "user_version",
+  };
+  const connectCallbacks: Array<() => unknown> = [];
 
   return {
     table,
@@ -53,19 +87,34 @@ export function makeFakeDb() {
     authors,
     itemAuthors,
     pragma,
+    /** Zotero 9.0.6+ `DBConnection.onConnect`: runs on every reopen. */
+    onConnect: vi.fn((callback: () => unknown) => {
+      connectCallbacks.push(callback);
+    }),
+    /**
+     * Model Zotero reopening the connection around its idle backup: the new
+     * connection starts without per-connection PRAGMAs, then the onConnect
+     * callbacks run.
+     */
+    async reconnect(): Promise<void> {
+      pragma.queryOnly = false;
+      for (const callback of connectCallbacks) await callback();
+    },
     queryAsync: vi.fn(async (sql: string, params?: unknown[]) => {
       const s = sql.trim();
       const p = (params ?? []) as unknown[];
 
       // ── PRAGMA ──
-      if (/^PRAGMA\s+user_version\s*$/i.test(s)) return [{ user_version: pragma.userVersion }];
+      if (/^PRAGMA\s+user_version\s*$/i.test(s)) {
+        return [hostRow({ [pragma.column]: pragma.userVersion })];
+      }
       if (/^PRAGMA\s+query_only\s*=\s*ON\s*$/i.test(s)) {
         pragma.queryOnly = true;
         return [];
       }
-      // SQLite's query_only refuses anything that would change the file; model
-      // it so a writer that skips its read-only gate fails loudly here.
-      if (pragma.queryOnly && !/^SELECT\b/i.test(s)) {
+      // Model query_only so a write that gets past requireWritableDb fails
+      // loudly here, as SQLite would fail it.
+      if (pragma.queryOnly && QUERY_ONLY_REFUSES.test(s)) {
         throw new Error("attempt to write a readonly database");
       }
       const stamp = /^PRAGMA\s+user_version\s*=\s*(-?\d+)\s*$/i.exec(s);

@@ -34,7 +34,15 @@ import {
   type PrefValue,
 } from "../prefs";
 import { logError, normalizeError, safeParseFloat, safeParseIntOrNull } from "../utils";
-import { cacheWriteRefused, deleteMirrorEntries, mirrorSnapshot, requireDb, upsertRow } from "./db";
+import {
+  cacheWriteRefused,
+  deleteMirrorEntries,
+  mirrorSnapshot,
+  requireWritableDb,
+  runQuery,
+  upsertRow,
+  type WritableDb,
+} from "./db";
 import { setExtraConfirmedMatch } from "./write";
 import { garbageCollectOrphanAuthors } from "./authors/db";
 import {
@@ -443,9 +451,10 @@ const MIN_ZOTERO_VERSION_FOR_MIGRATION = "7.0.10";
  * prompt appears.
  */
 export async function migrateFromExtraV1(): Promise<boolean> {
-  // A read-only cache (newer schema major, CG-DB03) must refuse up front, not
-  // per row: migration strips Extra only after its SQLite write, so letting the
-  // loop run against no-op writes would delete legacy data with no copy kept.
+  // A read-only cache (CG-DB03/CG-DB04) skips migration up front, not per row:
+  // every row write would be refused before its Extra strip, so the loop could
+  // only write a backup file and a refusal per candidate for an outcome the
+  // startup notice already explains.
   if (cacheWriteRefused("migrateFromExtraV1")) return false;
 
   // REL-002 silent-data-loss guard: the pref says "we already migrated", but
@@ -464,9 +473,10 @@ export async function migrateFromExtraV1(): Promise<boolean> {
     }
   }
 
-  // Verify init even though we don't keep the connection — we want a clear
-  // error here if a caller forgot to await initCache() first.
-  requireDb();
+  // Verify the cache is open and writable even though we don't keep the
+  // connection: a caller that forgot to await initCache() gets a coded refusal
+  // (CG-DB02) here, before any backup file or Extra change.
+  requireWritableDb("migrateFromExtraV1");
 
   // Version gate.
   const zVersion = Zotero.version ?? "0.0.0";
@@ -563,10 +573,11 @@ export async function migrateFromExtraV1(): Promise<boolean> {
       // per-item SELECTs with one SELECT — order-of-magnitude win on first
       // run of a 50k-item library where every candidate would otherwise pay
       // a SQLite round trip just to confirm "not yet migrated."
-      const conn0 = requireDb();
+      const conn0 = requireWritableDb("migration_progress read");
       const checkpointed = new Set<string>();
       {
-        const rows = await conn0.queryAsync<{ library_id: number; item_key: string }>(
+        const rows = await runQuery<{ library_id: number; item_key: string }>(
+          conn0,
           `SELECT library_id, item_key FROM migration_progress`,
         );
         for (const r of rows) checkpointed.add(mirrorKey(r.library_id, r.item_key));
@@ -582,7 +593,7 @@ export async function migrateFromExtraV1(): Promise<boolean> {
         if (done % progressTick === 0) ui?.update(done, total);
 
         try {
-          const conn = requireDb();
+          const conn = requireWritableDb("migration item");
 
           if (checkpointed.has(mirrorKey(item.libraryID, item.key))) continue;
 
@@ -736,8 +747,8 @@ export async function migrateFromExtraV1(): Promise<boolean> {
   // matters on 50k-item libraries with 1% transient errors.
   if (unresolvedSkips === 0) {
     try {
-      const conn = requireDb();
-      await conn.queryAsync(`DELETE FROM migration_progress`);
+      const conn = requireWritableDb("migration_progress cleanup");
+      await runQuery(conn, `DELETE FROM migration_progress`);
     } catch (e) {
       logError("migration_progress cleanup (non-fatal)", e);
     }
@@ -893,12 +904,9 @@ function trySetPref(name: CitegeistPref, value: PrefValue): void {
   }
 }
 
-async function checkpointItem(
-  conn: _ZoteroTypes.DBConnection,
-  libraryID: number,
-  itemKey: string,
-): Promise<void> {
-  await conn.queryAsync(
+async function checkpointItem(conn: WritableDb, libraryID: number, itemKey: string): Promise<void> {
+  await runQuery(
+    conn,
     `INSERT OR REPLACE INTO migration_progress (library_id, item_key, migrated_at) VALUES (?, ?, ?)`,
     [libraryID, itemKey, new Date().toISOString()],
   );
@@ -919,7 +927,7 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
   const lastRun = getTimestampPref(PREF_LAST_ORPHAN_GC_AT);
   if (!options.force && Date.now() - lastRun < ORPHAN_GC_MIN_INTERVAL_MS) return;
 
-  const conn = requireDb();
+  const conn = requireWritableDb("garbageCollectOrphans");
 
   // Build the live key set as (libraryID, itemKey) tuples so we don't
   // mistake a same-named key in a different library for an orphan.
@@ -961,11 +969,13 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
     for (const o of slice) {
       params.push(o.libraryID, o.itemKey);
     }
-    await conn.queryAsync(
+    await runQuery(
+      conn,
       `DELETE FROM item_cache WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
       params,
     );
-    await conn.queryAsync(
+    await runQuery(
+      conn,
       `DELETE FROM migration_progress WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
       params,
     );

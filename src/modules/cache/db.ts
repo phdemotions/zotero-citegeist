@@ -13,23 +13,38 @@
  *   plugin-update restart sequence).
  * • Writes to the same `(libraryID, itemKey)` are serialized via a small
  *   per-key promise chain so that mirror state never diverges from SQLite.
- * • `closeCache` waits for all pending writes before closing the DB.
+ * • `closeCache` refuses new writes, then waits for pending ones before closing.
  *
- * Schema stamp (plan KTD11)
- * ─────────────────────────
+ * Schema stamp and write state (plan KTD11)
+ * ─────────────────────────────────────────
  * • The database records the schema that wrote it in `PRAGMA user_version`
  *   (major × 1000 + minor). Init stamps an unstamped or older database, leaves
- *   a newer minor alone, and opens a newer major read-only: every write entry
- *   point checks `cacheWriteRefused` first and resolves as a no-op.
+ *   a newer minor alone, and opens a newer major (CG-DB03) or a stamp no release
+ *   writes (CG-DB04) read-only.
+ * • `requireWritableDb` is the only source of a connection for a write. It
+ *   throws a coded `CacheWriteRefusedError` unless the cache is writable, and
+ *   every helper that issues a write takes the `WritableDb` it returns, so the
+ *   compiler tracks that each write passed the check.
+ *   test/cache-write-invariants.test.ts keeps it that way.
  */
 
 import {
   CACHE_SCHEMA_MAJOR,
   CACHE_SCHEMA_MINOR,
   CACHE_SCHEMA_STAMP_MULTIPLIER,
+  CACHE_SCHEMA_UNRECOGNISED_MAJOR,
   CLOSE_CACHE_DRAIN_TIMEOUT_MS,
 } from "../../constants";
-import { CacheError, CitegeistError, DatabaseOpenError, logError, normalizeError } from "../utils";
+import type { DiagnosticCode } from "../diagnostics/codes";
+import { setSessionCondition } from "../diagnostics/status";
+import {
+  CacheError,
+  CacheWriteRefusedError,
+  CitegeistError,
+  DatabaseOpenError,
+  logError,
+  normalizeError,
+} from "../utils";
 import { COLUMNS, type ItemCacheRow, mirrorKey, rowToParams } from "./types";
 import { createAuthorSchema } from "./authors/db";
 
@@ -92,31 +107,62 @@ export const CURRENT_SCHEMA_STAMP =
  * - `compatible`: this schema, or a newer minor of the same major. Ensure the
  *   schema and leave the stamp alone, so a newer minor is never lowered.
  * - `newer-major`: written by a build whose changes this one can't know. Open
- *   read-only.
+ *   read-only (CG-DB03).
+ * - `unrecognised`: negative, unreadable, or a major no release could have
+ *   reached. Open read-only (CG-DB04), because the file, not this build, is the
+ *   likely problem.
  */
-export type SchemaStampVerdict = "stamp" | "compatible" | "newer-major";
+export type SchemaStampVerdict = "stamp" | "compatible" | "newer-major" | "unrecognised";
 
 export function classifySchemaStamp(stored: number): SchemaStampVerdict {
-  if (Math.floor(stored / CACHE_SCHEMA_STAMP_MULTIPLIER) > CACHE_SCHEMA_MAJOR) {
-    return "newer-major";
-  }
+  if (!Number.isSafeInteger(stored) || stored < 0) return "unrecognised";
+  const major = Math.floor(stored / CACHE_SCHEMA_STAMP_MULTIPLIER);
+  if (major >= CACHE_SCHEMA_UNRECOGNISED_MAJOR) return "unrecognised";
+  if (major > CACHE_SCHEMA_MAJOR) return "newer-major";
   return stored < CURRENT_SCHEMA_STAMP ? "stamp" : "compatible";
 }
+
+/**
+ * Whether the cache takes writes. `closed` before the first init and from the
+ * moment `closeCache` starts; init sets `writable` or `read-only`.
+ */
+export type CacheWriteState = "writable" | "read-only" | "closed";
+
+/** Why a read-only session refuses writes, for its notice and the report. */
+interface ReadOnlyCause {
+  readonly code: "CG-DB03" | "CG-DB04";
+  /** What the stamp said, e.g. "schema major 2" or "schema stamp -5 not recognised". */
+  readonly found: string;
+}
+
+declare const writableBrand: unique symbol;
+/**
+ * A connection handed out by `requireWritableDb`, the only kind a write helper
+ * accepts. Outside this module nothing can mint one without a cast, and the
+ * write invariants test forbids those casts elsewhere.
+ */
+export type WritableDb = _ZoteroTypes.DBConnection & { readonly [writableBrand]: true };
+
+/** The report line this module owns in `diagnostics/status`. */
+const CACHE_CONDITION_KEY = "cache";
 
 let db: _ZoteroTypes.DBConnection | null = null;
 let mirror: Map<string, ItemCacheRow> = new Map();
 let initialized = false;
-/**
- * True when init opened a database stamped with a newer schema major
- * (CG-DB03). Assigned together with `db`; cleared by `closeCache`.
- */
-let readOnly = false;
+let writeState: CacheWriteState = "closed";
+/** Set together with `writeState = "read-only"`, cleared with every other state. */
+let readOnlyCause: ReadOnlyCause | null = null;
 let initPromise: Promise<void> | null = null;
 
 /** Per-(libraryID,itemKey) write tail. Each new write awaits the prior tail. */
 const writeTails: Map<string, Promise<void>> = new Map();
 /** Outstanding write promises tracked for `closeCache` to drain. */
 const pendingWrites: Set<Promise<void>> = new Set();
+/**
+ * `operation:code` pairs already logged as refused. A read-only session can see
+ * thousands of refused writes; one debug line per kind says everything.
+ */
+const refusalsLogged = new Set<string>();
 
 /**
  * Initialize the cache: open the DB, check the schema stamp, ensure schema,
@@ -153,30 +199,54 @@ async function doInit(): Promise<void> {
   }
 
   const verdict = classifySchemaStamp(stored);
-  const rows =
-    verdict === "newer-major"
-      ? await openReadOnly(conn, stored)
-      : await openWritable(conn, verdict === "stamp");
+  const cause = readOnlyCauseFor(verdict, stored);
+  // The one place outside requireWritableDb that treats a connection as
+  // writable: the stamp was just classified as this build's, and the module
+  // state that requireWritableDb reads isn't committed until init finishes.
+  const rows = cause
+    ? await openReadOnly(conn, cause)
+    : await openWritable(conn as WritableDb, verdict === "stamp");
 
   const nextMirror = new Map(rows.map((r) => [mirrorKey(r.library_id, r.item_key), r]));
 
   db = conn;
   mirror = nextMirror;
-  readOnly = verdict === "newer-major";
+  readOnlyCause = cause;
+  writeState = cause ? "read-only" : "writable";
+  refusalsLogged.clear();
+  setSessionCondition(CACHE_CONDITION_KEY, cause ? readOnlyReportLine(cause) : null);
   initialized = true;
   Zotero.debug(
-    `[Citegeist] cache initialized: ${mirror.size} rows, schema stamp ${stored}${readOnly ? " (read-only)" : ""}`,
+    `[Citegeist] cache initialized: ${mirror.size} rows, schema stamp ${stored}${cause ? ` (read-only, ${cause.code})` : ""}`,
   );
 }
 
+function readOnlyCauseFor(verdict: SchemaStampVerdict, stored: number): ReadOnlyCause | null {
+  if (verdict === "newer-major") {
+    return {
+      code: "CG-DB03",
+      found: `schema major ${Math.floor(stored / CACHE_SCHEMA_STAMP_MULTIPLIER)}`,
+    };
+  }
+  if (verdict === "unrecognised") {
+    const found = Number.isNaN(stored)
+      ? "schema stamp unreadable"
+      : `schema stamp ${stored} not recognised`;
+    return { code: "CG-DB04", found };
+  }
+  return null;
+}
+
+/** The report line a read-only session keeps in every diagnostic report. */
+function readOnlyReportLine(cause: ReadOnlyCause): string {
+  return `Cache: read-only, ${cause.code} (${cause.found}; this build supports schema major ${CACHE_SCHEMA_MAJOR})`;
+}
+
 /** Ensure the schema, stamp it when asked, and load the mirror rows. */
-async function openWritable(
-  conn: _ZoteroTypes.DBConnection,
-  needsStamp: boolean,
-): Promise<ItemCacheRow[]> {
+async function openWritable(conn: WritableDb, needsStamp: boolean): Promise<ItemCacheRow[]> {
   try {
-    await conn.queryAsync(SCHEMA);
-    await conn.queryAsync(CREATE_PROGRESS_TABLE);
+    await runQuery(conn, SCHEMA);
+    await runQuery(conn, CREATE_PROGRESS_TABLE);
     // Author identity tables (additive, idempotent — plan KTD4). No mirror is
     // loaded for them: author reads query SQLite async in the pane.
     await createAuthorSchema(conn);
@@ -184,66 +254,97 @@ async function openWritable(
     if (needsStamp) await stampSchema(conn);
     // The initial mirror load is part of "opening the database": a corrupt
     // item_cache fails this SELECT too, and it must code CG-DB02, not CG-BUG01.
-    return await conn.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
+    return await runQuery<ItemCacheRow>(conn, `SELECT * FROM item_cache`);
   } catch (e) {
     throw new DatabaseOpenError("could not open the Citegeist database", e);
   }
 }
 
 /**
- * Open a database that a newer schema major wrote. Nothing here writes: no
- * DDL, no stamp. `query_only` makes SQLite itself refuse a write from any path
- * that misses its `cacheWriteRefused` gate, and the mirror still loads so reads
- * serve what the file already holds.
+ * Open a database whose stamp this build must not write under. Nothing here
+ * writes: no DDL, no stamp. CG-DB03 or CG-DB04 is recorded first, then
+ * `query_only` is set so SQLite itself refuses a write that got past
+ * requireWritableDb, and the mirror still loads so reads serve what the file
+ * already holds.
  */
 async function openReadOnly(
   conn: _ZoteroTypes.DBConnection,
-  stored: number,
+  cause: ReadOnlyCause,
 ): Promise<ItemCacheRow[]> {
   logError(
     "cache schema check",
     new CitegeistError(
-      `schema stamp ${stored} is a newer major than this build's ${CURRENT_SCHEMA_STAMP}; cache writes disabled`,
-      "CG-DB03",
+      `${cause.found}; this build writes schema major ${CACHE_SCHEMA_MAJOR}; cache writes disabled`,
+      cause.code,
     ),
   );
+  await applyQueryOnly(conn);
+  // Zotero 9.0.6+ closes and reopens a plugin database around its idle backup,
+  // and the reopened connection starts without query_only. Re-apply it on every
+  // reopen for as long as this connection is the read-only cache.
   try {
-    await conn.queryAsync("PRAGMA query_only = ON");
+    conn.onConnect?.(async () => {
+      if (writeState === "read-only" && db === conn) await applyQueryOnly(conn);
+    });
   } catch (e) {
-    // The write entry points still refuse on their own; this is the backstop.
-    Zotero.debug(`[Citegeist] PRAGMA query_only failed: ${normalizeError(e)}`);
+    Zotero.debug(
+      `[Citegeist] onConnect unavailable; query_only covers this connection only until Zotero reopens it: ${normalizeError(e)}`,
+    );
   }
   try {
-    return await conn.queryAsync<ItemCacheRow>(`SELECT * FROM item_cache`);
+    return await runQuery<ItemCacheRow>(conn, `SELECT * FROM item_cache`);
   } catch (e) {
-    // A newer major may have reshaped item_cache. CG-DB03 already names the
-    // cause, so start with an empty mirror rather than report CG-DB02.
+    // A newer major may have reshaped item_cache. CG-DB03 or CG-DB04 already
+    // names the cause, so start with an empty mirror rather than report CG-DB02.
     Zotero.debug(
-      `[Citegeist] read-only cache: item_cache unreadable, mirror left empty: ${normalizeError(e)}`,
+      `[Citegeist] read-only cache: item_cache unreadable, mirror left empty: ${normalizeError(queryCause(e))}`,
     );
     return [];
   }
 }
 
+/** `PRAGMA query_only = ON`, as a backstop behind requireWritableDb. Never throws. */
+async function applyQueryOnly(conn: _ZoteroTypes.DBConnection): Promise<void> {
+  try {
+    await runQuery(conn, "PRAGMA query_only = ON");
+  } catch (e) {
+    Zotero.debug(
+      `[Citegeist] PRAGMA query_only failed; requireWritableDb still refuses every write: ${normalizeError(queryCause(e))}`,
+    );
+  }
+}
+
 /**
  * Read `PRAGMA user_version`. A query failure propagates, because a database
- * that can't answer it can't be opened. A value that isn't an integer means the
- * host returned a row shape this code doesn't recognise: that is recorded and
- * treated as unstamped, so the cache keeps working.
+ * that can't answer it can't be opened; so does reading a column the row lacks,
+ * which Zotero's row Proxy turns into a throw. The host returns a number today;
+ * a bigint or a numeric string is read as the number it spells. Anything else
+ * comes back as NaN, which classifySchemaStamp treats as unrecognised, so the
+ * database opens read-only and nothing is stamped over a value this build
+ * couldn't read.
  */
 async function readSchemaStamp(conn: _ZoteroTypes.DBConnection): Promise<number> {
-  const rows = await conn.queryAsync<{ user_version: unknown }>("PRAGMA user_version");
-  const value = rows[0]?.user_version;
-  if (typeof value === "number" && Number.isInteger(value)) return value;
-  logError("cache schema stamp read", new Error(`PRAGMA user_version returned ${typeof value}`));
-  return 0;
+  const rows = await runQuery<{ user_version: unknown }>(conn, "PRAGMA user_version");
+  const raw = rows.length > 0 ? rows[0].user_version : undefined;
+  const stamp = coerceSchemaStamp(raw);
+  if (Number.isNaN(stamp)) {
+    Zotero.debug(`[Citegeist] PRAGMA user_version returned an unreadable ${typeof raw}`);
+  }
+  return stamp;
+}
+
+function coerceSchemaStamp(raw: unknown): number {
+  if (typeof raw === "number") return raw;
+  if (typeof raw === "bigint") return Number(raw);
+  if (typeof raw === "string" && /^\s*-?\d+\s*$/.test(raw)) return Number(raw);
+  return Number.NaN;
 }
 
 /**
  * Write the current stamp. A failure is logged, never thrown: the database is
  * compatible either way, and the next startup stamps it.
  */
-async function stampSchema(conn: _ZoteroTypes.DBConnection): Promise<void> {
+async function stampSchema(conn: WritableDb): Promise<void> {
   try {
     // PRAGMA takes no bound parameters; the value is a build-time integer.
     await runQuery(conn, `PRAGMA user_version = ${CURRENT_SCHEMA_STAMP}`);
@@ -253,8 +354,8 @@ async function stampSchema(conn: _ZoteroTypes.DBConnection): Promise<void> {
 }
 
 /**
- * Close the DB connection on shutdown. Awaits any in-flight init, then
- * drains pending writes, then closes. The init-await is what prevents
+ * Close the DB connection on shutdown. Awaits any in-flight init, refuses new
+ * writes, drains pending writes, then closes. The init-await is what prevents
  * doInit from observing a null `db` after we cleared module state.
  *
  * `closeDatabase(true)` requests a permanent close — Zotero runs a WAL
@@ -265,6 +366,11 @@ export async function closeCache(): Promise<void> {
   if (initPromise) {
     await initPromise.catch(() => {});
   }
+  // From here a write that hasn't got its connection yet is refused with
+  // CG-DB02 instead of racing the close. Writes already holding one drain below.
+  writeState = "closed";
+  readOnlyCause = null;
+  setSessionCondition(CACHE_CONDITION_KEY, null);
   if (pendingWrites.size > 0) {
     // Cap the drain at CLOSE_CACHE_DRAIN_TIMEOUT_MS so a hung writer can't
     // block Zotero's whole shutdown. Losing a few in-flight writes is
@@ -293,7 +399,6 @@ export async function closeCache(): Promise<void> {
   mirror = new Map();
   writeTails.clear();
   pendingWrites.clear();
-  readOnly = false;
   initialized = false;
 }
 
@@ -305,15 +410,19 @@ export function _resetForTesting(fakeDb?: _ZoteroTypes.DBConnection): void {
   mirror = new Map();
   writeTails.clear();
   pendingWrites.clear();
-  readOnly = false;
+  refusalsLogged.clear();
+  writeState = "closed";
+  readOnlyCause = null;
+  setSessionCondition(CACHE_CONDITION_KEY, null);
   initialized = false;
   initPromise = null;
 }
 
 /**
- * Returns the live DB connection. Throws if init hasn't completed —
+ * Returns the live DB connection for a READ. Throws if init hasn't completed —
  * callers should accept the throw as a signal that the cache layer is
- * genuinely broken (e.g., disk full, locked DB).
+ * genuinely broken (e.g., disk full, locked DB). A write gets its connection
+ * from {@link requireWritableDb} instead.
  */
 export function requireDb(): _ZoteroTypes.DBConnection {
   if (!db || !initialized) {
@@ -323,16 +432,63 @@ export function requireDb(): _ZoteroTypes.DBConnection {
 }
 
 /**
- * The read-only gate (plan KTD11). Every cache write entry point calls this
- * first and returns straight away when it answers true, so a refused write
- * touches neither SQLite, the mirror nor an item's Extra field, and resolves
- * like a write with nothing to do: service functions stay total. CG-DB03 was
- * recorded once, when init opened the database; this leaves only a debug line.
+ * The code a cache write would be refused with right now, or null when the
+ * cache takes writes: CG-DB03 or CG-DB04 on a read-only cache, CG-DB02 once it
+ * is closed. The pane and the fetch service ask before starting work that only
+ * matters if it can be saved, and render this code instead.
+ */
+export function cacheWriteRefusalCode(): DiagnosticCode | null {
+  switch (writeState) {
+    case "writable":
+      return null;
+    case "read-only":
+      return readOnlyCause?.code ?? "CG-DB03";
+    case "closed":
+      return "CG-DB02";
+  }
+}
+
+/** True when init opened a database this build must not write (CG-DB03, CG-DB04). */
+export function isCacheReadOnly(): boolean {
+  return writeState === "read-only";
+}
+
+/**
+ * The single writable choke point. Every write path gets its connection here
+ * and nowhere else; a cache that isn't writable throws a
+ * {@link CacheWriteRefusedError} carrying {@link cacheWriteRefusalCode}, so a
+ * refused write is never mistaken for one that landed. Call it before the
+ * write's first await: a write that started before `closeCache` holds its
+ * connection and drains, and one that starts after is refused.
+ */
+export function requireWritableDb(operation: string): WritableDb {
+  const code = cacheWriteRefusalCode();
+  if (code === null && db) return db as WritableDb;
+  const refusal = code ?? "CG-DB02";
+  logRefusalOnce(operation, refusal);
+  throw new CacheWriteRefusedError(operation, refusal);
+}
+
+/**
+ * True on a read-only cache, for maintenance that has nothing to do there
+ * (migration, orphan GC): it returns quietly rather than calling
+ * requireWritableDb and recording a refusal the startup notice already covers.
+ * It gates no write by itself; the writes inside still go through
+ * requireWritableDb.
  */
 export function cacheWriteRefused(operation: string): boolean {
-  if (!readOnly) return false;
-  Zotero.debug(`[Citegeist] ${operation} skipped: the cache is read-only (CG-DB03)`);
+  if (writeState !== "read-only") return false;
+  logRefusalOnce(operation, readOnlyCause?.code ?? "CG-DB03");
   return true;
+}
+
+function logRefusalOnce(operation: string, code: DiagnosticCode): void {
+  const key = `${operation}:${code}`;
+  if (refusalsLogged.has(key)) return;
+  refusalsLogged.add(key);
+  Zotero.debug(
+    `[Citegeist] ${operation} refused: the cache is ${writeState} (${code}); later refusals of ${operation} are not logged`,
+  );
 }
 
 export function getRow(libraryID: number, itemKey: string): ItemCacheRow | undefined {
@@ -398,28 +554,28 @@ export async function withKeyLock<T>(
   });
   const newTail = prev.then(() => ticket);
   writeTails.set(key, newTail);
+  // Tracked from the moment it queues, not from when it starts: a write waiting
+  // on this key already holds its connection, so closeCache must drain it too.
+  const tracker = newTail.then(noop, noop);
+  pendingWrites.add(tracker);
 
-  await prev;
-
-  // `fn()` runs inside the try so a synchronous throw still hits `finally`
-  // and releases the ticket — without that, a sync throw would leave the
-  // next waiter awaiting an unresolved promise forever.
-  let tracker: Promise<void> | null = null;
   try {
-    const work = fn();
-    tracker = work.then(noop, noop);
-    pendingWrites.add(tracker);
-    return await work;
+    await prev;
+    // `fn()` runs inside the try so a synchronous throw still hits `finally`
+    // and releases the ticket — without that, a sync throw would leave the
+    // next waiter awaiting an unresolved promise forever.
+    return await fn();
   } finally {
     releaseTicket();
-    if (tracker) pendingWrites.delete(tracker);
+    pendingWrites.delete(tracker);
     if (writeTails.get(key) === newTail) writeTails.delete(key);
   }
 }
 
 /**
- * Run a parameterised statement, converting any failure into a {@link CacheError}
- * with a STATIC message.
+ * Run a statement, converting any failure into a {@link CacheError} with a
+ * STATIC message. Every SQL statement Citegeist issues, read or write, goes
+ * through here: it is the only `queryAsync` call in the codebase.
  *
  * Zotero's `DBConnection.queryAsync` throws with the full SQL *and a JSON dump
  * of every bound parameter* in its message — and our bound parameters include
@@ -443,10 +599,18 @@ export async function runQuery<T = unknown>(
   }
 }
 
+/**
+ * The host's own error behind a runQuery failure, for local debug lines only.
+ * Use it only for statements with no bound parameters: the cause's message
+ * repeats them.
+ */
+function queryCause(e: unknown): unknown {
+  return e instanceof CacheError && e.cause !== undefined ? e.cause : e;
+}
+
 export async function upsertRow(row: ItemCacheRow): Promise<void> {
-  if (cacheWriteRefused("upsertRow")) return;
+  const conn = requireWritableDb("upsertRow");
   await withKeyLock(row.library_id, row.item_key, async () => {
-    const conn = requireDb();
     await runQuery(conn, UPSERT_SQL, rowToParams(row));
     mirror.set(mirrorKey(row.library_id, row.item_key), row);
     Zotero.debug(
@@ -456,9 +620,8 @@ export async function upsertRow(row: ItemCacheRow): Promise<void> {
 }
 
 export async function deleteRow(libraryID: number, itemKey: string): Promise<void> {
-  if (cacheWriteRefused("deleteRow")) return;
+  const conn = requireWritableDb("deleteRow");
   await withKeyLock(libraryID, itemKey, async () => {
-    const conn = requireDb();
     await runQuery(conn, `DELETE FROM item_cache WHERE library_id = ? AND item_key = ?`, [
       libraryID,
       itemKey,
@@ -487,19 +650,19 @@ export async function deleteRow(libraryID: number, itemKey: string): Promise<voi
  * row as it exists AT THE MOMENT the lock is granted, not at call time —
  * so a concurrent `clearCache` between the caller's call and the lock
  * acquisition is observed correctly. Return `null` from `transform` to
- * leave the row unchanged. On a read-only cache the transform never runs.
+ * leave the row unchanged. On a cache that refuses writes the transform never
+ * runs and the call rejects with the refusal's code.
  */
 export async function mutateRow(
   libraryID: number,
   itemKey: string,
   transform: (existing: ItemCacheRow | undefined) => ItemCacheRow | null,
 ): Promise<void> {
-  if (cacheWriteRefused("mutateRow")) return;
+  const conn = requireWritableDb("mutateRow");
   await withKeyLock(libraryID, itemKey, async () => {
     const existing = mirror.get(mirrorKey(libraryID, itemKey));
     const next = transform(existing);
     if (next === null) return;
-    const conn = requireDb();
     await runQuery(conn, UPSERT_SQL, rowToParams(next));
     mirror.set(mirrorKey(next.library_id, next.item_key), next);
   });

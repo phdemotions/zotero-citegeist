@@ -3,7 +3,7 @@
  */
 
 import { getSourceStats, type OpenAlexWork } from "../openalex";
-import { cacheItemAuthors, cacheWorkData } from "../cache";
+import { cacheItemAuthors, cacheWorkData, isCacheReadOnly } from "../cache";
 import { invalidateColumnCache } from "../citationColumn";
 import { escapeHTML, logError, safeInnerHTML, saveItemGuarded } from "../utils";
 import { SURNAME_PREFIXES, UNDO_TIMEOUT_MS, type NetworkState } from "./types";
@@ -56,15 +56,20 @@ export async function addItemToLibrary(
   try {
     const item = await createZoteroItemFromWork(work, collectionIds);
 
-    // Write citation + journal metrics to Extra so columns populate immediately
-    const srcId = work.primary_location?.source?.id;
-    const srcStats = srcId ? await getSourceStats(srcId) : null;
-    await cacheWorkData(item, work, srcStats);
-    // Resolve author identity for the newly-added item (third piggyback
-    // callsite; failure-isolated so it can't break the add flow).
-    await cacheItemAuthors(item, work.authorships).catch((e) =>
-      logError("cacheItemAuthors(add)", e),
-    );
+    // Cache the work's citation + journal metrics so columns populate
+    // immediately. The Zotero item above is saved either way; on a read-only
+    // cache (CG-DB03, CG-DB04) the add still succeeds, without a source lookup
+    // whose result would be thrown away.
+    if (!isCacheReadOnly()) {
+      const srcId = work.primary_location?.source?.id;
+      const srcStats = srcId ? await getSourceStats(srcId) : null;
+      await cacheWorkData(item, work, srcStats);
+      // Resolve author identity for the newly-added item (third piggyback
+      // callsite; failure-isolated so it can't break the add flow).
+      await cacheItemAuthors(item, work.authorships).catch((e) =>
+        logError("cacheItemAuthors(add)", e),
+      );
+    }
     invalidateColumnCache(item.id);
 
     const doi = work.doi?.replace("https://doi.org/", "")?.toLowerCase();

@@ -70,6 +70,7 @@ declare namespace _ZoteroTypes {
 
   interface ProgressWindow {
     changeHeadline(text: string): void;
+    addDescription(text: string): void;
     show(): void;
     startCloseTimer(ms: number): void;
     close(): void;
@@ -232,6 +233,13 @@ declare namespace _ZoteroTypes {
   interface DBConnection {
     queryAsync<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
     closeDatabase(permanent?: boolean): Promise<void>;
+    /**
+     * Run `callback` each time Zotero (re)opens the underlying connection, after
+     * the connection is usable. Zotero 9.0.6+ closes and reopens a plugin
+     * database around its idle backup, which drops per-connection PRAGMAs such
+     * as `query_only`. Absent on older Zotero builds.
+     */
+    onConnect?(callback: () => unknown): void;
   }
 
   interface Library {

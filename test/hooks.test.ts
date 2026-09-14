@@ -8,6 +8,7 @@ const cacheMocks = vi.hoisted(() => ({
   garbageCollectOrphans: vi.fn(async () => {}),
   purgeAllAuthorRelations: vi.fn(async () => ({ cleaned: 0, failures: 0 })),
   closeCache: vi.fn(async () => {}),
+  cacheWriteRefusalCode: vi.fn((): string | null => null),
 }));
 
 const columnMocks = vi.hoisted(() => ({
@@ -96,6 +97,33 @@ describe("hooks", () => {
         },
       })),
     });
+  });
+
+  it("shows one non-modal coded notice when the cache opened read-only, and no alert", async () => {
+    cacheMocks.cacheWriteRefusalCode.mockReturnValueOnce("CG-DB03");
+    const notice = {
+      changeHeadline: vi.fn(),
+      addDescription: vi.fn(),
+      show: vi.fn(),
+      startCloseTimer: vi.fn(),
+    };
+    const ProgressWindow = vi.fn(function () {
+      return notice;
+    });
+    (Zotero as unknown as { ProgressWindow: unknown }).ProgressWindow = ProgressWindow;
+    const { onStartup } = await import("../src/hooks");
+
+    await onStartup(STARTUP);
+
+    expect(ProgressWindow).toHaveBeenCalledTimes(1);
+    expect(notice.changeHeadline).toHaveBeenCalledWith(expect.stringContaining("CG-DB03"));
+    expect(notice.addDescription).toHaveBeenCalledWith(
+      expect.stringContaining("written by a newer version of Citegeist"),
+    );
+    expect(notice.show).toHaveBeenCalledTimes(1);
+    expect(Services.prompt.alert).not.toHaveBeenCalled();
+    // Reads still work, so the cache-dependent UI still registers.
+    expect(paneMocks.registerCitationPane).toHaveBeenCalled();
   });
 
   it("does not show a migration-complete alert on fresh installs with no candidates", async () => {

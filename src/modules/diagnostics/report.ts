@@ -13,6 +13,7 @@
 
 import { describeCode } from "./codes";
 import { recentDiagnostics } from "./record";
+import { sessionConditions } from "./status";
 import { normalizeError, redactSensitive } from "../utils";
 
 /**
@@ -96,6 +97,9 @@ export function buildDiagnosticReport(ctx: ReportContext): string {
 
     lines.push(`Citegeist: ${pluginVersion} (build ${__BUILD_ID__})`);
     lines.push(...hostFacts());
+    // Conditions in force for the whole session (a read-only cache). Kept apart
+    // from the ring buffer below, which later failures and Clear both empty.
+    lines.push(...sessionConditions());
 
     if (ctx.code) {
       const entry = describeCode(ctx.code);
