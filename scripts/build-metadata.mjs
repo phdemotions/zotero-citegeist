@@ -1,14 +1,5 @@
 import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, relative, sep } from "node:path";
 
@@ -62,6 +53,10 @@ const CAP_SHAPE = new RegExp(`^${PART}\\.${PART}\\.\\*$`);
 // above "3.0.0-rc10". With the prerelease number in a part of its own it compares as a number:
 // "3.0.0-rc.9" sorts below "3.0.0-rc.10", alpha below beta below rc, and every prerelease below
 // "3.0.0", because a part with trailing text sorts below the same part without it.
+//
+// Firefox's manifest schema also reads the version, and it wants plain dotted numbers. For a
+// prerelease such as "3.0.0-rc.1", whose third part is "0-rc", it logs a warning, not an error.
+// That warning is expected on every prerelease build and does not mean anything failed.
 const VERSION_SHAPE = new RegExp(`^${PART}\\.${PART}\\.${PART}(?:-(?:alpha|beta|rc)\\.${PART})?$`);
 
 function assertVersionShape(version) {
@@ -70,7 +65,9 @@ function assertVersionShape(version) {
       `package.json version must be major.minor.patch, optionally followed by -alpha.N, -beta.N ` +
         `or -rc.N, such as "3.0.0" or "3.0.0-rc.1", each number 0 or at most nine digits with no ` +
         `leading zero (Zotero orders other shapes wrongly: "3.0.0-rc2" sorts above "3.0.0-rc10"), ` +
-        `got ${JSON.stringify(version)}`,
+        `got ${JSON.stringify(version)}. A prerelease such as "3.0.0-rc.1" makes Firefox's ` +
+        `manifest schema log a warning about its "0-rc" part; that is a warning, not an error, ` +
+        `and it is expected.`,
     );
   }
 }
@@ -205,13 +202,38 @@ function isPlaceholderFile(path) {
   return PLACEHOLDER_FILE_EXTENSIONS.includes(extname(path));
 }
 
+/**
+ * Every file under `dir`, sorted, found without following any link. A symbolic link, or a
+ * junction on Windows, throws, naming the link: copying addon/ keeps a link as a link, so
+ * replacing placeholders in the copy would write this build's values through it into the file it
+ * points at. That file would then hold values instead of placeholders, and every later build,
+ * after a version bump too, would ship those stale values.
+ */
 function listFiles(dir) {
   return readdirSync(dir)
     .sort()
     .flatMap((entry) => {
       const fullPath = join(dir, entry);
-      return statSync(fullPath).isDirectory() ? listFiles(fullPath) : [fullPath];
+      const stats = lstatSync(fullPath);
+      if (stats.isSymbolicLink()) throw symbolicLinkError(fullPath);
+      return stats.isDirectory() ? listFiles(fullPath) : [fullPath];
     });
+}
+
+function symbolicLinkError(path) {
+  return new Error(
+    `${path} is a symbolic link. The build refuses links, because it would write this build's ` +
+      `values through the link into what it points at. Replace the link with a copy of its target.`,
+  );
+}
+
+/**
+ * Throws if `dir` or anything under it is a symbolic link, naming the first one. scripts/build.mjs
+ * runs it on addon/ before copying anything, and every later walk of a copy refuses links too.
+ */
+export function assertNoSymbolicLinks(dir) {
+  if (lstatSync(dir).isSymbolicLink()) throw symbolicLinkError(dir);
+  listFiles(dir);
 }
 
 /**
@@ -374,74 +396,6 @@ export function verifyPackagedAddon(xpiPath, meta) {
   } finally {
     rmSync(extracted, { recursive: true, force: true, maxRetries: 3 });
   }
-}
-
-// Windows, antivirus and indexing tools briefly lock a directory that was just written, and a
-// rename then fails with one of these codes. graceful-fs retries renames on the same three.
-const RETRYABLE_RENAME_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
-
-/**
- * Renames `from` to `to`, retrying a rename that fails with a lock code up to `attempts` times
- * in all, pausing `delayMs` times the attempt number between tries. Any other error, and the
- * last locked attempt's error, propagates.
- */
-export function renameWithRetry(
-  from,
-  to,
-  { rename = renameSync, attempts = 5, delayMs = 50 } = {},
-) {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      rename(from, to);
-      return;
-    } catch (error) {
-      if (attempt >= attempts || !RETRYABLE_RENAME_CODES.has(error?.code)) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs * attempt);
-    }
-  }
-}
-
-/**
- * Finishes a promotion an earlier build was interrupted in. With `target` missing and `previous`
- * present, that build stopped after moving the last good copy aside, so it moves back. With both
- * present, the swap finished and `previous` is a redundant older copy, so it goes.
- */
-export function recoverInterruptedPromotion({ target, previous }, renameOptions) {
-  if (!existsSync(previous)) return;
-  if (existsSync(target)) {
-    rmSync(previous, { recursive: true, force: true, maxRetries: 3 });
-  } else {
-    renameWithRetry(previous, target, renameOptions);
-  }
-}
-
-/**
- * Replaces `target` with `staging` without deleting the last good copy before its replacement is
- * in place: `target` moves aside to `previous`, `staging` moves in, and only then does `previous`
- * go. If `staging` cannot move in, `previous` moves back before the error propagates. If that
- * fails too, the copy stays at `previous` and `recoverInterruptedPromotion` restores it.
- */
-export function promoteStaging({ staging, target, previous }, renameOptions) {
-  recoverInterruptedPromotion({ target, previous }, renameOptions);
-  const hadTarget = existsSync(target);
-  if (hadTarget) renameWithRetry(target, previous, renameOptions);
-  try {
-    renameWithRetry(staging, target, renameOptions);
-  } catch (error) {
-    if (hadTarget) {
-      try {
-        renameWithRetry(previous, target, renameOptions);
-      } catch (restoreError) {
-        throw new AggregateError(
-          [error, restoreError],
-          `Could not move ${staging} to ${target}, nor move the last good copy back from ` +
-            `${previous}; the next build restores it from there`,
-        );
-      }
-    }
-    throw error;
-  }
-  rmSync(previous, { recursive: true, force: true, maxRetries: 3 });
 }
 
 /**

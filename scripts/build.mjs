@@ -6,22 +6,33 @@
  * XPI or update.json survives a build that then fails. Every later step works on a staging copy,
  * build/.addon-staging/:
  *
- * 1. Copies addon/ into it and replaces __placeholders__ with values from package.json
+ * 1. Refuses a symbolic link anywhere in addon/, then copies addon/ into it and replaces
+ *    __placeholders__ with values from package.json
  * 2. Compiles TypeScript into it via the esbuild JS API
  * 3. Verifies it: no placeholder survives, and manifest.json's name, version, id and
  *    Zotero range equal package.json's
  * 4. In production mode: zips it into the XPI, extracts the XPI and verifies what it holds the
  *    same way, then hashes the XPI, verifies the update.json object for this version and writes it
  * 5. Swaps it in as build/addon, moving the previous copy aside and deleting that only once the
- *    new copy is in place
+ *    new copy is in place (scripts/build-promotion.mjs)
  *
  * A dev install loads build/addon through a proxy file, so it only ever sees a copy that
  * passed every check. If any step throws, the build removes the staging copy, the XPI and
- * update.json, and build/addon keeps the last copy that passed.
+ * update.json, and build/addon keeps the last copy that passed. When a failed swap could not move
+ * that copy back either, it waits in build/.addon-previous, which cleanup never removes, and the
+ * next build moves it back before anything else.
  */
 
 import { build } from "esbuild";
-import { cpSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync } from "fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  readdirSync,
+} from "fs";
 import { basename, join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { createHash } from "crypto";
@@ -31,13 +42,13 @@ import {
   placeholdersFor,
   replacePlaceholders,
   updateManifestFor,
+  assertNoSymbolicLinks,
   verifyBuiltAddon,
   verifyPackagedAddon,
   verifyUpdateManifest,
   formatRange,
-  promoteStaging,
-  recoverInterruptedPromotion,
 } from "./build-metadata.mjs";
+import { promoteStaging, recoverInterruptedPromotion } from "./build-promotion.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -89,7 +100,9 @@ console.log(
 );
 
 try {
-  // Step 1: Stage and replace placeholders
+  // Step 1: Stage and replace placeholders. A link in addon/ fails here, before anything is
+  // copied: the copy would keep the link, and replacing placeholders would write through it.
+  assertNoSymbolicLinks(join(ROOT, "addon"));
   cpSync(join(ROOT, "addon"), STAGING_DIR, { recursive: true });
   replacePlaceholders(STAGING_DIR, placeholdersFor(meta));
   console.log("  [1/4] Placeholders replaced");
@@ -158,7 +171,14 @@ try {
   // A failure to clean up is reported beside the build error, never in place of it.
   try {
     removeStaleArtefacts();
-    console.error("\n  Build failed; removed the staging copy, the XPI and update.json.\n");
+    const waiting =
+      !existsSync(ADDON_DIR) && existsSync(PREVIOUS_DIR)
+        ? "\n  build/.addon-previous holds the last copy that passed; the next build moves it " +
+          "back to build/addon."
+        : "";
+    console.error(
+      `\n  Build failed; removed the staging copy, the XPI and update.json.${waiting}\n`,
+    );
   } catch (cleanupError) {
     console.error(
       `\n  Build failed, and removing the staging copy, the XPI and update.json failed too: ` +
