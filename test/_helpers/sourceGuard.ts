@@ -120,6 +120,23 @@ const KEYED_LOOKUPS: ReadonlySet<string> = new Set([
 
 // ── Scanning ─────────────────────────────────────────────────────────────────
 
+const parsed = new Map<string, ts.SourceFile>();
+
+/**
+ * One parse per file and text, shared by every guard and spec. Parsing the src
+ * tree dominates a scan, and repeating it per test pushed a scan past vitest's
+ * per-test timeout under the parallel suite.
+ */
+function parseSource(file: string, source: string): ts.SourceFile {
+  const key = `${file}\0${source}`;
+  let sf = parsed.get(key);
+  if (!sf) {
+    sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    parsed.set(key, sf);
+  }
+  return sf;
+}
+
 /** Every hit `spec` names in one source file. */
 export function scanSource(
   file: string,
@@ -127,7 +144,7 @@ export function scanSource(
   spec: GuardSpec,
   options: ScanOptions = {},
 ): SourceHit[] {
-  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const sf = parseSource(file, source);
   const lines = source.split(/\r?\n/);
   const forms = options.forms ?? new Set(ACCESS_FORMS);
   const rules = spec.members ?? [];

@@ -16,7 +16,7 @@
  * a string can neither hide a read nor fake one, and an exemption names the
  * function and member it covers rather than a line.
  */
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   ACCESS_FORMS,
   allowanceMismatches,
@@ -119,6 +119,16 @@ function selectionViolations(
 
 describe("the Zotero selection is read only in src/modules/host/selection.ts", () => {
   const sources = repoSources();
+  let moduleHits: SourceHit[] = [];
+  let outsideHits: SourceHit[] = [];
+
+  // The whole-tree scan runs once, under a hook budget sized for the parallel
+  // suite, so the assertions below only compare results.
+  beforeAll(() => {
+    const { inModule, outside } = split(sources);
+    moduleHits = scanSources(inModule, SINGULAR);
+    outsideHits = scanSources(outside, ANY_SELECTION_READ);
+  }, 60_000);
 
   it("scans the whole src tree, and finds the reads the selection module makes (positive control)", () => {
     expect(Object.keys(sources).length, "expected to scan the whole src tree").toBeGreaterThan(20);
@@ -142,16 +152,18 @@ describe("the Zotero selection is read only in src/modules/host/selection.ts", (
 
   it("no other src module reads the selection, and the selection module reads a singular getter only as a fallback", () => {
     expect(
-      selectionViolations(sources).map(describeHit),
+      [
+        ...unallowedHits(moduleHits, SINGULAR_FALLBACKS),
+        ...unallowedHits(outsideHits, OUTSIDE_ALLOWED),
+      ].map(describeHit),
       `route these reads through ${SELECTION_MODULE}`,
     ).toEqual([]);
   });
 
   it("every allowance still matches its site exactly, so none outlives its reason or covers a new read", () => {
-    const { inModule, outside } = split(sources);
     expect([
-      ...allowanceMismatches(scanSources(inModule, SINGULAR), SINGULAR_FALLBACKS),
-      ...allowanceMismatches(scanSources(outside, ANY_SELECTION_READ), OUTSIDE_ALLOWED),
+      ...allowanceMismatches(moduleHits, SINGULAR_FALLBACKS),
+      ...allowanceMismatches(outsideHits, OUTSIDE_ALLOWED),
     ]).toEqual([]);
   });
 
