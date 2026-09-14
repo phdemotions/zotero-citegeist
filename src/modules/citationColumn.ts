@@ -65,10 +65,17 @@ const fetchQueue = new Set<number>();
 /** Items whose background lookup is running now. */
 const fetchInFlight = new Set<number>();
 /**
- * Items the background queue has looked up this session, oldest first, so a
- * repaint does not queue them again. Bounded; see {@link rememberAttempt}.
+ * Items the background queue has looked up this session, so a repaint does not
+ * queue them again. Each maps to the {@link fetchEpoch} it was last looked up or
+ * drawn in, and the map stays in epoch order, oldest first. Bounded; see
+ * {@link rememberAttempt}.
  */
-const fetchAttempted = new Set<number>();
+const fetchAttempted = new Map<number, number>();
+/**
+ * How many queue passes have finished. A pass's lookups, and every paint from
+ * the end of the previous pass until it ends, share one epoch.
+ */
+let fetchEpoch = 0;
 let repaintTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
@@ -236,6 +243,7 @@ function cellState(item: _ZoteroTypes.Item): CellState | null {
   }
 
   if (fetchInFlight.has(item.id) || fetchQueue.has(item.id)) return { metrics, pending: true };
+  if (metrics.isStale) keepAttemptWhileDrawn(item.id);
   const due = willBackgroundFetch(item, metrics);
   if (due) queueFetch(item.id);
   return { metrics, pending: due };
@@ -596,6 +604,7 @@ export function unregisterCitationColumn(): void {
   fetchQueue.clear();
   fetchInFlight.clear();
   fetchAttempted.clear();
+  fetchEpoch = 0;
   backgroundPause = null;
   metricsCache.clear();
   rankingCache.clear();
@@ -650,6 +659,8 @@ async function processFetchQueue(): Promise<void> {
     processingQueue = false;
   }
 
+  // The pass is over, so the repaint below and the next pass start a new epoch.
+  fetchEpoch++;
   // Repaint so a cell whose lookup found nothing, or was dropped, stops showing "…".
   metricsCache.clear();
   scheduleColumnRepaint();
@@ -728,15 +739,38 @@ function pauseBackgroundFetching(stop: FetchStop, apiKey: string): void {
 }
 
 /**
- * Remember that the queue looked an item up. Past MAX_ATTEMPTED_FETCH_CACHE the
- * oldest entries are forgotten, so only those can be looked up again; clearing
- * the whole set would re-run every earlier lookup on the next repaint.
+ * Remember that the queue looked an item up, in the current epoch.
+ *
+ * Past MAX_ATTEMPTED_FETCH_CACHE entries the oldest are forgotten, and only
+ * those can be looked up again; clearing the whole set would re-run every
+ * earlier lookup on the next repaint. An entry of the current epoch is never
+ * forgotten: an item this pass looked up, or a stale row a paint drew since the
+ * last pass ended. Each pass ends with a repaint, so forgetting a row that
+ * repaint draws queues it again, and sorting by a Citegeist column draws every
+ * row. A library with more stale rows than the cap would otherwise look the
+ * overflow up again on every pass, all session.
+ *
+ * So the map holds at most MAX_ATTEMPTED_FETCH_CACHE entries, or, when one epoch
+ * draws and looks up more items than that, as many as that epoch touched: never
+ * more than the rows Zotero's item trees hold.
  */
 function rememberAttempt(id: number): void {
   fetchAttempted.delete(id);
-  fetchAttempted.add(id);
-  for (const oldest of fetchAttempted) {
-    if (fetchAttempted.size <= MAX_ATTEMPTED_FETCH_CACHE) break;
+  fetchAttempted.set(id, fetchEpoch);
+  for (const [oldest, epoch] of fetchAttempted) {
+    if (fetchAttempted.size <= MAX_ATTEMPTED_FETCH_CACHE || epoch === fetchEpoch) break;
     fetchAttempted.delete(oldest);
   }
+}
+
+/**
+ * Move a drawn row's entry into the current epoch, so {@link rememberAttempt}
+ * does not forget an item a repaint still draws. Re-inserting it at the end
+ * keeps the map in epoch order.
+ */
+function keepAttemptWhileDrawn(id: number): void {
+  const epoch = fetchAttempted.get(id);
+  if (epoch === undefined || epoch === fetchEpoch) return;
+  fetchAttempted.delete(id);
+  fetchAttempted.set(id, fetchEpoch);
 }

@@ -108,6 +108,18 @@ const FIXTURES: readonly Fixture[] = [
     hits: [prefsHit("element")],
   },
   {
+    name: "Reflect.has",
+    spec: PREFS,
+    source: 'export const has = Reflect.has(Zotero, "Prefs");',
+    hits: [prefsHit("element")],
+  },
+  {
+    name: "Object.getOwnPropertyDescriptor",
+    spec: PREFS,
+    source: 'export const prefs = Object.getOwnPropertyDescriptor(Zotero, "Prefs");',
+    hits: [prefsHit("element")],
+  },
+  {
     name: "an in check",
     spec: PREFS,
     source: 'export const has = "Prefs" in Zotero;',
@@ -195,6 +207,12 @@ const FIXTURES: readonly Fixture[] = [
     name: "a receiver reached through globalThis",
     spec: PREFS,
     source: "export const p = globalThis.Zotero.Prefs;",
+    hits: [prefsHit("property")],
+  },
+  {
+    name: "a receiver reached through self",
+    spec: PREFS,
+    source: "export const p = self.Zotero.Prefs;",
     hits: [prefsHit("property")],
   },
   {

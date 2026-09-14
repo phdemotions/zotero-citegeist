@@ -196,10 +196,10 @@ function renderSkeletonRows(body: HTMLElement): void {
  * Open the citation browser for `item`.
  *
  * `openerWindow` is the window the request came from. A context menu passes the
- * window it opened in, so the dialog parents to that window and takes its
- * default filing collection from that window's selection rather than the most
- * recent window's. Callers that pass none (the item pane today) get the most
- * recent main window.
+ * window it opened in, and the item pane the window it is drawn in, so the
+ * dialog parents to that window and takes its default filing collection from
+ * that window's selection rather than the most recent window's. A caller that
+ * passes none gets the most recent main window.
  */
 export async function showCitationNetwork(
   item: _ZoteroTypes.Item,
@@ -403,8 +403,8 @@ export async function showAuthorWorks(
   const myOpen = ++dialogOpenSeq;
 
   // The window the request came from, as in showCitationNetwork: it parents the
-  // dialog and supplies the default collection. Callers that pass none (the
-  // item pane today) get the most recent main window.
+  // dialog and supplies the default collection. A caller that passes none gets
+  // the most recent main window.
   const win = openerWindow ?? Zotero.getMainWindow();
   const doc = win.document;
   const parent = doc.body || doc.documentElement;

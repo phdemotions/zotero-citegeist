@@ -18,8 +18,9 @@ import { fakeDb, mockZotero, resetCacheHarness } from "./_helpers/cacheHarness";
 import type * as ConstantsModule from "../src/constants";
 import type * as OpenAlexModule from "../src/modules/openalex";
 
-// A small tried-set cap, so the eviction test can overflow it with a few rows.
-// No other test here leaves more than a couple of failed lookups behind.
+// A small tried-set cap, so the tests of the set of looked-up rows can overflow
+// it with a few rows. No other test here leaves more than a couple of failed
+// lookups behind.
 vi.mock("../src/constants", async (importOriginal) => ({
   ...(await importOriginal<typeof ConstantsModule>()),
   MAX_ATTEMPTED_FETCH_CACHE: 3,
@@ -440,7 +441,14 @@ describe("the background queue stops", () => {
 });
 
 describe("the set of rows already looked up", () => {
-  it("forgets only its oldest entries when full, so each new row costs one lookup", async () => {
+  /** Every repaint draws every row, as Zotero does while sorting by a Citegeist column. */
+  function drawEveryRowOnRepaint(rows: readonly _ZoteroTypes.Item[]): void {
+    refreshItemTree.mockImplementation(() => {
+      for (const row of rows) cell(row);
+    });
+  }
+
+  it("forgets only its oldest entries no repaint still draws, so each new row costs one lookup", async () => {
     const drawn: _ZoteroTypes.Item[] = [];
     // A repaint draws the rows in view: the last MAX_ATTEMPTED_FETCH_CACHE drawn.
     refreshItemTree.mockImplementation(() => {
@@ -456,6 +464,45 @@ describe("the set of rows already looked up", () => {
 
     for (const [i, row] of rows.entries()) {
       expect(lookupsOf(`10.5555/tried-${i}`), `lookups of ${row.key}`).toBe(1);
+    }
+
+    // The set stays bounded: the first row, which no repaint has drawn since it
+    // scrolled out of view, was forgotten, so drawing it again looks it up again.
+    cell(rows[0]);
+    await settle(3_000);
+    expect(lookupsOf("10.5555/tried-0")).toBe(2);
+  });
+
+  it("a repaint that draws more rows than the set holds looks each one up once, and the next repaint repeats none", async () => {
+    const rows = doiItems(MAX_ATTEMPTED_FETCH_CACHE * 3, "WIDE");
+    drawEveryRowOnRepaint(rows);
+
+    for (const row of rows) cell(row);
+    await settle(10_000);
+    expect(refreshItemTree, "positive control: the pass ended with a repaint").toHaveBeenCalled();
+
+    for (const row of rows) cell(row);
+    await settle(10_000);
+
+    for (const [i, row] of rows.entries()) {
+      expect(lookupsOf(`10.5555/wide-${i}`), `lookups of ${row.key}`).toBe(1);
+    }
+  });
+
+  it("a later pass that looks up one new row forgets none of the rows a repaint still draws", async () => {
+    const rows = doiItems(MAX_ATTEMPTED_FETCH_CACHE * 3, "KEEP");
+    drawEveryRowOnRepaint(rows);
+    for (const row of rows) cell(row);
+    await settle(10_000);
+
+    const [late] = doiItems(1, "LATE");
+    rows.push(late);
+    cell(late);
+    await settle(10_000);
+
+    expect(lookupsOf("10.5555/late-0"), "positive control: the later pass ran").toBe(1);
+    for (let i = 0; i < MAX_ATTEMPTED_FETCH_CACHE * 3; i++) {
+      expect(lookupsOf(`10.5555/keep-${i}`), `lookups of KEEP${i}`).toBe(1);
     }
   });
 });

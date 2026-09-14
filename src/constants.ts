@@ -60,8 +60,11 @@ export const AUTO_FETCH_PREF_TTL_MS = 5000;
 
 // ── Column fetch queue ──
 /**
- * Most items the column queue remembers as looked up this session. Past it the
- * oldest are forgotten, and only those can be looked up again.
+ * Items the column queue remembers as looked up this session before it forgets
+ * any, oldest first; only those can be looked up again. It never forgets an item
+ * the running pass looked up or a stale row drawn since the last pass ended, so
+ * one pass over more rows than this grows the set to that many (see
+ * rememberAttempt in citationColumn.ts).
  */
 export const MAX_ATTEMPTED_FETCH_CACHE = 10_000;
 /** Debounce before a column fetch batch kicks off. */

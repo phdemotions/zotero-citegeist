@@ -64,6 +64,17 @@ function applyHostScheme(body: HTMLElement): void {
 }
 
 /**
+ * The window a pane element is drawn in. Each main window has its own item pane,
+ * and a dialog the pane opens belongs to that window: it parents there and takes
+ * that window's selected collection as its default. `Zotero.getMainWindow()` is
+ * the most recently active window instead, which a click in another window's
+ * pane does not make it.
+ */
+function paneWindow(element: Element): Window | null {
+  return element.ownerDocument.defaultView;
+}
+
+/**
  * Open Zotero's Settings dialog directly to the Citegeist pane. Zotero hosts
  * plugin preferences in the Settings dialog (not the Add-ons window), so this
  * gives the item pane a one-click shortcut to where the email/cache settings
@@ -1302,7 +1313,7 @@ function renderPane(
     btn.setAttribute("aria-label", ariaLabel);
     btn.addEventListener("click", () => {
       Zotero.debug(`[Citegeist] ${mode} button clicked for item ${item.id}`);
-      showCitationNetwork(item, mode).catch((e: unknown) => {
+      showCitationNetwork(item, mode, paneWindow(btn)).catch((e: unknown) => {
         logError(`showCitationNetwork(${mode})`, e);
       });
     });
@@ -1486,7 +1497,7 @@ function authorRow(doc: Document, vm: AuthorRowViewModel): HTMLElement {
 
   const authorId = vm.authorId as string;
   btn.addEventListener("click", () =>
-    showAuthorWorks(authorId).catch((e) => logError("showAuthorWorks", e)),
+    showAuthorWorks(authorId, paneWindow(btn)).catch((e) => logError("showAuthorWorks", e)),
   );
   return btn;
 }

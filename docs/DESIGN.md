@@ -149,7 +149,7 @@ The queue stops rather than grinding through the library:
 - A rejected key (CG-API01) or a spent budget (CG-API42) fails every later request. The first one drops the queue, records one diagnostic for the whole stop, and pauses background fetching until the API key changes. Each lookup passes `recordRefusals: false`, because a batch runs two requests side by side and the diagnostic ring buffer holds 50 entries.
 - A cache that refuses writes (CG-DB02, CG-DB03, CG-DB04) would throw every result away, so it pauses fetching for the session without a second diagnostic.
 - Unticking the setting stops a running pass at its next batch, where the queue reads the pref past its 5-second cache.
-- The set of rows already looked up holds `MAX_ATTEMPTED_FETCH_CACHE` entries and forgets the oldest when full, so an overflow re-runs only those lookups.
+- The set of rows already looked up forgets its oldest entries past `MAX_ATTEMPTED_FETCH_CACHE`, so an overflow re-runs only those lookups. It never forgets an item the running pass looked up, or a row with missing or stale metrics that a paint has drawn since the last pass ended. Every pass ends with a repaint, and sorting by a Citegeist column draws every row, so forgetting either would queue the row again and repeat the overflow on every pass. When one pass covers more rows than the cap, the set grows to that many instead.
 
 **Trade-off:** An item with no identifier gets nothing in the background, and a pause for a spent budget lasts the session even after the daily budget resets. Hiding the Citegeist columns does not stop lookups for drawn rows; unticking the setting does.
 
@@ -232,7 +232,7 @@ The fallback fires in exactly two cases:
 1. `extractIdentifier(item)` returns `null` — no DOI, PMID, arXiv ID, or ISBN present
 2. An identifier was found but the OpenAlex lookup returned `null` (work not found in the index)
 
-In both cases, the same title search pipeline runs, but only for a fetch the user starts, by opening the item or using Fetch Citation Counts. The columns' background fetch stops at either case instead (see [Why Background Fetches Use Only Identifier Lookups?](#why-background-fetches-use-only-identifier-lookups)). A prior explicit dismiss (stored in `Citegeist.noMatch: true`) suppresses the search for 30 days, after which it retries automatically. A manual "Fetch Citation Counts" always retries regardless of the suppress flag.
+In both cases, the same title search pipeline runs, but only for a fetch the user starts, by opening the item or using Fetch Citation Counts. The columns' background fetch stops at either case instead (see [Why Background Fetches Use Only Identifier Lookups?](#why-background-fetches-use-only-identifier-lookups)). A search that finds nothing, and the user dismissing a match, both set `Citegeist.noMatch: true` with a timestamp. `attemptTitleSearch` in `citationService.ts` checks that flag before every search, whoever started the fetch, so for 30 days (`NO_MATCH_RETRY_DAYS`) opening the item and Fetch Citation Counts both return no match without searching, and after that the search runs again. A fetch that caches the work and a confirmed match both clear the flag, and so does the pane's Refresh button, which deletes the item's cached row before it fetches: Refresh is how a user searches again inside the 30 days.
 
 ### Search strategy
 

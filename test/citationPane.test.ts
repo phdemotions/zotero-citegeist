@@ -6,8 +6,12 @@
  * (read-only CG-DB03, closed CG-DB02) the pane must show that code where it
  * would otherwise say a match was confirmed or dismissed, must not offer those
  * decisions, and must not spend an OpenAlex request on data it can't keep.
+ *
+ * A dialog the pane opens also belongs to the pane's own window, not the most
+ * recently active one: the last block drives the real citation browser from a
+ * pane drawn in a second main window.
  */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeDb, mockZotero, resetCacheHarness } from "./_helpers/cacheHarness";
 import { FakeDocument, type FakeElement } from "./_helpers/fakeDom";
 import type * as OpenAlexModule from "../src/modules/openalex";
@@ -24,9 +28,27 @@ vi.mock("../src/modules/openalex", async (importOriginal) => ({
 }));
 vi.mock("../src/modules/titleSearch", () => ({ searchByMetadata: vi.fn(async () => null) }));
 vi.mock("../src/modules/citationColumn", () => ({ invalidateColumnCache: vi.fn() }));
+// The pane's entry points into the citation browser do nothing unless a test
+// routes them to the real dialog, whose results load, library DOI search and
+// collection tree are stubbed below.
 vi.mock("../src/modules/citationNetwork", () => ({
   showCitationNetwork: vi.fn(),
   showAuthorWorks: vi.fn(),
+}));
+vi.mock("../src/modules/citationNetwork/results", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadResults: vi.fn(async () => {}),
+}));
+vi.mock("../src/modules/citationNetwork/actions", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getExistingDOIs: vi.fn(async () => new Set<string>()),
+}));
+vi.mock("../src/modules/citationNetwork/collectionPicker", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  buildCollectionTree: vi.fn(() => [
+    { id: 3, name: "Grant A", depth: 0, parentId: false, hasChildren: false },
+    { id: 4, name: "Grant B", depth: 0, parentId: false, hasChildren: false },
+  ]),
 }));
 vi.mock("../src/modules/openalexAuthors", async (importOriginal) => ({
   ...(await importOriginal<typeof OpenAlexAuthorsModule>()),
@@ -36,7 +58,12 @@ vi.mock("../src/modules/openalexAuthors", async (importOriginal) => ({
 import { registerCitationPane } from "../src/modules/citationPane";
 import { _resetForTesting, closeCache, initCache } from "../src/modules/cache/db";
 import { cacheWorkData, writePendingSuggestion } from "../src/modules/cache";
+import { cacheItemAuthors } from "../src/modules/cache/authors";
+import { showAuthorWorks, showCitationNetwork } from "../src/modules/citationNetwork";
+import * as dialog from "../src/modules/citationNetwork/dialog";
+import { loadResults } from "../src/modules/citationNetwork/results";
 import { getWorkByDOI, getWorkById } from "../src/modules/openalex";
+import { fetchAuthorProfile } from "../src/modules/openalexAuthors";
 import { searchByMetadata } from "../src/modules/titleSearch";
 import { describeCode } from "../src/modules/diagnostics";
 import { CACHE_SCHEMA_MAJOR, CACHE_SCHEMA_STAMP_MULTIPLIER } from "../src/constants";
@@ -103,9 +130,13 @@ function paneItem(key: string, fields: Record<string, string> = {}): _ZoteroType
   } as unknown as _ZoteroTypes.Item;
 }
 
-/** A section body holding the `#citegeist-content` container the pane renders into. */
-function paneBody(item: _ZoteroTypes.Item): PaneArgs & { content: FakeElement } {
+/**
+ * A section body holding the `#citegeist-content` container the pane renders
+ * into, drawn in `win` when one is given.
+ */
+function paneBody(item: _ZoteroTypes.Item, win?: Window): PaneArgs & { content: FakeElement } {
   const doc = new FakeDocument();
+  if (win) Object.assign(doc, { defaultView: win });
   const body = doc.createElement("div");
   const content = body.appendChild(doc.createElement("div"));
   content.id = "citegeist-content";
@@ -247,4 +278,146 @@ describe("pane on a cache that refuses writes", () => {
     );
     expect(getWorkByDOI).not.toHaveBeenCalled();
   });
+});
+
+describe("a dialog the pane opens belongs to the pane's own window", () => {
+  const WORK = {
+    id: "https://openalex.org/W42",
+    cited_by_count: 42,
+    fwci: null,
+    is_retracted: false,
+  };
+  const PROFILE = {
+    id: "A5",
+    displayName: "Ada Author",
+    orcid: null,
+    worksCount: 10,
+    citedByCount: 100,
+    hIndex: 5,
+    i10Index: 3,
+    metricsAreLowerBound: false,
+    redirectedFrom: null,
+  };
+
+  /**
+   * A main window with its own item pane, one collection selected there, and a
+   * document just real enough for the citation browser to open in: every element
+   * accepts the calls the dialog shell makes, and only the default-collection
+   * label and its `+N` suffix are found by a query.
+   */
+  function mainWindow(collectionId: number) {
+    const found = new Map<string, Record<string, unknown>>();
+    const element = (): Record<string, unknown> => ({
+      id: "",
+      textContent: "",
+      hidden: false,
+      firstChild: null,
+      style: { cssText: "" },
+      dataset: {},
+      setAttribute: vi.fn(),
+      appendChild: vi.fn(),
+      insertBefore: vi.fn(),
+      remove: vi.fn(),
+      focus: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => true),
+      querySelector: (selector: string) => found.get(selector) ?? null,
+      querySelectorAll: () => [],
+    });
+    const label = element();
+    found.set("#cg-default-label", label);
+    found.set("#cg-default-extra", element());
+    const body = element();
+    const pane = {
+      getSelectedCollections: () => [{ id: collectionId } as _ZoteroTypes.Collection],
+    };
+    const win = {
+      document: { body, documentElement: element(), createElementNS: element },
+      ZoteroPane: pane,
+      setTimeout: () => 0,
+    } as unknown as Window;
+    return { win, pane, body, label };
+  }
+
+  /** The dialog state the last results load was handed. */
+  function loadedState() {
+    const [state] = vi.mocked(loadResults).mock.calls.at(-1) as unknown as [
+      { win: Window; overlay: unknown; defaultCollectionIds: Set<number> },
+    ];
+    return state;
+  }
+
+  /** Click the pane's "Citing works" button. */
+  async function openCitingWorks(pane: { content: FakeElement }): Promise<void> {
+    const button = pane.content
+      .querySelectorAll("button")
+      .find((b) => b.textContent.startsWith("Citing works"));
+    expect(button, "the pane offers Citing works").toBeDefined();
+    await button!.click();
+  }
+
+  /** Click the pane's first author row, once the async author region has drawn it. */
+  async function openAuthorWorks(pane: { content: FakeElement }): Promise<void> {
+    await vi.waitFor(() => expect(pane.content.querySelector(".cg-authorrow")).not.toBeNull());
+    await pane.content.querySelector(".cg-authorrow")!.click();
+  }
+
+  beforeEach(() => {
+    vi.mocked(loadResults).mockClear();
+    vi.mocked(showCitationNetwork).mockImplementation(dialog.showCitationNetwork);
+    vi.mocked(showAuthorWorks).mockImplementation(dialog.showAuthorWorks);
+    vi.mocked(getWorkByDOI).mockResolvedValue(WORK as never);
+    vi.mocked(fetchAuthorProfile).mockResolvedValue(PROFILE);
+    vi.stubGlobal("Services", { prompt: { alert: vi.fn() } });
+    vi.stubGlobal(
+      "DOMParser",
+      class {
+        parseFromString() {
+          return { body: { childNodes: [] } };
+        }
+      },
+    );
+  });
+
+  afterEach(() => {
+    vi.mocked(showCitationNetwork).mockReset();
+    vi.mocked(showAuthorWorks).mockReset();
+    vi.mocked(getWorkByDOI).mockImplementation(async () => null);
+    vi.mocked(fetchAuthorProfile).mockImplementation(async () => null);
+  });
+
+  it.each([
+    ["Citing works", openCitingWorks],
+    ["an author row", openAuthorWorks],
+  ])(
+    "%s opens in the pane's window and files into that window's selection, not the most recent window's",
+    async (_name, open) => {
+      // The most recent main window has Grant A selected; the window the pane is
+      // drawn in has Grant B.
+      const recent = mainWindow(3);
+      const own = mainWindow(4);
+      Object.assign(mockZotero, {
+        getMainWindow: () => recent.win,
+        getActiveZoteroPane: () => recent.pane,
+      });
+      const item = paneItem("WIN", { DOI: "10.1234/win" });
+      await cacheWorkData(item, WORK, null);
+      await cacheItemAuthors(item, [
+        { author: { id: "https://openalex.org/A5", display_name: "Ada Author", orcid: null } },
+      ]);
+      const pane = paneBody(item, own.win);
+      section.onRender(pane);
+
+      await open(pane);
+      await vi.waitFor(() => expect(loadResults).toHaveBeenCalled());
+
+      const state = loadedState();
+      expect(state.win).toBe(own.win);
+      expect([...state.defaultCollectionIds]).toEqual([4]);
+      expect(own.label.textContent).toBe("Grant B");
+      expect(own.body.appendChild).toHaveBeenCalledWith(state.overlay);
+      expect(recent.body.appendChild).not.toHaveBeenCalled();
+    },
+  );
 });
