@@ -117,17 +117,20 @@ export function assertLoadedMatchesStaged(
  * Throw unless ZOTERO_PLUGIN_ZOTERO_BIN_PATH names an existing file, before
  * scaffold starts anything. real-zotero.yml sets ZOTERO_SETUP_COMPLETE=1, which
  * skips scaffold's own headless setup, so scaffold downloads nothing there and,
- * without the variable, fails with a bare "No Zotero Found.". Only when
- * ZOTERO_SETUP_COMPLETE is unset does that setup download Zotero's beta build
- * in place of a pinned release. Every run needs the variable either way, so
- * requiring it everywhere costs a local run nothing.
+ * without the variable, fails with a bare "No Zotero Found.". Only on CI, where
+ * scaffold runs headless, with ZOTERO_SETUP_COMPLETE unset does that setup
+ * download Zotero's beta build in place of a pinned release. Every run needs the
+ * variable either way, so requiring it everywhere costs a local run nothing.
  */
 export function assertPinnedZoteroBinary(env: Record<string, string | undefined>): void {
   const bin = env.ZOTERO_PLUGIN_ZOTERO_BIN_PATH;
   if (!bin) {
     throw new Error(
-      "ZOTERO_PLUGIN_ZOTERO_BIN_PATH is not set. Without it scaffold downloads Zotero's beta " +
-        "channel on CI instead of a pinned release; point it at the zotero binary under test.",
+      "ZOTERO_PLUGIN_ZOTERO_BIN_PATH is not set, so the run stopped before scaffold started " +
+        "Zotero. Set it to the path of the zotero binary under test. Left to scaffold, a run " +
+        'without it stops with "No Zotero Found." when ZOTERO_SETUP_COMPLETE=1, as ' +
+        "real-zotero.yml sets, or outside CI; on CI without ZOTERO_SETUP_COMPLETE, scaffold " +
+        "downloads and tests Zotero's beta build instead of a pinned release.",
     );
   }
   if (!existsSync(bin)) {

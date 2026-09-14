@@ -72,7 +72,7 @@ describe("promotion", () => {
     makeCopy(paths.staging, "new.marker");
     const { moves, rename } = recordingRename();
 
-    promoteStaging(paths, { rename, delayMs: 0 });
+    promoteStaging(paths, { rename });
 
     expect(moves).toEqual(["addon -> .addon-previous", ".addon-staging -> addon"]);
     expect(readdirSync(paths.root)).toEqual(["addon"]);
@@ -84,7 +84,7 @@ describe("promotion", () => {
     makeCopy(paths.staging, "new.marker");
     const { moves, rename } = recordingRename();
 
-    promoteStaging(paths, { rename, delayMs: 0 });
+    promoteStaging(paths, { rename });
 
     expect(moves).toEqual([".addon-staging -> addon"]);
     expect(readdirSync(paths.root)).toEqual(["addon"]);
@@ -97,7 +97,7 @@ describe("promotion", () => {
     makeCopy(paths.staging, "new.marker");
     const { moves, rename } = recordingRename();
 
-    promoteStaging(paths, { rename, delayMs: 0 });
+    promoteStaging(paths, { rename });
 
     expect(moves).toEqual(["addon -> .addon-previous", ".addon-staging -> addon"]);
     expect(readdirSync(paths.root)).toEqual(["addon"]);
@@ -110,7 +110,7 @@ describe("promotion", () => {
     makeCopy(paths.staging, "new.marker");
     const { moves, rename } = recordingRename();
 
-    promoteStaging(paths, { rename, delayMs: 0 });
+    promoteStaging(paths, { rename });
 
     expect(moves).toEqual([
       ".addon-previous -> addon",
@@ -128,7 +128,7 @@ describe("promotion", () => {
     const failure = errorWithCode("ENOSPC", "no space left on device");
     const { rename } = recordingRename(new Map([[paths.staging, failure]]));
 
-    expect(thrown(() => promoteStaging(paths, { rename, delayMs: 0 }))).toBe(failure);
+    expect(thrown(() => promoteStaging(paths, { rename }))).toBe(failure);
     expect(readdirSync(paths.root).sort()).toEqual([".addon-staging", "addon"]);
     expect(readdirSync(paths.target)).toEqual(["old.marker"]);
   });
@@ -146,7 +146,7 @@ describe("promotion", () => {
       ]),
     );
 
-    const error = thrown(() => promoteStaging(paths, { rename, delayMs: 0 }));
+    const error = thrown(() => promoteStaging(paths, { rename }));
 
     expect(error).toBeInstanceOf(AggregateError);
     expect((error as AggregateError).errors).toEqual([stagingFailure, restoreFailure]);
@@ -169,47 +169,102 @@ describe("promotion", () => {
     expect(readdirSync(paths.root)).toEqual(["addon"]);
     expect(readdirSync(paths.target)).toEqual(["new.marker"]);
   });
+});
 
+/** A clock that moves only when the retry sleeps, recording each sleep. */
+function fakeClock() {
+  let time = 0;
+  const sleeps: number[] = [];
+  return {
+    sleeps,
+    now: () => time,
+    sleep: (ms: number) => {
+      sleeps.push(ms);
+      time += ms;
+    },
+  };
+}
+
+describe("renameWithRetry", () => {
   it.each(["EPERM", "EBUSY", "EACCES"])(
-    "retries a rename locked with %s and succeeds once the lock clears",
+    "retries a rename locked with %s, waiting 10 ms and doubling each wait, and succeeds once the lock clears",
     (code) => {
+      const clock = fakeClock();
       let calls = 0;
       const rename = () => {
         calls++;
-        if (calls < 3) throw errorWithCode(code);
+        if (calls <= 4) throw errorWithCode(code);
       };
 
-      renameWithRetry("from", "to", { rename, delayMs: 0 });
+      renameWithRetry("from", "to", { rename, exists: () => false, ...clock });
 
-      expect(calls).toBe(3);
+      expect(calls).toBe(5);
+      expect(clock.sleeps).toEqual([10, 20, 40, 80]);
     },
   );
 
-  it("gives up after the attempts allowed, throwing the last lock error", () => {
-    let calls = 0;
+  it("keeps retrying a lock an antivirus scan holds for 45 seconds, waiting at most 1 s at a time", () => {
+    const clock = fakeClock();
+    const rename = () => {
+      if (clock.now() < 45_000) throw errorWithCode("EBUSY");
+    };
+
+    renameWithRetry("from", "to", { rename, exists: () => false, ...clock });
+
+    expect(clock.now()).toBeGreaterThanOrEqual(45_000);
+    expect(clock.now()).toBeLessThan(46_000);
+    expect(clock.sleeps.slice(0, 8)).toEqual([10, 20, 40, 80, 160, 320, 640, 1000]);
+    expect(Math.max(...clock.sleeps)).toBe(1000);
+  });
+
+  it("gives up 60 seconds after the first attempt, throwing the last attempt's error", () => {
+    const clock = fakeClock();
     const errors: Error[] = [];
     const rename = () => {
-      calls++;
-      const error = errorWithCode("EBUSY", `locked ${calls}`);
+      const error = errorWithCode("EBUSY", `locked at ${clock.now()} ms`);
       errors.push(error);
       throw error;
     };
 
-    expect(thrown(() => renameWithRetry("from", "to", { rename, attempts: 4, delayMs: 0 }))).toBe(
-      errors[3],
+    const error = thrown(() =>
+      renameWithRetry("from", "to", { rename, exists: () => false, ...clock }),
     );
-    expect(calls).toBe(4);
+
+    expect(error).toBe(errors.at(-1));
+    expect((error as Error).message).toBe("locked at 60000 ms");
+    expect(clock.sleeps.reduce((total, ms) => total + ms, 0)).toBe(60_000);
+    expect(errors).toHaveLength(clock.sleeps.length + 1);
   });
 
-  it("does not retry an error that is not a lock", () => {
+  it.each(["ENOENT", "ENOSPC", "EXDEV"])("throws %s at once, without waiting", (code) => {
+    const clock = fakeClock();
     let calls = 0;
-    const failure = errorWithCode("ENOENT");
+    const failure = errorWithCode(code);
     const rename = () => {
       calls++;
       throw failure;
     };
 
-    expect(thrown(() => renameWithRetry("from", "to", { rename, delayMs: 0 }))).toBe(failure);
+    expect(
+      thrown(() => renameWithRetry("from", "to", { rename, exists: () => false, ...clock })),
+    ).toBe(failure);
     expect(calls).toBe(1);
+    expect(clock.sleeps).toEqual([]);
+  });
+
+  it("throws a lock code at once when the destination exists, since waiting does not move it", () => {
+    const clock = fakeClock();
+    let calls = 0;
+    const failure = errorWithCode("EPERM");
+    const rename = () => {
+      calls++;
+      throw failure;
+    };
+
+    expect(
+      thrown(() => renameWithRetry("from", "to", { rename, exists: () => true, ...clock })),
+    ).toBe(failure);
+    expect(calls).toBe(1);
+    expect(clock.sleeps).toEqual([]);
   });
 });

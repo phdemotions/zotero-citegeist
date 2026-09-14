@@ -1,8 +1,8 @@
-import { execFileSync } from "node:child_process";
-import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { extname, join, relative, sep } from "node:path";
-
+/**
+ * What the build reads from package.json: the add-on's metadata, its version, and the Zotero
+ * range it ships with, with the version order Zotero applies to them. The checks on the files the
+ * build writes live in scripts/build-verify.mjs.
+ */
 export function readBuildMetadata(pkg) {
   const config = pkg.config ?? {};
 
@@ -44,8 +44,9 @@ const PART = "(?:0|[1-9]\\d{0,8})";
 
 // Firefox's add-on manager, which Zotero runs, reads these fields with nsVersionComparator: a
 // missing part counts as 0 and "*" as INT32_MAX, above any part PART admits. A cap of "10"
-// therefore refuses 10.0.1, "10.*" and "*" admit Zotero minors the suite has never run on (KTD2),
-// and XPIInstall throws on any "*" in strict_min_version. versionString allows at most four parts.
+// therefore refuses 10.0.1, while "10.*" and "*" admit Zotero minors the suite has never run on: a
+// new minor that passes the suite gets a cap raise, not a looser cap. XPIInstall throws on any "*"
+// in strict_min_version, and versionString allows at most four parts.
 const FLOOR_SHAPE = new RegExp(`^${PART}(?:\\.${PART}){0,3}$`);
 const CAP_SHAPE = new RegExp(`^${PART}\\.${PART}\\.\\*$`);
 
@@ -169,15 +170,15 @@ function compareText(a, b) {
 }
 
 // Every layout that carries a Zotero range normalises to `{ min, max }`, so the checks and
-// the build log compare and print one shape. U15's release-lines.json adds a reader here.
+// the build log compare and print one shape.
 
 /** The range package.json's config declares. */
-function rangeFromMetadata(meta) {
+export function rangeFromMetadata(meta) {
   return { min: meta.zoteroMinVersion, max: meta.zoteroMaxVersion };
 }
 
 /** The range in an `applications.zotero` block, the layout manifest.json and update.json share. */
-function rangeFromApplication(zotero) {
+export function rangeFromApplication(zotero) {
   return { min: zotero?.strict_min_version, max: zotero?.strict_max_version };
 }
 
@@ -185,7 +186,7 @@ function applicationFromRange({ min, max }) {
   return { strict_min_version: min, strict_max_version: max };
 }
 
-function rangesEqual(a, b) {
+export function rangesEqual(a, b) {
   return a.min === b.min && a.max === b.max;
 }
 
@@ -228,255 +229,4 @@ export function updateManifestFor(meta, xpiName, hash) {
       },
     },
   };
-}
-
-/**
- * The text files the build replaces placeholders in, by extension. The scan in
- * `verifyBuiltAddon` reads the same list: a text file with any other extension that
- * carries a placeholder fails the build rather than shipping it unreplaced.
- */
-export const PLACEHOLDER_FILE_EXTENSIONS = Object.freeze([
-  ".json",
-  ".js",
-  ".xhtml",
-  ".ftl",
-  ".html",
-  ".css",
-  ".svg",
-]);
-
-function isPlaceholderFile(path) {
-  return PLACEHOLDER_FILE_EXTENSIONS.includes(extname(path));
-}
-
-/**
- * Every file under `dir`, sorted, found without following any link. A symbolic link, or a
- * junction on Windows, throws, naming the link: copying addon/ keeps a link as a link, so
- * replacing placeholders in the copy would write this build's values through it into the file it
- * points at. That file would then hold values instead of placeholders, and every later build,
- * after a version bump too, would ship those stale values.
- */
-function listFiles(dir) {
-  return readdirSync(dir)
-    .sort()
-    .flatMap((entry) => {
-      const fullPath = join(dir, entry);
-      const stats = lstatSync(fullPath);
-      if (stats.isSymbolicLink()) throw symbolicLinkError(fullPath);
-      return stats.isDirectory() ? listFiles(fullPath) : [fullPath];
-    });
-}
-
-function symbolicLinkError(path) {
-  return new Error(
-    `${path} is a symbolic link. The build refuses links, because it would write this build's ` +
-      `values through the link into what it points at. Replace the link with a copy of its target.`,
-  );
-}
-
-/**
- * Throws if `dir` or anything under it is a symbolic link, naming the first one. scripts/build.mjs
- * runs it on addon/ before copying anything, and every later walk of a copy refuses links too.
- */
-export function assertNoSymbolicLinks(dir) {
-  if (lstatSync(dir).isSymbolicLink()) throw symbolicLinkError(dir);
-  listFiles(dir);
-}
-
-/**
- * Every text file under `dir`, with its path relative to `dir`. A file holding a NUL byte is a
- * binary asset such as the PNG icons, which neither replacement nor the scan reads, unless its
- * extension is in PLACEHOLDER_FILE_EXTENSIONS. There a NUL byte means text in another encoding,
- * such as UTF-16, whose placeholders the build could neither replace nor find, so it throws.
- */
-function readTextFiles(dir) {
-  return listFiles(dir).flatMap((file) => {
-    const path = relative(dir, file).split(sep).join("/");
-    const bytes = readFileSync(file);
-    if (bytes.includes(0)) {
-      if (isPlaceholderFile(path)) {
-        throw new Error(
-          `${path} contains a NUL byte, so it is not UTF-8 text and the build can neither replace ` +
-            `nor find placeholders in it. Save it as UTF-8; UTF-16 is the usual cause.`,
-        );
-      }
-      return [];
-    }
-    return [{ file, path, content: bytes.toString("utf-8") }];
-  });
-}
-
-/** Replaces each placeholder in the addon's text files whose extension is listed. */
-export function replacePlaceholders(addonDir, placeholders) {
-  for (const { file, path, content } of readTextFiles(addonDir)) {
-    if (!isPlaceholderFile(path)) continue;
-    let replaced = content;
-    for (const [token, value] of Object.entries(placeholders)) {
-      replaced = replaced.replaceAll(token, value);
-    }
-    if (replaced !== content) writeFileSync(file, replaced);
-  }
-}
-
-// The scan matches a lowerCamelCase name between double underscores, the shape of every key
-// in `placeholdersFor` (a test holds each key to it). That catches an unreplaced placeholder
-// and a misspelt name such as `__zoteroMaxVerison__`, and passes esbuild's `/* @__PURE__ */`
-// annotations and the `__BUILD_ID__` define. It misses a misspelling that breaks the shape:
-// `__buildVersion_`, `__BuildVersion__`, `__build_version__`. `verifyBuiltAddon` catches
-// those in manifest.json only, by checking each placeholder-backed field against package.json.
-const PLACEHOLDER_TOKEN = /__[a-z][A-Za-z0-9]*__/g;
-
-// Legacy JavaScript properties share that shape but are real code.
-const JS_DUNDER_NAMES = new Set([
-  "__proto__",
-  "__defineGetter__",
-  "__defineSetter__",
-  "__lookupGetter__",
-  "__lookupSetter__",
-  "__iterator__",
-  "__noSuchMethod__",
-  "__parent__",
-]);
-
-/**
- * Throws if any shipped text file still holds a `__name__` placeholder, naming each file and
- * token. A file whose extension is outside `PLACEHOLDER_FILE_EXTENSIONS` is reported under
- * its own heading, because the fix there is the list rather than the file.
- *
- * @param {Array<{ path: string, content: string }>} files
- */
-export function assertNoUnreplacedPlaceholders(files) {
-  const unreplaced = [];
-  const unlisted = [];
-  for (const { path, content } of files) {
-    const tokens = [...new Set(content.match(PLACEHOLDER_TOKEN) ?? [])].filter(
-      (token) => !JS_DUNDER_NAMES.has(token),
-    );
-    if (tokens.length === 0) continue;
-    (isPlaceholderFile(path) ? unreplaced : unlisted).push(`  ${path}: ${tokens.join(", ")}`);
-  }
-
-  const sections = [];
-  if (unreplaced.length > 0) {
-    sections.push(`Unreplaced build placeholders in shipped files:\n${unreplaced.join("\n")}`);
-  }
-  if (unlisted.length > 0) {
-    sections.push(
-      `Placeholders in shipped files the build never replaces, because their extension is ` +
-        `not in PLACEHOLDER_FILE_EXTENSIONS (${PLACEHOLDER_FILE_EXTENSIONS.join(", ")}):\n` +
-        unlisted.join("\n"),
-    );
-  }
-  if (sections.length > 0) {
-    throw new Error(sections.join("\n"));
-  }
-}
-
-/**
- * Verifies a built addon directory before anything ships or loads from it: no placeholder
- * survives in a text file, and manifest.json's name, version, id and Zotero range equal
- * package.json's. Returns the manifest's range.
- */
-export function verifyBuiltAddon(addonDir, meta) {
-  const files = readTextFiles(addonDir);
-  assertNoUnreplacedPlaceholders(files);
-
-  const manifestFile = files.find(({ path }) => path === "manifest.json");
-  if (!manifestFile) {
-    throw new Error(`${addonDir} has no manifest.json`);
-  }
-  let manifest;
-  try {
-    manifest = JSON.parse(manifestFile.content);
-  } catch (error) {
-    throw new Error(`manifest.json in ${addonDir} is not valid JSON: ${error.message}`, {
-      cause: error,
-    });
-  }
-
-  const zotero = manifest.applications?.zotero;
-  const mismatches = [
-    ["name", manifest.name, meta.addonName],
-    ["version", manifest.version, meta.version],
-    ["applications.zotero.id", zotero?.id, meta.addonID],
-  ]
-    .filter(([, actual, expected]) => actual !== expected)
-    .map(
-      ([field, actual, expected]) =>
-        `  ${field} is ${JSON.stringify(actual)}, package.json gives ${JSON.stringify(expected)}`,
-    );
-
-  const range = rangeFromApplication(zotero);
-  const expectedRange = rangeFromMetadata(meta);
-  if (!rangesEqual(range, expectedRange)) {
-    mismatches.push(
-      `  Zotero range is ${formatRange(range)}, package.json config gives ${formatRange(expectedRange)}`,
-    );
-  }
-
-  if (mismatches.length > 0) {
-    throw new Error(`manifest.json does not match package.json:\n${mismatches.join("\n")}`);
-  }
-  return range;
-}
-
-/**
- * Verifies the XPI itself rather than the directory it was zipped from: extracts it into a
- * temporary directory with `unzip` and runs `verifyBuiltAddon` there. A build that zipped the
- * wrong directory, such as addon/ with its placeholders or a previous build's copy, fails here
- * before the XPI's hash reaches update.json. Returns the packaged manifest's range.
- */
-export function verifyPackagedAddon(xpiPath, meta) {
-  const extracted = mkdtempSync(join(tmpdir(), "citegeist-xpi-"));
-  try {
-    try {
-      execFileSync("unzip", ["-q", xpiPath, "-d", extracted], { stdio: "pipe" });
-    } catch (error) {
-      const detail = error.stderr?.toString().trim() || error.message;
-      throw new Error(`Could not extract ${xpiPath} to verify it: ${detail}`, { cause: error });
-    }
-    try {
-      return verifyBuiltAddon(extracted, meta);
-    } catch (error) {
-      throw new Error(`The packaged XPI ${xpiPath} fails verification:\n${error.message}`, {
-        cause: error,
-      });
-    }
-  } finally {
-    rmSync(extracted, { recursive: true, force: true, maxRetries: 3 });
-  }
-}
-
-/**
- * Finds update.json's entry for the version being built and throws unless it declares
- * package.json's range. Returns that range.
- *
- * While build.mjs makes update.json from the same metadata this check cannot fail. U15 builds
- * update.json from every line in release-lines.json, and this equality then holds only at a tag
- * build, where the tagged version's entry must equal package.json (KTD3). Outside a tag build a
- * line's published cap may exceed package.json's, which is how a same-version cap raise works,
- * but never fall below it (AE6). U15 must therefore call this check only in tag context, and
- * apply the never-below rule otherwise.
- */
-export function verifyUpdateManifest(updateManifest, meta) {
-  const updates = updateManifest?.addons?.[meta.addonID]?.updates;
-  const entries = Array.isArray(updates)
-    ? updates.filter((entry) => entry?.version === meta.version)
-    : [];
-  if (entries.length !== 1) {
-    throw new Error(
-      `update.json must have exactly one entry for ${meta.addonID} ${meta.version}, ` +
-        `found ${entries.length}`,
-    );
-  }
-
-  const range = rangeFromApplication(entries[0].applications?.zotero);
-  const expectedRange = rangeFromMetadata(meta);
-  if (!rangesEqual(range, expectedRange)) {
-    throw new Error(
-      `update.json entry for ${meta.version} declares Zotero ${formatRange(range)}, ` +
-        `but package.json config gives ${formatRange(expectedRange)}`,
-    );
-  }
-  return range;
 }

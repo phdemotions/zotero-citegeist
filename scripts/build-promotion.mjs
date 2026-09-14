@@ -6,29 +6,46 @@
  */
 import { existsSync, renameSync, rmSync } from "node:fs";
 
-// Windows, antivirus and indexing tools briefly lock a directory that was just written, and a
-// rename then fails with one of these codes. graceful-fs retries renames on the same three.
+// On Windows an antivirus scanner or search indexer opens files just written, and renaming the
+// directory that holds one fails with one of these codes until it closes the file. Scanning a
+// large file takes seconds, so graceful-fs retries a rename on these codes for up to 60 s. The
+// build does the same, waiting 10 ms after the first failure and doubling each wait up to 1 s, so
+// a lock that clears at once costs milliseconds and one that holds for seconds still clears.
 const RETRYABLE_RENAME_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+const RENAME_RETRY_FIRST_WAIT_MS = 10;
+const RENAME_RETRY_MAX_WAIT_MS = 1000;
+const RENAME_RETRY_TOTAL_MS = 60_000;
 
 /**
- * Renames `from` to `to`, retrying a rename that fails with a lock code up to `attempts` times
- * in all, pausing `delayMs` times the attempt number between tries. Any other error, and the
- * last locked attempt's error, propagates.
+ * Renames `from` to `to`, retrying a rename that fails with a lock code until it succeeds or
+ * RENAME_RETRY_TOTAL_MS has passed since the first attempt, and then throwing the last attempt's
+ * error. Any other error throws at once, and so does a lock code while `to` exists: Windows
+ * reports a destination in the way with EPERM too, and waiting does not move it (graceful-fs
+ * stops there as well). `now` and `sleep` stand in for the clock in tests.
  */
 export function renameWithRetry(
   from,
   to,
-  { rename = renameSync, attempts = 5, delayMs = 50 } = {},
+  { rename = renameSync, exists = existsSync, now = Date.now, sleep = sleepSync } = {},
 ) {
-  for (let attempt = 1; ; attempt++) {
+  const start = now();
+  let wait = RENAME_RETRY_FIRST_WAIT_MS;
+  for (;;) {
     try {
       rename(from, to);
       return;
     } catch (error) {
-      if (attempt >= attempts || !RETRYABLE_RENAME_CODES.has(error?.code)) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs * attempt);
+      if (!RETRYABLE_RENAME_CODES.has(error?.code)) throw error;
+      const remaining = RENAME_RETRY_TOTAL_MS - (now() - start);
+      if (remaining <= 0 || exists(to)) throw error;
+      sleep(Math.min(wait, remaining));
+      wait = Math.min(wait * 2, RENAME_RETRY_MAX_WAIT_MS);
     }
   }
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**

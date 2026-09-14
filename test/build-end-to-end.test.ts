@@ -1,19 +1,20 @@
 /**
  * Runs scripts/build.mjs for real, on copies of the project in temporary directories.
  *
- * buildMetadata.test.ts and buildPromotion.test.ts cover what each check rejects and how a swap
- * moves directories. Whether the build runs those checks on the copy it ships, before anything
- * becomes current, and what a failure leaves in build/, shows only when the script runs: with
- * verification swallowed, run on a shadowed directory, the XPI zipped from addon/, or promotion
- * moved into the catch block, every unit test still passed. Faults inside the build, such as a
- * rename that fails or an XPI that differs from the copy it was zipped from, come from modules
- * preloaded with `node --import` that wrap fs or child_process, so scripts/build.mjs carries no
- * test hook.
+ * buildMetadata.test.ts, buildVerify.test.ts, buildLock.test.ts, buildPackage.test.ts and
+ * buildPromotion.test.ts cover what each check rejects, how the lock and the zip behave, and how
+ * a swap moves directories. Whether the build runs those checks on the copy it ships, before
+ * anything becomes current, and what a failure leaves in build/, shows only when the script runs:
+ * with verification swallowed, run on a shadowed directory, the XPI zipped from addon/, or
+ * promotion moved into the catch block, every unit test still passed. Faults inside the build,
+ * such as a rename that fails or an XPI that differs from the copy it was zipped from, come from
+ * modules preloaded with `node --import` that wrap fs, child_process or console, so
+ * scripts/build.mjs carries no test hook.
  *
  * A production build runs zip, and these tests run unzip. Without either on PATH the production
  * tests skip, except in CI (process.env.CI set), where they run and fail.
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cpSync,
@@ -26,6 +27,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +35,7 @@ import { join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { TestContext } from "vitest";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { git, isolatedEnv } from "./release-fixtures";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 // Everything scripts/build.mjs reads: the addon, the TypeScript it bundles, tsconfig.json for
@@ -41,8 +44,11 @@ const PROJECT_FILES = ["addon", "src", "scripts", "package.json", "tsconfig.json
 const MODES = ["production", "dev"] as const;
 type Mode = (typeof MODES)[number];
 const BUILD_TIMEOUT = { timeout: 60_000 };
+// For a test that runs several builds, or two at once, on a loaded machine or a small CI runner.
+const MULTI_BUILD_TIMEOUT = { timeout: 120_000 };
 const PREVIOUS_BUILD_MARKER = "build/addon/previous-build.marker";
 const MOVED_ASIDE_MARKER = "build/.addon-previous/previous-build.marker";
+const LOCK_FILE = "build/.build.lock";
 
 const IN_CI = Boolean(process.env.CI);
 const MISSING_ZIP_TOOLS = ["zip", "unzip"].filter(
@@ -78,19 +84,48 @@ function projectDir(prefix: string, source: string, entries: string[]): string {
   return dir;
 }
 
+function buildArgs(dir: string, mode: Mode, nodeArgs: string[] = []): string[] {
+  return [...nodeArgs, join(dir, "scripts", "build.mjs"), ...(mode === "dev" ? ["--dev"] : [])];
+}
+
 function runBuild(dir: string, mode: Mode, nodeArgs: string[] = []): BuildResult {
-  const args = [
-    ...nodeArgs,
-    join(dir, "scripts", "build.mjs"),
-    ...(mode === "dev" ? ["--dev"] : []),
-  ];
-  const result = spawnSync(process.execPath, args, {
+  const result = spawnSync(process.execPath, buildArgs(dir, mode, nodeArgs), {
     cwd: dir,
     encoding: "utf8",
     timeout: BUILD_TIMEOUT.timeout,
   });
   if (result.error) throw result.error;
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
+}
+
+interface StartedBuild extends BuildResult {
+  pid: number;
+  /** When the process exited, from performance.now(). */
+  exitedAt: number;
+}
+
+/** Starts a build without waiting for it, and resolves once it exits. */
+function startBuild(dir: string, mode: Mode): Promise<StartedBuild> {
+  return new Promise((resolveBuild, reject) => {
+    const child = spawn(process.execPath, buildArgs(dir, mode), {
+      cwd: dir,
+      timeout: BUILD_TIMEOUT.timeout,
+    });
+    let output = "";
+    const append = (chunk: string) => {
+      output += chunk;
+    };
+    child.stdout.setEncoding("utf8").on("data", append);
+    child.stderr.setEncoding("utf8").on("data", append);
+    child.on("error", reject);
+    child.on("close", (status) => {
+      resolveBuild({ pid: child.pid ?? -1, status, output, exitedAt: performance.now() });
+    });
+  });
+}
+
+function sha256(file: string): string {
+  return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
 function buildOrFail(dir: string, mode: Mode, nodeArgs: string[] = []): void {
@@ -225,6 +260,62 @@ function injectPackagedCapRewrite(dir: string) {
   ]);
 }
 
+/**
+ * Wraps console.log inside the build so that, once the build logs step 1, it sends itself SIGTERM.
+ * The build is then compiling, the step where Node can run a signal handler.
+ */
+function injectSigtermAfterFirstStep(dir: string) {
+  return preload(dir, "inject-sigterm", [
+    `import fs from "node:fs";`,
+    `const realLog = console.log;`,
+    `console.log = (...args) => {`,
+    `  realLog(...args);`,
+    `  if (String(args[0]).includes("[1/5]")) {`,
+    `    fs.appendFileSync(LOG, "SIGTERM\\n");`,
+    `    process.kill(process.pid, "SIGTERM");`,
+    `  }`,
+    `};`,
+  ]);
+}
+
+/** Asserts the build logged each of its five steps once, in order. */
+function expectEveryStepLogged(output: string): void {
+  expect(output.match(/\[\d\/\d\]/g), output).toEqual([
+    "[1/5]",
+    "[2/5]",
+    "[3/5]",
+    "[4/5]",
+    "[5/5]",
+  ]);
+}
+
+/** Gives every file and directory under `dir` the current time, as an editor or checkout would. */
+function touchTree(dir: string): void {
+  const now = new Date();
+  for (const entry of readdirSync(dir, { recursive: true, encoding: "utf8" })) {
+    utimesSync(join(dir, entry), now, now);
+  }
+}
+
+/** Commits everything staged in `dir`, or nothing, with committer time `date`; returns the SHA. */
+function commitAt(dir: string, env: Record<string, string>, date: string, message: string): string {
+  const dated = { ...env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date };
+  git(dir, dated, "commit", "--quiet", "--allow-empty", "-m", message);
+  return git(dir, env, "rev-parse", "HEAD");
+}
+
+/** Runs a production build and returns what Publish compares across attempts, and the log. */
+function publishedBytes(dir: string) {
+  const { status, output } = runBuild(dir, "production");
+  expect(status, output).toBe(0);
+  const { version } = declaredByPackage(dir);
+  return {
+    output,
+    xpiHash: sha256(join(dir, "build", `citegeist-${version}.xpi`)),
+    updateJson: readFileSync(join(dir, "build", "update.json"), "utf8"),
+  };
+}
+
 function readJson(file: string) {
   return JSON.parse(readFileSync(file, "utf8"));
 }
@@ -351,8 +442,10 @@ describe("a passing build", () => {
       expect(previous.max).not.toBe("11.0.*");
       setPackageCap(dir, "11.0.*");
 
-      buildOrFail(dir, mode);
+      const { status, output } = runBuild(dir, mode);
 
+      expect(status, output).toBe(0);
+      expectEveryStepLogged(output);
       const { version, min } = declaredByPackage(dir);
       expectBuildDeclares(dir, mode, { version, min, max: "11.0.*" });
       expect(existsSync(join(dir, PREVIOUS_BUILD_MARKER))).toBe(false);
@@ -459,6 +552,25 @@ describe("a failing build", () => {
       expect(output).toContain(`${sep}${xpiName} fails verification`);
       expect(output).toContain("to 9.*, package.json config gives");
       expectOnlyPreviousCopy(dir, previous);
+    },
+  );
+
+  it(
+    "refuses a build/ that is a symbolic link, naming its target and deleting nothing there",
+    BUILD_TIMEOUT,
+    (context) => {
+      const dir = copyTemplate("dev", context);
+      const target = join(dir, "elsewhere");
+      renameSync(join(dir, "build"), target);
+      writeFileSync(join(target, "keep.txt"), "cleanup would delete this");
+      const before = fileHashes(target);
+      linkDirectory(target, join(dir, "build"));
+
+      const { status, output } = runBuild(dir, "dev");
+
+      expect(status, output).not.toBe(0);
+      expect(output).toContain(`${sep}build is a symbolic link to ${target}`);
+      expect(fileHashes(target)).toEqual(before);
     },
   );
 
@@ -606,6 +718,150 @@ describe("promotion", () => {
       buildOrFail(dir, "production");
 
       expectBuildDeclares(dir, "production", declaredByPackage(dir));
+    },
+  );
+});
+
+describe("the build lock", () => {
+  it(
+    "lets one of two builds started together finish, and stops the other before it changes build/",
+    MULTI_BUILD_TIMEOUT,
+    async (context) => {
+      const dir = copyTemplate("production", context);
+
+      const builds = await Promise.all([
+        startBuild(dir, "production"),
+        startBuild(dir, "production"),
+      ]);
+
+      const log = builds
+        .map(({ pid, status, output }) => `pid ${pid} exited ${status}:\n${output}`)
+        .join("\n\n");
+      const finished = builds.filter(({ status }) => status === 0);
+      const stopped = builds.filter(({ status }) => status !== 0);
+      expect(finished, log).toHaveLength(1);
+      expect(stopped, log).toHaveLength(1);
+      const [winner] = finished;
+      const [loser] = stopped;
+      expect(loser.output).toContain(
+        `${sep}${join("build", ".build.lock")} is held by pid ${winner.pid}`,
+      );
+      expect(loser.output).not.toContain("Citegeist build —");
+      expect(loser.exitedAt, log).toBeLessThan(winner.exitedAt);
+      // Every output the winner printed is still there, and build/ holds nothing else.
+      expectBuildDeclares(dir, "production", declaredByPackage(dir));
+      const xpi = join(dir, "build", `citegeist-${declaredByPackage(dir).version}.xpi`);
+      expect(winner.output).toContain(`SHA-256: ${sha256(xpi)}`);
+    },
+  );
+
+  it(
+    "stops at a lock whose pid is running, changing nothing in build/",
+    BUILD_TIMEOUT,
+    (context) => {
+      const dir = copyTemplate("dev", context);
+      const holder = { pid: process.pid, startedAt: "2026-09-13T08:00:00.000Z" };
+      writeFileSync(join(dir, LOCK_FILE), JSON.stringify(holder));
+      writeFileSync(join(dir, "build", "stray.txt"), "cleanup would delete this");
+      const before = fileHashes(join(dir, "build"));
+
+      const { status, output } = runBuild(dir, "dev");
+
+      expect(status, output).not.toBe(0);
+      expect(output).toContain(`is held by pid ${process.pid}`);
+      expect(fileHashes(join(dir, "build"))).toEqual(before);
+    },
+  );
+
+  it(
+    "replaces a lock left by a build that is no longer running, and releases its own",
+    BUILD_TIMEOUT,
+    (context) => {
+      const dir = copyTemplate("dev", context);
+      const exited = spawnSync(process.execPath, ["-e", ""]);
+      const holder = { pid: exited.pid, startedAt: "2026-09-13T08:00:00.000Z" };
+      writeFileSync(join(dir, LOCK_FILE), JSON.stringify(holder));
+
+      const { status, output } = runBuild(dir, "dev");
+
+      expect(status, output).toBe(0);
+      expect(output).toContain(`left by pid ${exited.pid}`);
+      expectBuildDeclares(dir, "dev", declaredByPackage(dir));
+    },
+  );
+
+  it("releases the lock when a step fails", BUILD_TIMEOUT, (context) => {
+    const dir = copyTemplate("dev", context);
+    const previous = markPreviousBuild(dir);
+    const [broken] = BROKEN_SOURCES;
+    broken.breakSource(dir);
+
+    const { status, output } = runBuild(dir, "dev");
+
+    expect(status, output).not.toBe(0);
+    expect(output).toContain(broken.reported);
+    expect(existsSync(join(dir, LOCK_FILE))).toBe(false);
+    expectOnlyPreviousCopy(dir, previous);
+  });
+
+  it(
+    "releases the lock and removes the staging copy when SIGTERM stops the build",
+    BUILD_TIMEOUT,
+    (context) => {
+      // Windows has no SIGTERM handler: process.kill ends the process outright.
+      context.skip(process.platform === "win32", "Windows cannot deliver SIGTERM to a handler");
+      const dir = copyTemplate("dev", context);
+      const previous = markPreviousBuild(dir);
+      const injection = injectSigtermAfterFirstStep(dir);
+
+      const { status, output } = runBuild(dir, "dev", injection.nodeArgs);
+
+      expect(injection.logged(), output).toEqual(["SIGTERM"]);
+      expect(status, output).toBe(143);
+      expect(output).toContain(
+        "Build stopped by SIGTERM; removed the staging copy, the XPI and update.json.",
+      );
+      expectOnlyPreviousCopy(dir, previous);
+    },
+  );
+});
+
+describe("a reproducible production build", () => {
+  it(
+    "zips one commit to the same XPI and update.json bytes after the clock and file times move, and another commit to other bytes",
+    MULTI_BUILD_TIMEOUT,
+    async (context) => {
+      const dir = copyTemplate("production", context);
+      const home = mkdtempSync(join(tmpdir(), "citegeist-git-home-"));
+      copies.push(home);
+      const env = isolatedEnv(home);
+      git(dir, env, "init", "--quiet");
+      git(dir, env, "add", ...PROJECT_FILES);
+      const firstCommit = commitAt(dir, env, "2026-09-13T12:00:00Z", "first");
+
+      const first = publishedBytes(dir);
+
+      expect(first.output).toContain(`build ${firstCommit.slice(0, 12)}-20260913T120000Z`);
+      expect(first.output).toContain(`SHA-256: ${first.xpiHash}`);
+
+      // Past the next wall-clock second and zip's two-second time resolution, with every source
+      // file touched, as a re-run on a fresh checkout would find them.
+      await new Promise((resolveWait) => setTimeout(resolveWait, 2_100));
+      touchTree(join(dir, "addon"));
+      touchTree(join(dir, "src"));
+
+      const again = publishedBytes(dir);
+
+      expect(again.xpiHash).toBe(first.xpiHash);
+      expect(again.updateJson).toBe(first.updateJson);
+
+      const secondCommit = commitAt(dir, env, "2026-09-13T12:00:10Z", "second");
+
+      const next = publishedBytes(dir);
+
+      expect(next.output).toContain(`build ${secondCommit.slice(0, 12)}-20260913T120010Z`);
+      expect(next.xpiHash).not.toBe(first.xpiHash);
+      expect(next.updateJson).not.toBe(first.updateJson);
     },
   );
 });
