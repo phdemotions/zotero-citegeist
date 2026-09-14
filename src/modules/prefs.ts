@@ -9,13 +9,12 @@
  * called them that way: the settings pane and the `prefs.js` defaults were never
  * read, and the flags Citegeist wrote for itself landed under that doubled name.
  *
- * Those flags still matter. A profile that migrated its Extra fields in v2.0.x
- * has `migrationV1Complete` only under the doubled name, and ignoring it would
- * run the migration again. {@link getPref} therefore falls back to the doubled
- * name for the flags in {@link LEGACY_DOUBLED_PREFS} and copies the value to the
- * real name. It leaves the doubled key in place: a downgraded copy reads only
- * that name, and without it v2.0.5 would run its migration again and strip the
- * `Citegeist match ID:` lines that carry confirmed matches through Zotero sync.
+ * Those flags still matter, in both directions. A profile that migrated its
+ * Extra fields in v2.0.x has `migrationV1Complete` only under the doubled name,
+ * so {@link getPref} falls back to that name for the flags in
+ * {@link LEGACY_DOUBLED_PREFS}. A downgraded copy reads only the doubled name, so
+ * this module never removes a doubled key, and {@link setPref} keeps one current
+ * for the flags in {@link DOWNGRADE_COPY_PREFS}.
  *
  * `test/prefs-invariants.test.ts` fails if any other src/ module touches
  * `Zotero.Prefs` or `Services.prefs`.
@@ -49,6 +48,16 @@ export type CitegeistPref =
   | typeof PREF_OPENALEX_API_KEY
   | typeof PREF_OPENALEX_BASE_URL;
 
+/**
+ * A pref that holds a millisecond timestamp. Only {@link setTimestampPref}
+ * writes one, so it is always stored in the form {@link getTimestampPref} reads
+ * back exactly.
+ */
+export type TimestampPref = typeof PREF_LAST_ORPHAN_GC_AT;
+
+/** Every other Citegeist pref, which {@link setPref} writes as given. */
+export type PlainPref = Exclude<CitegeistPref, TimestampPref>;
+
 /** What a Zotero pref holds: a boolean, a string or a 32-bit integer. */
 export type PrefValue = boolean | string | number;
 
@@ -72,6 +81,18 @@ export const LEGACY_DOUBLED_PREFS: ReadonlySet<CitegeistPref> = new Set<Citegeis
 ]);
 
 /**
+ * Flags {@link setPref} also writes under the doubled name, for a downgraded
+ * copy. Write-only: {@link getPref} prefers the real name, which is always set
+ * alongside.
+ *
+ * v2.0.5 reads `migrationV1Complete` only under the doubled name. A profile that
+ * first migrates in this build would have no flag there, so a downgrade to
+ * v2.0.5 would run its migration again and strip the `Citegeist match ID:`
+ * lines that carry confirmed matches through Zotero sync.
+ */
+const DOWNGRADE_COPY_PREFS: ReadonlySet<PlainPref> = new Set<PlainPref>([PREF_MIGRATION_COMPLETE]);
+
+/**
  * Read a pref under its real name: the user's value, else the `prefs.js`
  * default, else `undefined`. A flag in {@link LEGACY_DOUBLED_PREFS} that is
  * unset under its real name is answered from the doubled name and copied to the
@@ -92,9 +113,20 @@ export function getPref(name: CitegeistPref): PrefValue | undefined {
   return legacy;
 }
 
-/** Write a pref under its real name. Throws when Zotero cannot save it, e.g. on a locked profile. */
-export function setPref(name: CitegeistPref, value: PrefValue): void {
+/**
+ * Write a pref under its real name, and a flag in {@link DOWNGRADE_COPY_PREFS}
+ * under the doubled name too. Throws when Zotero cannot save the real name, e.g.
+ * on a locked profile. A copy that fails is logged and does not throw, since
+ * this build never reads it. A timestamp goes through {@link setTimestampPref}.
+ */
+export function setPref(name: PlainPref, value: PrefValue): void {
   Zotero.Prefs.set(name, value, true);
+  if (!DOWNGRADE_COPY_PREFS.has(name)) return;
+  try {
+    Zotero.Prefs.set(ZOTERO_PREF_BRANCH + name, value, true);
+  } catch (e) {
+    logError(`write downgrade copy of pref: ${name} (non-fatal)`, e);
+  }
 }
 
 /** Whether the item-tree columns fetch missing or stale metrics on their own. Off unless the pref is `true`. */
@@ -129,17 +161,28 @@ export function getNetworkPageSize(): number {
 }
 
 /**
- * A millisecond timestamp stored as {@link timestampPrefValue}, or 0 when the
- * pref is unset or holds anything else. An integer pref holds 32 bits and
- * `Date.now()` needs 41, so timestamps are stored as decimal strings; a number
- * here was wrapped on the way in and says nothing about when it was written.
+ * The millisecond timestamp {@link setTimestampPref} stored, or 0 ("never").
+ *
+ * An integer pref holds 32 bits and `Date.now()` needs 41, so a timestamp is
+ * stored as a decimal string, and a number found here was wrapped on the way in.
+ * A time later than now also reads as never: a clock that was once set ahead, or
+ * a hand edit of `prefs.js`, would otherwise hold off whatever the timestamp
+ * gates for as long as the error lasts.
  */
-export function getTimestampPref(name: CitegeistPref): number {
+export function getTimestampPref(name: TimestampPref): number {
   const raw = getPref(name);
-  return typeof raw === "string" && /^\d+$/.test(raw) ? Number(raw) : 0;
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) return 0;
+  const ms = Number(raw);
+  return Number.isSafeInteger(ms) && ms <= Date.now() ? ms : 0;
 }
 
-/** The stored form of a millisecond timestamp; see {@link getTimestampPref}. */
-export function timestampPrefValue(ms: number): string {
+/** Store a millisecond timestamp that {@link getTimestampPref} reads back exactly. Throws as {@link setPref} does. */
+export function setTimestampPref(name: TimestampPref, ms: number): void {
+  const stored = encodeTimestamp(ms);
+  Zotero.Prefs.set(name, stored, true);
+}
+
+/** A timestamp as a decimal string: a string pref holds all of it, where an integer pref would wrap. */
+function encodeTimestamp(ms: number): string {
   return String(Math.trunc(ms));
 }

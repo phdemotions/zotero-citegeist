@@ -728,11 +728,6 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
                 // when nothing is actually broken. A network or unexpected failure
                 // gets the coded state, because that is what a user reports.
                 renderEmptyState(container, setSectionSummary, "notFoundTitle");
-              } else if (
-                result.status === "error" &&
-                (result.error === "not-found" || result.error === "no-identifier")
-              ) {
-                renderEmptyState(container, setSectionSummary, "notFound");
               } else {
                 renderDiagnosticState(
                   container,

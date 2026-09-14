@@ -57,15 +57,7 @@ const mockZotero = {
       fileWrites.push({ path, contents });
     }),
   },
-  Prefs: {
-    get: vi.fn().mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return false;
-      return null;
-    }),
-    set: vi.fn(),
-    clearUserPref: vi.fn(),
-  },
+  Prefs: makeFakePrefs({ addonDefaults: true }),
   Libraries: {
     userLibraryID: 1,
     getAll: vi.fn(
@@ -107,6 +99,7 @@ import {
   recentDiagnostics,
 } from "../src/modules/diagnostics";
 import { logError } from "../src/modules/utils";
+import { makeFakePrefs } from "./_helpers/fakePrefs";
 import { ERROR_DEBUG_MARK, READ_ONLY_STARTUP_ERROR } from "./real-zotero/support/citegeist";
 import {
   CACHE_SCHEMA_MAJOR,
@@ -114,6 +107,9 @@ import {
   CACHE_SCHEMA_STAMP_MULTIPLIER,
   CACHE_SCHEMA_UNRECOGNISED_MAJOR,
   DIAGNOSTIC_RING_BUFFER_SIZE,
+  PREF_LAST_BACKUP_PATH,
+  PREF_LAST_ORPHAN_GC_AT,
+  PREF_MIGRATION_COMPLETE,
 } from "../src/constants";
 import {
   dismissAsNoMatch,
@@ -151,11 +147,8 @@ beforeEach(async () => {
   mockZotero.DBConnection = vi.fn(function (this: unknown) {
     return fakeDb;
   }) as unknown as typeof mockZotero.DBConnection;
-  mockZotero.Prefs.get.mockImplementation((pref: string) => {
-    if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-    if (pref === "extensions.zotero.citegeist.migrationV1Complete") return false;
-    return null;
-  });
+  // A fresh profile: no user prefs, only the addon/prefs.js defaults.
+  mockZotero.Prefs = makeFakePrefs({ addonDefaults: true });
   mockZotero.Items.getAll.mockResolvedValue([]);
   // Reset Libraries.getAll to the default single editable user library —
   // prior tests may have overridden via mockImplementation.
@@ -714,12 +707,7 @@ describe("garbageCollectOrphans rate limit", () => {
     } as never);
 
     // Last GC was 1 minute ago — far less than the 7-day interval.
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.lastOrphanGcAt") return String(Date.now() - 60_000);
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      return null;
-    });
+    mockZotero.Prefs.user.set(PREF_LAST_ORPHAN_GC_AT, String(Date.now() - 60_000));
     mockZotero.Items.getAll.mockResolvedValue([]); // simulates orphan
 
     await garbageCollectOrphans(); // no force
@@ -735,12 +723,7 @@ describe("garbageCollectOrphans rate limit", () => {
       is_retracted: false,
     } as never);
 
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.lastOrphanGcAt") return String(Date.now());
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      return null;
-    });
+    mockZotero.Prefs.user.set(PREF_LAST_ORPHAN_GC_AT, String(Date.now()));
     mockZotero.Items.getAll.mockResolvedValue([]);
 
     await garbageCollectOrphans({ force: true });
@@ -941,10 +924,8 @@ describe("migration Extra backup", () => {
       mockItem("X1", "Citegeist.openAlexId: W700\nCitegeist.citedByCount: 1"),
     ]);
     await migrateFromExtraV1();
-    expect(mockZotero.Prefs.set).toHaveBeenCalledWith(
-      "extensions.zotero.citegeist.lastBackupPath",
-      expect.stringMatching(/citegeist-migration-backup-.*\.json$/),
-      true,
+    expect(mockZotero.Prefs.user.get(PREF_LAST_BACKUP_PATH)).toMatch(
+      /citegeist-migration-backup-.*\.json$/,
     );
   });
 
@@ -1253,11 +1234,7 @@ describe("migrateFromExtraV1", () => {
     await migrateFromExtraV1();
 
     // Pretend the pref-guard fails (e.g. partial state) but checkpoint exists.
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return false;
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      return null;
-    });
+    mockZotero.Prefs.user.set(PREF_MIGRATION_COMPLETE, false);
     items.get("A")!.extra = ""; // simulate already-stripped
     const initialSize = fakeDb.table.size;
     await migrateFromExtraV1();
@@ -1289,10 +1266,7 @@ describe("migrateFromExtraV1", () => {
       is_retracted: false,
     } as never);
 
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      return null;
-    });
+    mockZotero.Prefs.user.set(PREF_MIGRATION_COMPLETE, true);
     mockZotero.Items.getAll.mockResolvedValue([item]);
 
     await migrateFromExtraV1();
@@ -1305,10 +1279,7 @@ describe("migrateFromExtraV1", () => {
     // Pref says complete, but the mirror is empty (no prior cacheWorkData
     // calls this test) and the user's library still has Citegeist data in
     // Extra. shouldForceRerun should clear the pref and re-run.
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      return null;
-    });
+    mockZotero.Prefs.user.set(PREF_MIGRATION_COMPLETE, true);
     const item = mockItem("R", legacyExtra());
     mockZotero.Items.getAll.mockResolvedValue([item]);
 
@@ -1453,7 +1424,6 @@ describe("recovery-branch saveTx deadline (REL-M-001)", () => {
       throw new Error("simulated locked metadata in recovery branch");
     });
     mockZotero.Items.getAll.mockResolvedValue([item]);
-    mockZotero.Prefs.set.mockClear();
 
     await migrateFromExtraV1();
 
@@ -1462,11 +1432,7 @@ describe("recovery-branch saveTx deadline (REL-M-001)", () => {
     // Item NOT checkpointed.
     expect(fakeDb.progress.has("1:RREC")).toBe(false);
     // Completion pref unset.
-    const completionCalls = mockZotero.Prefs.set.mock.calls.filter(
-      ([k, v]: [string, unknown]) =>
-        k === "extensions.zotero.citegeist.migrationV1Complete" && v === true,
-    );
-    expect(completionCalls).toHaveLength(0);
+    expect(mockZotero.Prefs.user.get(PREF_MIGRATION_COMPLETE)).toBeUndefined();
   });
 });
 
@@ -1483,7 +1449,6 @@ describe("saveTx fast rejection propagation (C-M-001)", () => {
       throw new Error("simulated locked metadata");
     });
     mockZotero.Items.getAll.mockResolvedValue([item]);
-    mockZotero.Prefs.set.mockClear();
 
     await migrateFromExtraV1();
 
@@ -1493,11 +1458,7 @@ describe("saveTx fast rejection propagation (C-M-001)", () => {
     // propagate to the per-item catch and bump unresolvedSkips.
     expect(fakeDb.progress.has("1:REJ")).toBe(false);
     // Completion pref stays unset because unresolvedSkips > 0.
-    const completionCalls = mockZotero.Prefs.set.mock.calls.filter(
-      ([k, v]: [string, unknown]) =>
-        k === "extensions.zotero.citegeist.migrationV1Complete" && v === true,
-    );
-    expect(completionCalls).toHaveLength(0);
+    expect(mockZotero.Prefs.user.get(PREF_MIGRATION_COMPLETE)).toBeUndefined();
   });
 });
 

@@ -858,13 +858,13 @@ describe("fetching on a read-only cache", () => {
   it("returns CG-DB03 on the column queue's identifier-only path too, before any lookup", async () => {
     mockedGetWorkByDOI.mockResolvedValue(makeFakeWork());
 
-    // The background column queue passes allowMetadataSearch: false. Its early
+    // The background column queue passes identifierLookupsOnly: true. Its early
     // returns (no-identifier, not-found) must not come before the read-only
     // refusal, or the queue would report a calm outcome over CG-DB03.
     const withIdentifier = await fetchAndCacheItem(mockItem({ doi: "10.1234/test" }), {
-      allowMetadataSearch: false,
+      identifierLookupsOnly: true,
     });
-    const withoutIdentifier = await fetchAndCacheItem(mockItem(), { allowMetadataSearch: false });
+    const withoutIdentifier = await fetchAndCacheItem(mockItem(), { identifierLookupsOnly: true });
 
     for (const result of [withIdentifier, withoutIdentifier]) {
       expect(result).toEqual({ status: "error", error: "cache-unwritable", code: "CG-DB03" });
@@ -913,5 +913,45 @@ describe("fetching on a read-only cache", () => {
     await resolveAuthorsForItems([mockItem({ doi: "10.1234/a" })]);
 
     expect(recentDiagnostics().map((d) => d.code)).toEqual(["CG-DB03"]);
+  });
+});
+
+// ── A refusal the caller records once for its whole pass (U18) ───────────────
+
+describe("recording a refused request", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockZotero.Prefs = migratedPrefs();
+    fakeDb = makeFakeDb();
+    _resetForTesting();
+    await initCache();
+    clearDiagnostics();
+  });
+
+  it.each([
+    ["a rejected key", () => new OpenAlexAuthError(), "CG-API01"],
+    ["a spent budget", () => new OpenAlexBudgetError(), "CG-API42"],
+  ])(
+    "records %s by default, and only returns its code to a caller that records the stop itself",
+    async (_label, refusal, code) => {
+      mockedGetWorkByDOI.mockRejectedValue(refusal());
+
+      const quiet = await fetchAndCacheItem(mockItem({ doi: "10.1234/quiet" }), {
+        recordRefusals: false,
+      });
+      expect(quiet).toEqual({ status: "error", error: "unexpected", code });
+      expect(recentDiagnostics()).toEqual([]);
+
+      await fetchAndCacheItem(mockItem({ doi: "10.1234/recorded" }));
+      expect(recentDiagnostics().map((d) => d.code)).toEqual([code]);
+    },
+  );
+
+  it("still records any other failure when refusals are left to the caller", async () => {
+    mockedGetWorkByDOI.mockRejectedValue(new OpenAlexNetworkError("offline"));
+
+    await fetchAndCacheItem(mockItem({ doi: "10.1234/offline" }), { recordRefusals: false });
+
+    expect(recentDiagnostics().map((d) => d.code)).toEqual(["CG-NET01"]);
   });
 });

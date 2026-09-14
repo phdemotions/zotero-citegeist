@@ -7,7 +7,12 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { PREF_OPENALEX_API_KEY, PREF_OPENALEX_BASE_URL } from "../src/constants";
+import {
+  OPENALEX_RATE_LIMIT_MS,
+  OPENALEX_RETRY_DELAYS_MS,
+  PREF_OPENALEX_API_KEY,
+  PREF_OPENALEX_BASE_URL,
+} from "../src/constants";
 import {
   OpenAlexBudgetError,
   OpenAlexAuthError,
@@ -305,5 +310,63 @@ describe("Zotero.HTTP contract", () => {
     const assertion = expect(p).rejects.toBeInstanceOf(OpenAlexNetworkError);
     await vi.runAllTimersAsync();
     await assertion;
+  });
+});
+
+describe("the rate limiter", () => {
+  /** When each HTTP request started, in fake milliseconds. */
+  let starts: number[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    starts = [];
+    httpRequest.mockImplementation(async () => {
+      starts.push(Date.now());
+      return httpResponse(200, { id: "https://openalex.org/W1" });
+    });
+  });
+
+  /** Milliseconds between each request's start and the next one's. */
+  function gaps(): number[] {
+    const sorted = [...starts].sort((a, b) => a - b);
+    return sorted.slice(1).map((start, i) => start - sorted[i]);
+  }
+
+  it("starts callers that arrive in the same tick one interval apart", async () => {
+    const lookups = Promise.all([1, 2, 3, 4, 5, 6].map((n) => getWorkById(`W${n}`)));
+    await vi.runAllTimersAsync();
+    await lookups;
+
+    expect(starts).toHaveLength(6);
+    for (const gap of gaps()) expect(gap).toBeGreaterThanOrEqual(OPENALEX_RATE_LIMIT_MS);
+  });
+
+  it("makes a retry wait its turn like any other request", async () => {
+    httpRequest.mockImplementationOnce(async () => {
+      starts.push(Date.now());
+      return httpResponse(503);
+    });
+    const first = getWorkById("W1");
+    for (let i = 0; i < 50 && starts.length === 0; i++) await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(starts, "positive control: the first attempt went out").toHaveLength(1);
+    expect(vi.getTimerCount(), "positive control: its retry is scheduled").toBe(1);
+
+    // A second caller arrives just before the retry is due, so without shared
+    // spacing the two requests would start 50 ms apart.
+    const retryDue = starts[0] + OPENALEX_RETRY_DELAYS_MS[0];
+    let second: Promise<unknown> = Promise.resolve();
+    setTimeout(
+      () => {
+        second = getWorkById("W2");
+      },
+      retryDue - 50 - Date.now(),
+    );
+    await vi.runAllTimersAsync();
+    await first;
+    await second;
+
+    expect(starts).toHaveLength(3);
+    for (const gap of gaps()) expect(gap).toBeGreaterThanOrEqual(OPENALEX_RATE_LIMIT_MS);
   });
 });

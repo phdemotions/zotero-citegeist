@@ -192,26 +192,47 @@ export function resolveCanonicalId(body: { id?: string | null } | null | undefin
 }
 
 // ── Centralized rate limiter ──
-// OpenAlex polite pool allows 10 req/s. We target 8 to stay safe.
+// Every OpenAlex request, first attempt or retry, starts at least
+// OPENALEX_RATE_LIMIT_MS after the one before it: 8 req/s.
+
+/** When the latest request was let through. */
 let lastRequestTime = 0;
+/** The latest caller's turn. The next caller waits for it. */
+let latestSlot: Promise<void> = Promise.resolve();
 
 /**
- * The single global rate limiter for every OpenAlex call (8 req/s). Exported so
- * the sibling authors client shares this one `lastRequestTime` — a second copy
- * would silently break the global budget. Never call `Zotero.HTTP` for OpenAlex
- * directly; route through here.
+ * Wait for this request's turn. Each caller waits for the caller before it, then
+ * for the rest of the interval, so callers arriving in the same tick go out one
+ * interval apart instead of all reading the same `lastRequestTime` and firing
+ * together. One wait never exceeds the interval, so a clock set backwards cannot
+ * hold requests off.
  */
-export async function rateLimitedFetch<T>(url: string, label: string, attempt = 0): Promise<T> {
-  const now = Date.now();
-  const elapsed = now - lastRequestTime;
-  if (elapsed < OPENALEX_RATE_LIMIT_MS) {
-    await new Promise((r) => setTimeout(r, OPENALEX_RATE_LIMIT_MS - elapsed));
-  }
-  lastRequestTime = Date.now();
-  return fetchJson<T>(url, label, attempt);
+function waitForRequestSlot(): Promise<void> {
+  const slot = latestSlot.then(async () => {
+    const wait = Math.min(
+      OPENALEX_RATE_LIMIT_MS,
+      OPENALEX_RATE_LIMIT_MS - (Date.now() - lastRequestTime),
+    );
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastRequestTime = Date.now();
+  });
+  latestSlot = slot;
+  return slot;
 }
 
+/**
+ * The single global rate limiter for every OpenAlex call. Exported so the
+ * sibling authors client waits in this one line — a second copy would silently
+ * break the global rate. Never call `Zotero.HTTP` for OpenAlex directly; route
+ * through here.
+ */
+export async function rateLimitedFetch<T>(url: string, label: string): Promise<T> {
+  return fetchJson<T>(url, label, 0);
+}
+
+/** One attempt at a request. It waits its turn first, and a retry calls it again, so a retry waits too. */
 async function fetchJson<T>(url: string, label: string, attempt: number): Promise<T> {
+  await waitForRequestSlot();
   let response: {
     status: number;
     responseText: string;

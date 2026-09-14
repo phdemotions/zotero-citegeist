@@ -473,6 +473,34 @@ The menu spec lands in this unit's pull request. U9 removes the DOM fallback, no
 
 **Verification:** Opening a v2.0.5 profile's `citegeist.sqlite` with the new build stamps it and loses no rows.
 
+### U18. Preference names and identifier-only auto-fetch
+
+**Goal:** Citegeist reads and writes every preference under its real name without re-running a one-shot migration on an existing profile, and the auto-fetch that the fix switches on spends no metered OpenAlex budget.
+**Requirements:** BUG-PREFS in `docs/ISSUES.md`, found during U4 after the requirements above were written; R15 for the read-only cache.
+**Dependencies:** U4 (found the bug), U16 (a fetch refuses before any lookup when the cache is read-only)
+**Files:** `src/modules/prefs.ts` (new), `src/constants.ts`, `src/hooks.ts`, `src/modules/cache/migration.ts`, `src/modules/cache/read.ts`, `src/modules/citationColumn.ts`, `src/modules/citationService.ts`, `src/modules/citationPane.ts`, `src/modules/citationNetwork/results.ts`, `src/modules/openalex.ts`, `test/prefs.test.ts` (new), `test/prefs-invariants.test.ts` (new), `test/autoFetch.test.ts` (new), `test/_helpers/fakePrefs.ts` (new), `test/_helpers/cacheHarness.ts`, `test/cache-migration.test.ts`, `test/cache.test.ts`, `test/citationColumn.test.ts`, `test/citationService.test.ts`, `test/hooks.test.ts`, `test/openalex.fetch.test.ts`, `test/openalexAuthors.test.ts`, `test/real-zotero/92-preference-names.spec.ts` (new), `test/real-zotero/05-columns.spec.ts`, `test/real-zotero/07-base-url-override.spec.ts`, `test/real-zotero/shared/timeouts.ts`, `test/real-zotero/support/zotero.ts`, `CHANGELOG.md`, `docs/DESIGN.md`, `docs/ISSUES.md`, `docs/solutions/best-practices/openalex-metered-api-handling.md`
+**Approach:**
+- **One accessor.** `src/modules/prefs.ts` is the only module that touches `Zotero.Prefs`, and it always passes `global`, so a full pref name is read as itself. `test/prefs-invariants.test.ts` fails on a direct call anywhere else.
+- **Legacy flags.** `migrationV1Complete`, `lastBackupPath` and `authorRelationsPurgedV1` are read from the doubled name when the real name is unset, then copied forward. Doubled keys are kept for downgrade safety: v2.0.5 reads only that name, so `setPref` also writes `migrationV1Complete` there, or a downgrade would migrate again and strip the `Citegeist match ID:` lines.
+- **Timestamps.** `lastOrphanGcAt` has no legacy fallback, because its doubled value is a wrapped 32-bit integer. `setTimestampPref` stores it as a decimal string and is the only writer the types allow for it. A stored time that is not a safe integer, or is later than now, reads as never.
+- **Maintainer decision: auto-fetch stays on by default, with identifier lookups only.** OpenAlex's cost page (https://help.openalex.org/access/example-costs/, updated 2026-08-09) makes retrieval by ID or DOI free and unlimited and search $1 per 1,000 calls. The column queue passes `identifierLookupsOnly: true`, so it looks items up by DOI, PMID, arXiv ID, ISBN or a confirmed OpenAlex ID, and only a fetch the user starts searches by title.
+- **One rule for "…".** `willBackgroundFetch` decides both whether a row is queued and whether its cells show "…".
+- **Stops.** A rejected key or a spent budget pauses background fetching until the key changes, with one diagnostic. A cache that refuses writes pauses it for the session. Unticking the setting stops a running pass. The tried set forgets its oldest entries rather than clearing. The shared rate limiter spaces concurrent callers and retries.
+- **Review round 1.** The commit after 6215ec0 fixes its six confirmed P2 findings: one rule for "…" and queueing; stopping on a rejected key, spent budget or unwritable cache; unticking stops the pass; tried-set eviction; tests over all five metric columns and the setting; and the untested zero-orphan GC timestamp with the type hole behind it. It also fixes nine adopted P3 findings: future timestamps, the downgrade copy, unreachable error branches, a stray docblock, the option name, the rate-limiter race, stored-value assertions, the shared prefs fake in `test/cache.test.ts`, and these docs. Left to other work: aborting an in-flight batch on shutdown (U6), moving `test/prefs-invariants.test.ts` onto U2's shared source scanner, and lookups for rows of hidden columns (disclosed in the CHANGELOG).
+
+**Test scenarios:**
+- Each user-facing setting reads as the settings pane stored it and as `addon/prefs.js` ships it, and ignores a value found only under the doubled name.
+- A legacy flag under the doubled name answers a read and is copied forward. A real-name value, even `false`, wins and is left as stored.
+- A completed migration leaves `migrationV1Complete` readable under the doubled name without `global`.
+- An orphan GC that finds nothing records its time as digits, so a second run inside the week skips. A recorded time later than now does not hold the GC off.
+- Painting a DOI item shows "…" and looks it up by DOI only. An item with no identifier is never queued. A no-match or dismissed item shows no "…" and is not looked up. A confirmed-ID item shows "…" and is looked up by that ID. A row repainted mid-lookup keeps "…". All five metric columns follow the same rule.
+- With auto-fetch off before the first paint, every metric cell is empty and nothing is looked up. Ticked later, a row already drawn is queued on its next paint. Unticked mid-pass, no batch runs after the current one.
+- Twenty DOI rows against a rejected key or a spent budget cost one batch of lookups at most and one diagnostic. Changing the key resumes. A read-only cache gets no lookups and no "…".
+- With the tried set full, a new row costs one lookup and re-runs none.
+- Six concurrent OpenAlex calls, and a retry beside a new call, start at least 125 ms apart.
+
+**Verification:** Typecheck, unit tests, lint, format, OKF and build pass. A mutant reverting any fix above fails a named test. `92-preference-names.spec.ts` passes on the real-Zotero matrix.
+
 ### Phase D. Future Zotero versions
 
 ### U15. Version-lines update channel

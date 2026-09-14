@@ -693,6 +693,40 @@ describe("migration and orphan-GC prefs (U18)", () => {
     expect(getCachedData(orphan)).toBeNull();
     expect(mockZotero.Prefs.user.get(PREF_LAST_ORPHAN_GC_AT)).toMatch(/^\d+$/);
   });
+
+  it("records the time of a GC that found no orphans, so the next run inside the interval skips", async () => {
+    mockZotero.Items.getAll.mockResolvedValue([]); // every cached row is an orphan
+    await garbageCollectOrphans(); // nothing cached yet, so nothing to remove
+    expect(mockZotero.Prefs.user.get(PREF_LAST_ORPHAN_GC_AT)).toMatch(/^\d+$/);
+
+    const orphan = await cachedItem("G4", "W90016");
+    await garbageCollectOrphans();
+
+    expect(getCachedData(orphan), "GC ran again inside its interval").not.toBeNull();
+  });
+
+  it("runs the GC when the recorded time is later than now", async () => {
+    mockZotero.Items.getAll.mockResolvedValue([]);
+    const nextYear = Date.now() + 365 * 24 * 60 * 60 * 1000;
+    mockZotero.Prefs.user.set(PREF_LAST_ORPHAN_GC_AT, String(nextYear));
+    const orphan = await cachedItem("G5", "W90017");
+
+    await garbageCollectOrphans();
+
+    expect(getCachedData(orphan)).toBeNull();
+  });
+
+  it("writes the completion flag where v2.0.5 reads it, so a downgrade does not migrate again", async () => {
+    mockZotero.Items.getAll.mockResolvedValue([mockItem("L", legacyExtra)]);
+    // v2.0.5's read: the full name without `global`, which lands on the doubled name.
+    const readByV205 = () => mockZotero.Prefs.get(PREF_MIGRATION_COMPLETE);
+    expect(readByV205(), "positive control: no flag before the migration").toBeUndefined();
+
+    expect(await migrateFromExtraV1()).toBe(true);
+
+    expect(mockZotero.Prefs.user.get(PREF_MIGRATION_COMPLETE)).toBe(true);
+    expect(readByV205()).toBe(true);
+  });
 });
 
 describe("atomic backup write", () => {

@@ -32,9 +32,11 @@ import {
   getTimestampPref,
   isAutoFetchEnabled,
   setPref,
-  timestampPrefValue,
+  setTimestampPref,
 } from "../src/modules/prefs";
 import { ZOTERO_PREF_BRANCH, makeFakePrefs, type FakePrefs } from "./_helpers/fakePrefs";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 let prefs: FakePrefs;
 
@@ -172,6 +174,8 @@ describe("flags earlier builds stored under the doubled name", () => {
       prefs.user.set(doubled(name), legacy);
 
       expect(getPref(name)).toBe(real);
+      expect(prefs.user.get(name), "the real value was overwritten").toBe(real);
+      expect(getPref(name), "a second read").toBe(real);
       expect(prefs.get).not.toHaveBeenCalledWith(doubled(name), true);
     },
   );
@@ -210,16 +214,56 @@ describe("writing", () => {
     expect(prefs.user.has(doubled(PREF_AUTHOR_RELATIONS_PURGED))).toBe(false);
   });
 
-  it("round-trips a millisecond timestamp, which an integer pref cannot hold", () => {
-    const now = Date.now();
-    setPref(PREF_LAST_ORPHAN_GC_AT, timestampPrefValue(now));
-    expect(getTimestampPref(PREF_LAST_ORPHAN_GC_AT)).toBe(now);
+  it("setPref also writes migrationV1Complete where v2.0.5 reads it, so a downgrade does not migrate again", () => {
+    // v2.0.5's read: the full name without `global`, which lands on the doubled name.
+    expect(Zotero.Prefs.get(PREF_MIGRATION_COMPLETE), "positive control: unset").toBeUndefined();
+
+    setPref(PREF_MIGRATION_COMPLETE, true);
+    expect(prefs.user.get(PREF_MIGRATION_COMPLETE)).toBe(true);
+    expect(Zotero.Prefs.get(PREF_MIGRATION_COMPLETE)).toBe(true);
+
+    setPref(PREF_MIGRATION_COMPLETE, false);
+    expect(Zotero.Prefs.get(PREF_MIGRATION_COMPLETE), "the copy follows a forced re-run").toBe(
+      false,
+    );
+  });
+
+  it("keeps the real write when the downgrade copy fails, and logs the copy", () => {
+    const write = prefs.set.getMockImplementation();
+    if (!write) throw new Error("the fake's set has no implementation");
+    prefs.set.mockImplementation((pref: string, value: unknown, global?: boolean) => {
+      if (pref === doubled(PREF_MIGRATION_COMPLETE)) throw new Error("prefs.js is locked");
+      write(pref, value, global);
+    });
+
+    expect(() => setPref(PREF_MIGRATION_COMPLETE, true)).not.toThrow();
+    expect(prefs.user.get(PREF_MIGRATION_COMPLETE)).toBe(true);
+    expect(recentDiagnostics().at(-1)?.context).toContain("migrationV1Complete");
+  });
+
+  it("round-trips a millisecond timestamp as a decimal string, which an integer pref cannot hold", () => {
+    const earlier = Date.now() - 60_000;
+    setTimestampPref(PREF_LAST_ORPHAN_GC_AT, earlier);
+    expect(prefs.user.get(PREF_LAST_ORPHAN_GC_AT)).toBe(String(earlier));
+    expect(getTimestampPref(PREF_LAST_ORPHAN_GC_AT)).toBe(earlier);
   });
 
   it("reads a timestamp stored as a number, or as anything but digits, as never", () => {
-    setPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
+    Zotero.Prefs.set(PREF_LAST_ORPHAN_GC_AT, Date.now(), true);
+    expect(typeof prefs.user.get(PREF_LAST_ORPHAN_GC_AT)).toBe("number");
     expect(getTimestampPref(PREF_LAST_ORPHAN_GC_AT)).toBe(0);
     prefs.user.set(PREF_LAST_ORPHAN_GC_AT, "yesterday");
+    expect(getTimestampPref(PREF_LAST_ORPHAN_GC_AT)).toBe(0);
+  });
+
+  it.each([
+    [
+      "later than now, as a clock once set ahead leaves it",
+      () => String(Date.now() + 3 * 365 * DAY_MS),
+    ],
+    ["too long to be exact, as a hand edit can leave it", () => "9".repeat(400)],
+  ])("reads a timestamp %s as never", (_label, stored) => {
+    prefs.user.set(PREF_LAST_ORPHAN_GC_AT, stored());
     expect(getTimestampPref(PREF_LAST_ORPHAN_GC_AT)).toBe(0);
   });
 });

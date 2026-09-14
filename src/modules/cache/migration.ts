@@ -29,9 +29,10 @@ import {
   getPref,
   getTimestampPref,
   setPref,
-  timestampPrefValue,
-  type CitegeistPref,
+  setTimestampPref,
+  type PlainPref,
   type PrefValue,
+  type TimestampPref,
 } from "../prefs";
 import { logError, normalizeError, safeParseFloat, safeParseIntOrNull } from "../utils";
 import {
@@ -896,9 +897,18 @@ async function pruneOldBackups(): Promise<void> {
 }
 
 /** A pref write lands in `prefs.js` and can throw on a locked profile. */
-function trySetPref(name: CitegeistPref, value: PrefValue): void {
+function trySetPref(name: PlainPref, value: PrefValue): void {
   try {
     setPref(name, value);
+  } catch (e) {
+    logError(`Prefs.set('${name}') (non-fatal)`, e);
+  }
+}
+
+/** {@link trySetPref} for a timestamp, stored in the form that reads back exactly. */
+function trySetTimestampPref(name: TimestampPref, ms: number): void {
+  try {
+    setTimestampPref(name, ms);
   } catch (e) {
     logError(`Prefs.set('${name}') (non-fatal)`, e);
   }
@@ -956,7 +966,7 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
   }
 
   if (orphans.length === 0) {
-    trySetPref(PREF_LAST_ORPHAN_GC_AT, timestampPrefValue(Date.now()));
+    trySetTimestampPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
     return;
   }
 
@@ -984,6 +994,6 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
   // Two-level author sweep on the same orphan set: drop their item_authors
   // rows, then any authors left unreferenced.
   await garbageCollectOrphanAuthors(conn, orphans);
-  trySetPref(PREF_LAST_ORPHAN_GC_AT, timestampPrefValue(Date.now()));
+  trySetTimestampPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
   Zotero.debug(`[Citegeist] orphan GC removed ${orphans.length} rows`);
 }

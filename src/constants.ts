@@ -59,7 +59,10 @@ export const DEFAULT_CACHE_LIFETIME_DAYS = 7;
 export const AUTO_FETCH_PREF_TTL_MS = 5000;
 
 // ── Column fetch queue ──
-/** Max items we'll remember as "already attempted" before clearing. */
+/**
+ * Most items the column queue remembers as looked up this session. Past it the
+ * oldest are forgotten, and only those can be looked up again.
+ */
 export const MAX_ATTEMPTED_FETCH_CACHE = 10_000;
 /** Debounce before a column fetch batch kicks off. */
 export const FETCH_QUEUE_DEBOUNCE_MS = 500;

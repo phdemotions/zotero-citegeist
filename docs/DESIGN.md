@@ -127,7 +127,7 @@ Callers ask `cacheWriteRefusalCode()` before work that only matters if it can be
 
 OpenAlex is metered rather than gated behind a polite pool, so there is no published per-second ceiling to hug — but a burst of requests is still antisocial and risks a transient throttle. Citegeist targets 8 req/s. All API calls — works and authors alike — go through a single `rateLimitedFetch` function that:
 
-1. Enforces a minimum 125ms interval between requests.
+1. Starts every request, retries included, at least 125 ms after the one before it. Callers wait their turn in one line, so callers that arrive in the same moment go out one interval apart instead of together.
 2. Retries transient failures (network errors, a per-second 429, 5xx) with backoff (2s, then 4s). A _budget-exhausted_ 429 — the daily allowance spent, flagged by `X-RateLimit-Remaining: 0` — is **not** retried; it raises a distinct error that prompts the user for an optional API key rather than hammering a quota that won't refill for hours.
 
 This matters because Citegeist has multiple concurrent callers: the auto-fetch triggered by browsing items, batch operations on entire collections, and the citation network browser paginating through results. Without centralization, each caller would independently track timing, and concurrent operations could easily exceed the rate limit.
@@ -135,6 +135,23 @@ This matters because Citegeist has multiple concurrent callers: the auto-fetch t
 A single-queue approach is simpler than a token bucket or sliding window and sufficient for a Zotero plugin where requests are inherently serial (one user, one machine).
 
 **Trade-off:** Strict serialization means a burst of requests (e.g., batch-fetching 200 items) takes longer than if we could parallelize. In practice, 8 req/s processes a 200-item collection in ~25 seconds, which is acceptable for a background operation.
+
+---
+
+## Why Background Fetches Use Only Identifier Lookups?
+
+With "Automatically fetch citation data when viewing items" ticked, which is the default, the item-tree columns fetch an item's metrics when Zotero draws its row. Nobody asks for these lookups, and sorting by a Citegeist column draws every row in the library. OpenAlex's cost page (https://help.openalex.org/access/example-costs/, updated 2026-08-09) makes retrieving one work by ID or DOI free and unlimited, and charges $1 per 1,000 searches against a daily budget of $0.10 without a key. A background title search over a few hundred items without identifiers would spend that budget before the user opened one of them. So the column queue calls `fetchAndCacheItem` with `identifierLookupsOnly: true`. It looks an item up by DOI, PMID, arXiv ID, ISBN or a confirmed OpenAlex ID, and leaves the title search to fetches the user starts from the item pane or Fetch Citation Counts.
+
+One predicate, `willBackgroundFetch` in `citationColumn.ts`, decides both whether a row is queued and whether its cells show "…". A row qualifies when auto-fetch is on, the queue has not looked it up this session, background fetching is not paused, the cache takes writes, its cached metrics are missing or stale, no title search found nothing for it and no one dismissed its match in the last 30 days, and it resolves to a work without a title search (`canResolveWork`, the rule the fetch itself uses). A row already queued or being looked up also shows "…". Under two separate rules, an item whose title search had found nothing showed "…" for 30 days while the queue skipped it.
+
+The queue stops rather than grinding through the library:
+
+- A rejected key (CG-API01) or a spent budget (CG-API42) fails every later request. The first one drops the queue, records one diagnostic for the whole stop, and pauses background fetching until the API key changes. Each lookup passes `recordRefusals: false`, because a batch runs two requests side by side and the diagnostic ring buffer holds 50 entries.
+- A cache that refuses writes (CG-DB02, CG-DB03, CG-DB04) would throw every result away, so it pauses fetching for the session without a second diagnostic.
+- Unticking the setting stops a running pass at its next batch, where the queue reads the pref past its 5-second cache.
+- The set of rows already looked up holds `MAX_ATTEMPTED_FETCH_CACHE` entries and forgets the oldest when full, so an overflow re-runs only those lookups.
+
+**Trade-off:** An item with no identifier gets nothing in the background, and a pause for a spent budget lasts the session even after the daily budget resets. Hiding the Citegeist columns does not stop lookups for drawn rows; unticking the setting does.
 
 ---
 
@@ -155,9 +172,10 @@ src/modules/
     index.ts           → Public surface (re-exports)
     authors/           → Normalized author-identity store (authors + item_authors)
   citationService.ts   → Orchestration (fetch + cache + journal stats + author backfill)
-  citationColumn.ts    → Sortable column registration
+  citationColumn.ts    → Sortable column registration + background fetch queue
   citationPane.ts      → Sidebar pane rendering
   menu.ts              → Right-click context menus
+  prefs.ts             → The only reader and writer of preferences (real names, legacy flags, timestamps)
   authorProfile.ts     → Author profile + view-model layer (pure logic, unit-tested)
   titleSearch.ts       → Metadata matching (title/year/author scoring)
   diagnostics/         → Quotable error codes, ring buffer, guards, copy-report
@@ -214,7 +232,7 @@ The fallback fires in exactly two cases:
 1. `extractIdentifier(item)` returns `null` — no DOI, PMID, arXiv ID, or ISBN present
 2. An identifier was found but the OpenAlex lookup returned `null` (work not found in the index)
 
-In both cases, the same title search pipeline runs. A prior explicit dismiss (stored in `Citegeist.noMatch: true`) suppresses the search for 30 days, after which it retries automatically. A manual "Fetch Citation Counts" always retries regardless of the suppress flag.
+In both cases, the same title search pipeline runs, but only for a fetch the user starts, by opening the item or using Fetch Citation Counts. The columns' background fetch stops at either case instead (see [Why Background Fetches Use Only Identifier Lookups?](#why-background-fetches-use-only-identifier-lookups)). A prior explicit dismiss (stored in `Citegeist.noMatch: true`) suppresses the search for 30 days, after which it retries automatically. A manual "Fetch Citation Counts" always retries regardless of the suppress flag.
 
 ### Search strategy
 
