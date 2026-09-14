@@ -9,7 +9,7 @@
  */
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { STUB_REQUEST_LOG_PATH, routeOpenAlexRequest, type StubResponse } from "./fixture";
+import { STUB_REQUEST_LOG_PATH, routeOpenAlexRequest, type StubResponse } from "../shared/fixture";
 
 export interface OpenAlexStub {
   /** Origin to put in the override pref, e.g. `http://127.0.0.1:43121`. */

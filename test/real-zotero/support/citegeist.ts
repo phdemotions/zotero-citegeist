@@ -38,3 +38,12 @@ export const ITEM_MENU_L10N_IDS = [
   "citegeist-menu-refs",
   "citegeist-menu-resolve-authors",
 ] as const;
+
+/** The Debug Output line `onStartup` in src/hooks.ts writes once startup has finished. */
+export const STARTUP_COMPLETE_DEBUG_LINE = "[Citegeist] Startup complete";
+
+/** The Debug Output line `onShutdown` in src/hooks.ts writes after the cache has closed. */
+export const SHUTDOWN_COMPLETE_DEBUG_LINE = "[Citegeist] Shutdown complete";
+
+/** How `logError` in src/modules/utils.ts starts the Debug Output line for every Citegeist failure. */
+export const ERROR_DEBUG_MARK = "[Citegeist] ERROR";

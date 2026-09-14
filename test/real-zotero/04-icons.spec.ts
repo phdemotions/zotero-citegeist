@@ -8,17 +8,16 @@
  * (`if (!darkIcon) darkIcon = icon` in itemPaneSidenav.js), so both themes
  * still resolve.
  */
-import { STUB_DOI } from "./harness/fixture";
+import { BUDGETS } from "./shared/timeouts";
 import { PANE_ICON_FILE } from "./support/citegeist";
 import {
   citegeistSections,
   citegeistSidenavButtons,
-  createJournalArticle,
   cssImageUrl,
   mainWindow,
   resetTheme,
-  selectInLibrary,
   setTheme,
+  useStubItem,
   waitFor,
 } from "./support/zotero";
 
@@ -32,11 +31,10 @@ async function expectCitegeistIcon(where: string, computed: string): Promise<voi
 }
 
 describe("sidenav and section icons", function () {
-  let item: { id: number; eraseTx(): Promise<unknown> } | undefined;
+  useStubItem("Citegeist icon spec", { select: true });
 
   before(async function () {
-    item = await createJournalArticle("Citegeist icon spec", STUB_DOI);
-    await selectInLibrary(item.id);
+    this.timeout(BUDGETS.iconSidenav.timeoutMs);
     await waitFor("the Citegeist sidenav button", () => citegeistSidenavButtons()[0]);
   });
 
@@ -44,12 +42,9 @@ describe("sidenav and section icons", function () {
     resetTheme();
   });
 
-  after(async function () {
-    await item?.eraseTx();
-  });
-
   for (const theme of ["light", "dark"] as const) {
     it(`sidenav icon resolves to a real URL in the ${theme} theme`, async function () {
+      this.timeout(BUDGETS.iconTheme.timeoutMs);
       await setTheme(theme);
       const button = citegeistSidenavButtons()[0];
       await expectCitegeistIcon(
@@ -59,6 +54,7 @@ describe("sidenav and section icons", function () {
     });
 
     it(`section header icon resolves to a real URL in the ${theme} theme`, async function () {
+      this.timeout(BUDGETS.iconTheme.timeoutMs);
       await setTheme(theme);
       const title = citegeistSections()[0]?.querySelector(".head .title");
       expect(title, "Citegeist section header title").to.exist;

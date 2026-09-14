@@ -6,28 +6,15 @@
  * its loading state (a rejected onAsyncRender); a base-URL override that never
  * reaches the loopback stub (no data, no hero); and a hero fed the wrong numbers.
  */
-import { STUB_CITED_BY_COUNT, STUB_DOI } from "./harness/fixture";
-import {
-  citegeistSections,
-  citegeistSidenavButtons,
-  createJournalArticle,
-  selectInLibrary,
-  waitFor,
-} from "./support/zotero";
+import { STUB_CITED_BY_COUNT } from "./shared/fixture";
+import { BUDGETS } from "./shared/timeouts";
+import { citegeistSections, citegeistSidenavButtons, useStubItem, waitFor } from "./support/zotero";
 
 describe("item pane section", function () {
-  let item: { id: number; eraseTx(): Promise<unknown> } | undefined;
-
-  before(async function () {
-    item = await createJournalArticle("Citegeist item-pane spec", STUB_DOI);
-    await selectInLibrary(item.id);
-  });
-
-  after(async function () {
-    await item?.eraseTx();
-  });
+  useStubItem("Citegeist item-pane spec", { select: true });
 
   it("renders a non-empty Citegeist section containing the hero metric", async function () {
+    this.timeout(BUDGETS.itemPane.timeoutMs);
     const section = await waitFor("the Citegeist item-pane section", () => citegeistSections()[0]);
     // Bring the section into view the way a user would, so it renders even when
     // it sits below the fold of the item pane.

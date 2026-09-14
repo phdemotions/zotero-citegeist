@@ -31,13 +31,17 @@ jobs:
         zotero: ["8.0.4", "9.0.6", "10.0.2"]
     env:
       ZOTERO_VERSION: ${{ matrix.zotero }}
-      # Without this, scaffold downloads Zotero's beta channel instead.
+      # The activation spec fails unless Zotero reports exactly this version.
+      CITEGEIST_EXPECT_ZOTERO_VERSION: ${{ matrix.zotero }}
+      # Without this, scaffold downloads Zotero's beta channel instead; the
+      # config's test:init hook refuses to run while it is unset.
       ZOTERO_PLUGIN_ZOTERO_BIN_PATH: ${{ github.workspace }}/.scaffold/zotero/zotero
       # Skip scaffold's own headless bootstrap (apt, Xvfb, Zotero download); the
       # steps below install the dependencies and run Xvfb explicitly.
       ZOTERO_SETUP_COMPLETE: "1"
       # The suite's root after-hook writes Debug Output and Zotero's errors here.
       CITEGEIST_REAL_ZOTERO_LOG_DIR: ${{ github.workspace }}/.scaffold/logs
+      NO_UPDATE_NOTIFIER: "1"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -48,7 +52,10 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm install --no-audit --no-fund
+      # npm install, not npm ci (CLAUDE.md, CI Notes). No dependency's install
+      # script runs: esbuild and @swc/core load their platform packages without
+      # them, which test/realZoteroHarness.test.ts exercises.
+      - run: npm install --no-audit --no-fund --ignore-scripts
 
       - name: Build the release XPI
         run: npm run build
@@ -77,16 +84,24 @@ jobs:
           tar -xJf zotero.tar.xz -C .scaffold/zotero --strip-components=1
           test -x "$ZOTERO_PLUGIN_ZOTERO_BIN_PATH"
 
+      # The screen size is explicit because MenuManager moves plugin menu entries
+      # that would push a context menu past 80% of the screen into a submenu.
       - name: Run the real-Zotero suite
         run: |
           set -o pipefail
           timeout 15m xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             npm run test:zotero 2>&1 | tee ".scaffold/logs/runner-zotero-${ZOTERO_VERSION}.log"
 
+      # scaffold exits 0 whenever Mocha reports no failure, even when no test ran.
+      # Fail unless the run passed exactly the tests the config counted in the
+      # bundles Zotero loaded.
+      - name: Check the run passed every collected test
+        run: node test/real-zotero/harness/runLog.mjs passed ".scaffold/logs/runner-zotero-${ZOTERO_VERSION}.log"
+
       # Negative control, Zotero 10 cell only. The same XPI with its cap lowered
       # to 9.* must be refused. The step asserts that expected failure: it is
-      # green when the cap check works, and red if a wrongly capped build loads
-      # or the run fails for some unrelated reason.
+      # green when the cap check works, and red if a wrongly capped build loads,
+      # finishes a clean run, or fails for some unrelated reason.
       - name: "Negative control: a build capped 9.* is refused on Zotero 10"
         if: ${{ !cancelled() && matrix.zotero == '10.0.2' }}
         run: |
@@ -110,6 +125,7 @@ jobs:
             echo "::error::A build capped 9.* passed on Zotero 10: the activation check misses cap bugs"
             exit 1
           fi
+          node test/real-zotero/harness/runLog.mjs refused "$log"
           if ! grep -Eq "not compatible with application version|marked Citegeist incompatible" "$log"; then
             echo "::error::The 9.*-capped build failed (exit $status) for a reason other than its cap"
             exit 1

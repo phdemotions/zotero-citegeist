@@ -1,10 +1,11 @@
 /**
  * The OpenAlex records the loopback stub serves.
  *
- * Shared by the Node-side stub server (`openalexStub.ts`) and the specs running
- * inside Zotero, so both agree on the identifiers and numbers a spec asserts.
- * Pure data with no Node or Zotero imports: esbuild bundles this file into the
- * in-Zotero spec files as well.
+ * Shared by the Node-side stub server (`harness/openalexStub.ts`) and the specs
+ * running inside Zotero, so both agree on the identifiers and numbers a spec
+ * asserts. Pure data with no Node or Zotero imports, which is why it lives in
+ * shared/: esbuild bundles it into the in-Zotero spec files, and harness/ holds
+ * only code for the scaffold Node process.
  */
 
 /** DOI of the one work the stub knows. A spec item carrying it resolves to STUB_WORK. */

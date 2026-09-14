@@ -6,8 +6,9 @@
  * to parse (it never reports loaded).
  */
 import { SETTINGS_PANE_ID } from "../../src/constants";
+import { BUDGETS } from "./shared/timeouts";
 import { ADDON_ID } from "./support/citegeist";
-import { WAIT_TIMEOUT_MS, waitFor } from "./support/zotero";
+import { waitFor } from "./support/zotero";
 
 describe("preference pane", function () {
   it("registers the Citegeist settings pane", async function () {
@@ -20,6 +21,7 @@ describe("preference pane", function () {
   });
 
   it("opens the pane with its settings controls", async function () {
+    this.timeout(BUDGETS.preferencePane.timeoutMs);
     const prefsWindow = Zotero.Utilities.Internal.openPreferences(SETTINGS_PANE_ID);
     try {
       const prefs = await waitFor(
@@ -27,14 +29,10 @@ describe("preference pane", function () {
         () => prefsWindow.document?.readyState === "complete" && prefsWindow.Zotero_Preferences,
       );
       await prefs.navigateToPane(SETTINGS_PANE_ID);
-      const pane = await waitFor(
-        "the Citegeist pane to load and show",
-        () => {
-          const p = prefs.panes.get(SETTINGS_PANE_ID);
-          return p?.loaded && !p.container.hidden ? p : null;
-        },
-        WAIT_TIMEOUT_MS,
-      );
+      const pane = await waitFor("the Citegeist pane to load and show", () => {
+        const p = prefs.panes.get(SETTINGS_PANE_ID);
+        return p?.loaded && !p.container.hidden ? p : null;
+      });
       expect(pane.container.querySelector("#citegeist-pref-apikey"), "API key field").to.exist;
     } finally {
       prefsWindow.close();
