@@ -8,13 +8,11 @@
  * that many passing. The negative control checks the inverse: a build Zotero
  * must refuse may not finish a clean run.
  *
- * Plain JavaScript, so the workflow runs it with bare `node`:
- *   node test/real-zotero/harness/runLog.mjs passed <log>
- *   node test/real-zotero/harness/runLog.mjs refused <log>
+ * Plain JavaScript, so the workflow runs its CLI with bare `node`:
+ *   node test/real-zotero/harness/runLog-cli.mjs passed <log>
+ *   node test/real-zotero/harness/runLog-cli.mjs refused <log>
  */
-/* global process */
 import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 
 const COLLECTED = "Citegeist real-Zotero suite collected";
 const COLLECTED_LINE = new RegExp(`${COLLECTED} (\\d+) tests`, "g");
@@ -85,13 +83,25 @@ export function problemsWithRefusedRun(log) {
     );
 }
 
-function main([mode, path]) {
+/**
+ * What runLog-cli.mjs runs: checks a log, writes the result to stdout, and returns the exit status.
+ * Any problem, a missing argument and an unreadable log all return 1.
+ * @param {string[]} args `passed|refused <log>`
+ * @returns {number}
+ */
+export function runLogCli([mode, path]) {
   const check = { passed: problemsWithPassedRun, refused: problemsWithRefusedRun }[mode];
   if (!check || !path) {
-    process.stderr.write("usage: node runLog.mjs passed|refused <log>\n");
-    return 2;
+    process.stdout.write("::error::usage: node runLog-cli.mjs passed|refused <log>\n");
+    return 1;
   }
-  const log = readFileSync(path, "utf8");
+  let log;
+  try {
+    log = readFileSync(path, "utf8");
+  } catch (error) {
+    process.stdout.write(`::error::Cannot read ${path}: ${error.message}\n`);
+    return 1;
+  }
   const problems = check(log);
   for (const problem of problems) process.stdout.write(`::error::${path}: ${problem}\n`);
   if (problems.length === 0) {
@@ -102,8 +112,4 @@ function main([mode, path]) {
     );
   }
   return problems.length === 0 ? 0 : 1;
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exitCode = main(process.argv.slice(2));
 }

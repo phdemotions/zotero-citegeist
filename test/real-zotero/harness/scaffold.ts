@@ -114,10 +114,13 @@ export function assertLoadedMatchesStaged(
 }
 
 /**
- * Throw unless ZOTERO_PLUGIN_ZOTERO_BIN_PATH names an existing file. On CI,
- * scaffold otherwise downloads Zotero's beta channel and tests that instead of
- * the pinned release. Every run scaffold does not download for needs the
- * variable anyway, so requiring it everywhere costs a local run nothing.
+ * Throw unless ZOTERO_PLUGIN_ZOTERO_BIN_PATH names an existing file, before
+ * scaffold starts anything. real-zotero.yml sets ZOTERO_SETUP_COMPLETE=1, which
+ * skips scaffold's own headless setup, so scaffold downloads nothing there and,
+ * without the variable, fails with a bare "No Zotero Found.". Only when
+ * ZOTERO_SETUP_COMPLETE is unset does that setup download Zotero's beta build
+ * in place of a pinned release. Every run needs the variable either way, so
+ * requiring it everywhere costs a local run nothing.
  */
 export function assertPinnedZoteroBinary(env: Record<string, string | undefined>): void {
   const bin = env.ZOTERO_PLUGIN_ZOTERO_BIN_PATH;

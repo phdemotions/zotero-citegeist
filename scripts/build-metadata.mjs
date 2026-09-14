@@ -54,6 +54,10 @@ const CAP_SHAPE = new RegExp(`^${PART}\\.${PART}\\.\\*$`);
 // "3.0.0-rc.9" sorts below "3.0.0-rc.10", alpha below beta below rc, and every prerelease below
 // "3.0.0", because a part with trailing text sorts below the same part without it.
 //
+// Between releases main carries the next version's "-alpha.0", such as "3.1.0-alpha.0" after 3.0.0
+// ships. It sorts below every other prerelease of that version and below the version itself, so a
+// copy built from main is still offered each of them.
+//
 // Firefox's manifest schema also reads the version, and it wants plain dotted numbers. For a
 // prerelease such as "3.0.0-rc.1", whose third part is "0-rc", it logs a warning, not an error.
 // That warning is expected on every prerelease build and does not mean anything failed.
@@ -100,25 +104,68 @@ export function assertRangeShape({ min, max }, sourceLabel) {
   }
 }
 
+const INT32_MIN = -(2 ** 31);
 const INT32_MAX = 2 ** 31 - 1;
 
 /**
- * Compares two versions FLOOR_SHAPE or CAP_SHAPE admit, the way nsVersionComparator does: a
- * missing part counts as 0 and "*" as INT32_MAX. So "10" equals "10.0", and "10.0.1" sorts below
- * "10.0.*" while "10.1" sorts above it. Returns -1, 0 or 1. It reads numbers and "*" only, so it
- * would misorder a prerelease such as "3.0.0-rc.1", and nothing outside assertRangeShape calls it.
+ * Compares two version strings the way Firefox's nsVersionComparator does
+ * (xpcom/base/nsVersionComparator.cpp at FIREFOX_140_15_0esr_RELEASE), which is how Zotero orders
+ * add-on versions and reads strict_min_version and strict_max_version. Returns -1, 0 or 1.
+ *
+ * Each dot-separated part reads as a number, then text up to the next digit, "+" or "-", then a
+ * number, then the rest. A missing part counts as 0 and "*" as INT32_MAX, so "10" equals "10.0",
+ * and "10.0.1" sorts below "10.0.*" while "10.1" sorts above it. Any text sorts below no text, and
+ * texts compare as strings: "3.0.0-alpha.0" sorts below "3.0.0-alpha.1", "3.0.0-beta.1",
+ * "3.0.0-rc.1" and "3.0.0", while "3.0.0-rc2" sorts above "3.0.0-rc10".
  */
-function compareVersions(a, b) {
-  const parse = (version) =>
-    version.split(".").map((part) => (part === "*" ? INT32_MAX : Number(part)));
-  const left = parse(a);
-  const right = parse(b);
+export function compareVersions(a, b) {
+  const left = a.split(".");
+  const right = b.split(".");
   for (let i = 0; i < Math.max(left.length, right.length); i++) {
-    const leftPart = left[i] ?? 0;
-    const rightPart = right[i] ?? 0;
-    if (leftPart !== rightPart) return leftPart < rightPart ? -1 : 1;
+    const x = versionPart(left[i]);
+    const y = versionPart(right[i]);
+    const order =
+      compareNumbers(x.numA, y.numA) ||
+      compareText(x.strB, y.strB) ||
+      compareNumbers(x.numC, y.numC) ||
+      compareText(x.extraD, y.extraD);
+    if (order !== 0) return order;
   }
   return 0;
+}
+
+/** One part as ParseVP reads it. A missing or empty part reads as 0. */
+function versionPart(part = "") {
+  if (part === "*") return { numA: INT32_MAX, strB: null, numC: 0, extraD: null };
+  const [numA, rest] = leadingNumber(part);
+  if (rest === "") return { numA, strB: null, numC: 0, extraD: null };
+  // "1.0+" means "1.1pre".
+  if (rest.startsWith("+")) return { numA: numA + 1, strB: "pre", numC: 0, extraD: null };
+  const end = rest.search(/[0-9+-]/);
+  if (end === -1) return { numA, strB: rest, numC: 0, extraD: null };
+  const [numC, extraD] = leadingNumber(rest.slice(end));
+  return { numA, strB: rest.slice(0, end), numC, extraD: extraD === "" ? null : extraD };
+}
+
+/** strtol: the leading integer and the text after it, 0 and all the text when there is none. */
+function leadingNumber(text) {
+  const match = /^\s*[+-]?\d+/.exec(text);
+  if (!match) return [0, text];
+  const value = Number(match[0]);
+  // Firefox reads a number outside the int32 range as 0.
+  const inRange = Number.isSafeInteger(value) && value >= INT32_MIN && value <= INT32_MAX;
+  return [inRange ? value : 0, text.slice(match[0].length)];
+}
+
+function compareNumbers(a, b) {
+  return a === b ? 0 : a < b ? -1 : 1;
+}
+
+/** Any text sorts before no text; texts compare character by character. */
+function compareText(a, b) {
+  if (a === null) return b === null ? 0 : 1;
+  if (b === null) return -1;
+  return a === b ? 0 : a < b ? -1 : 1;
 }
 
 // Every layout that carries a Zotero range normalises to `{ min, max }`, so the checks and
@@ -342,7 +389,9 @@ export function verifyBuiltAddon(addonDir, meta) {
   try {
     manifest = JSON.parse(manifestFile.content);
   } catch (error) {
-    throw new Error(`manifest.json in ${addonDir} is not valid JSON: ${error.message}`);
+    throw new Error(`manifest.json in ${addonDir} is not valid JSON: ${error.message}`, {
+      cause: error,
+    });
   }
 
   const zotero = manifest.applications?.zotero;

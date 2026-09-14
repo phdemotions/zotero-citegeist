@@ -9,9 +9,15 @@ on:
 permissions:
   contents: read
 
+# GitHub runs `shell: bash` as `bash --noprofile --norc -eo pipefail {0}`. Without
+# it a failure anywhere but the end of a pipeline passes.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     timeout-minutes: 20
@@ -31,12 +37,16 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
-      # The install release.yml's Verify job runs: npm install, not npm ci
-      # (CLAUDE.md, CI Notes), with no dependency install script.
+      # The install, and in order the gates, that release.yml's build and verify
+      # jobs run: npm install, not npm ci (CLAUDE.md, CI Notes), with no dependency
+      # install script.
       - run: npm install --no-audit --no-fund --ignore-scripts
 
       - name: Lockfile unchanged by install
         run: git diff --exit-code package-lock.json
+
+      - name: Typecheck
+        run: npm run typecheck
 
       - name: Lint
         run: npm run lint
@@ -47,15 +57,18 @@ jobs:
       - name: OKF docs check
         run: npm run okf:check
 
-      - run: npm test
+      - name: Shell script check
+        run: shellcheck scripts/*.sh
 
-      - run: npm run typecheck
+      - name: Unit tests
+        run: npm test
 
-      - run: npm run build
+      - name: Build
+        run: npm run build
 
-  # The real-Zotero matrix (plan U4), defined once in real-zotero.yml and also
-  # called by release.yml. Each cell reports as "Real Zotero / Zotero <version>".
-  # No inputs: pull requests build their own XPI and run the default matrix.
+  # The real-Zotero matrix, defined once in real-zotero.yml and also called by
+  # release.yml. Each cell reports as "Real Zotero / Zotero <version>". No inputs:
+  # pull requests build their own XPI and run the default matrix.
   real-zotero:
     name: Real Zotero
     permissions:
@@ -69,7 +82,7 @@ jobs:
     name: CI gate
     needs: [test, real-zotero]
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     timeout-minutes: 5
     steps:

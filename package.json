@@ -1,6 +1,6 @@
 {
   "name": "zotero-citegeist",
-  "version": "3.0.0",
+  "version": "3.0.0-alpha.0",
   "description": "Citation intelligence for Zotero — powered by OpenAlex. See citation counts, explore citation networks, and add citing/cited works to your library.",
   "homepage": "https://github.com/phdemotions/zotero-citegeist",
   "repository": {
@@ -20,8 +20,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"*.{json,md,mjs}\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"*.mjs\"",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.{ts,mjs}\" \"scripts/**/*.mjs\" \"*.{json,md,mjs}\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.{ts,mjs}\" \"scripts/**/*.mjs\" \"*.mjs\"",
     "okf:check": "bash tools/okf-check.sh",
     "okf:drift": "bash tools/okf-drift-check.sh"
   },

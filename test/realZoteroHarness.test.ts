@@ -23,6 +23,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { connect } from "node:net";
@@ -513,19 +514,29 @@ describe("run-log guard (harness/runLog.mjs)", () => {
     expect(problemsWithRefusedRun(log(12, "Test run completed - 12 passed"))).toHaveLength(1);
   });
 
-  it("sets the exit status the workflow steps rely on", () => {
+  it("sets the exit status the workflow steps rely on, through a symlinked path too", () => {
     const root = tempTree({
       "good.log": log(3, "Test run completed - 3 passed"),
       "empty.log": log(0, "Test run completed - 0 passed"),
+      "unfinished.log": log(3, null),
     });
-    const cli = join(SPEC_DIR, "harness/runLog.mjs");
-    const status = (mode: string, file: string) =>
-      spawnSync(process.execPath, [cli, mode, join(root, file)], { encoding: "utf8" }).status;
-    expect(status("passed", "good.log")).toBe(0);
-    expect(status("passed", "empty.log")).toBe(1);
-    expect(status("refused", "good.log")).toBe(1);
-    expect(status("refused", "empty.log")).toBe(1);
-    expect(status("unknown", "good.log")).toBe(2);
+    const cli = join(SPEC_DIR, "harness/runLog-cli.mjs");
+    // A path whose real file differs is how an "is this the main module" test fails open.
+    const linked = join(root, "runLog-cli-link.mjs");
+    symlinkSync(cli, linked);
+    const status = (entry: string, ...args: string[]) =>
+      spawnSync(process.execPath, [entry, ...args], { encoding: "utf8" }).status;
+
+    for (const entry of [cli, linked]) {
+      expect(status(entry, "passed", join(root, "good.log")), entry).toBe(0);
+      expect(status(entry, "passed", join(root, "empty.log")), entry).toBe(1);
+      expect(status(entry, "passed", join(root, "unfinished.log")), entry).toBe(1);
+      expect(status(entry, "passed", join(root, "missing.log")), entry).toBe(1);
+      expect(status(entry, "refused", join(root, "good.log")), entry).toBe(1);
+      expect(status(entry, "refused", join(root, "empty.log")), entry).toBe(1);
+      expect(status(entry, "unknown", join(root, "good.log")), entry).toBe(1);
+      expect(status(entry), entry).toBe(1);
+    }
   });
 });
 
@@ -601,8 +612,8 @@ describe("real-zotero workflow wiring", () => {
   });
 
   it("checks the suite run and the negative control with the run-log guard", () => {
-    expect(workflow).toMatch(/node test\/real-zotero\/harness\/runLog\.mjs passed /);
-    expect(workflow).toMatch(/node test\/real-zotero\/harness\/runLog\.mjs refused /);
+    expect(workflow).toMatch(/node test\/real-zotero\/harness\/runLog-cli\.mjs passed /);
+    expect(workflow).toMatch(/node test\/real-zotero\/harness\/runLog-cli\.mjs refused /);
   });
 });
 

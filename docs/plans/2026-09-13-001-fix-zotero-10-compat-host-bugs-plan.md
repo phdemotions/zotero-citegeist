@@ -508,7 +508,8 @@ The menu spec lands in this unit's pull request. U9 removes the DOM fallback, no
 **Goal:** The update channel serves every supported line, publishes only from recognised tags, and accepts a cap raise without a release.
 **Requirements:** R14, R11, R3
 **Dependencies:** U1, U5
-**Files:** `release-lines.json` (new, committed), `scripts/build-metadata.mjs`, `scripts/build.mjs`, `.github/workflows/release.yml`, `.github/workflows/republish-update-channel.yml` (new), `test/buildMetadata.test.ts`, `docs/RELEASE-CHECKLIST.md`; the same `release.yml` and build-metadata changes ported to `maint/2.x`
+**Files:** `release-lines.json` (new, committed), `scripts/build-metadata.mjs`, `scripts/build.mjs`, `.github/workflows/release.yml`, `.github/workflows/republish-update-channel.yml` (new), `scripts/check-channel-version.mjs` and its CLI `scripts/check-channel-version-cli.mjs`, `scripts/release-tag.mjs`, `scripts/release-guard.mjs` and its CLI `scripts/release-guard-cli.mjs`, `test/buildMetadata.test.ts`, `test/release-guard.test.ts`, `test/release-scripts.test.ts`, `test/workflow-invariants.test.ts`, `CLAUDE.md` (Release Process), `docs/RELEASE-CHECKLIST.md` (section 5); the same `release.yml` and build-metadata changes ported to `maint/2.x`
+**Note from U5 review round 2:** `scripts/check-channel-version.mjs` compares the tag against the newest version the live `update.json` lists, across every add-on entry. Once `update.json` carries two lines, a 2.0.x maintenance tag would compare against 3.0.0 and be refused, so the channel check must compare within the tag's own release line. The release guard and `scripts/release-tag.mjs` refuse every prerelease tag today; tag classification replaces that refusal and must keep the guard's merged-pull-request rule for final tags on each line's branch.
 **Approach (KTD10):**
 - **Lines file.** `release-lines.json` lists each supported line's latest version, floor and cap.
 - **Hashes.** `updateManifestFor` emits one entry per line. Hashes come from the XPI built for the tag, or from the downloaded published asset for other lines. A missing asset fails the job.
@@ -541,6 +542,7 @@ The menu spec lands in this unit's pull request. U9 removes the DOM fallback, no
 **Requirements:** R8
 **Dependencies:** U4, U15
 **Files:** `.github/workflows/zotero-watch.yml` (new), `scripts/check-zotero-compat.mjs` (new), `test/checkZoteroCompat.test.ts` (new)
+**Note from U5 review round 2:** `real-zotero.yml` builds a download URL and does shell arithmetic (`${ZOTERO_VERSION%%.*} - 1`) on each `zotero-versions` entry, so a list built from the version service's network data must validate every entry against `^\d+\.\d+\.\d+$` before it reaches the workflow; the cell also refuses any other shape. `real-zotero.yml` no longer has a `channel` input, and every cell downloads `client/release/<version>`: U10 defines its own inputs for unpinned and beta tarballs, and `test/workflow-invariants.test.ts`'s input table changes with them.
 **Approach (KTD9):** A daily scheduled, manually dispatchable workflow with `contents: read`, `issues: write` and `actions: write`. Each run:
 1. Re-enables its own schedule through the GitHub API.
 2. Reads `https://www.zotero.org/download/client/version?channel=release|beta|dev`.

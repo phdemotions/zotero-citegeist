@@ -70,6 +70,7 @@ export function promoteStaging({ staging, target, previous }, renameOptions) {
           [error, restoreError],
           `Could not move ${staging} to ${target}, nor move the last good copy back from ` +
             `${previous}; the next build restores it from there`,
+          { cause: restoreError },
         );
       }
     }

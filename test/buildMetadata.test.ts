@@ -20,6 +20,7 @@ import {
   assertNoSymbolicLinks,
   assertNoUnreplacedPlaceholders,
   assertRangeShape,
+  compareVersions,
   placeholdersFor,
   readBuildMetadata,
   replacePlaceholders,
@@ -212,6 +213,31 @@ describe("Zotero range shape", () => {
   });
 });
 
+describe("version order (compareVersions, Firefox's nsVersionComparator)", () => {
+  it("sorts main's development version below every prerelease of its version and the version itself", () => {
+    // docs/RELEASE-CHECKLIST.md, section 5: main carries X.Y.Z-alpha.0 between releases.
+    for (const later of ["3.0.0-alpha.1", "3.0.0-beta.1", "3.0.0-rc.1", "3.0.0"]) {
+      expect(compareVersions("3.0.0-alpha.0", later), `3.0.0-alpha.0 < ${later}`).toBe(-1);
+      expect(compareVersions(later, "3.0.0-alpha.0"), `${later} > 3.0.0-alpha.0`).toBe(1);
+    }
+    expect(compareVersions("2.0.6", "3.0.0-alpha.0")).toBe(-1);
+    // Firefox compares the text as a string, so a "-dev" suffix would sort above every beta.
+    expect(compareVersions("3.0.0-dev.0", "3.0.0-beta.1")).toBe(1);
+  });
+
+  it("follows Firefox's rules for numbers, text, missing parts, * and +", () => {
+    expect(compareVersions("3.0.0-rc.9", "3.0.0-rc.10")).toBe(-1);
+    expect(compareVersions("3.0.0-rc2", "3.0.0-rc10")).toBe(1);
+    expect(compareVersions("3.0.0+b", "3.0.1pre")).toBe(0);
+    expect(compareVersions("10", "10.0")).toBe(0);
+    expect(compareVersions("10.0.1", "10.0.*")).toBe(-1);
+    expect(compareVersions("10.1", "10.0.*")).toBe(1);
+    expect(compareVersions("1.0a", "1.0")).toBe(-1);
+    expect(compareVersions("1.0.0.1", "1.0")).toBe(1);
+    expect(compareVersions("10000000000.0", "0.0")).toBe(0);
+  });
+});
+
 describe("package.json version shape", () => {
   it.each([
     "3.0.0",
@@ -238,6 +264,8 @@ describe("package.json version shape", () => {
     "3.0.0-RC.1",
     "3.0.0-pre.1",
     "3.0.0-rc.1.2",
+    // A development suffix would sort between beta and rc: Firefox compares the text as a string
+    "3.0.0-dev.0",
     // Firefox reads a "+" as the next number's prerelease: "3.0.0+b" sorts as "3.0.1pre"
     "3.0.0+b",
   ])("rejects the version %s", (version) => {

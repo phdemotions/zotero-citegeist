@@ -1,12 +1,20 @@
-# Tag push -> gated release (plan U5, KTD13).
+# Tag push -> gated release. The procedure is docs/RELEASE-CHECKLIST.md, section 5;
+# the design is KTD13 in docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md.
 #
-#   verify       read-only: tag guards, every automated gate, the build.
-#   real-zotero  read-only: the real-Zotero matrix (real-zotero.yml), run on the
-#                XPI verify built after checking it against verify's digest.
-#   publish      the only job with contents: write. It needs both, publishes the
-#                exact bytes verify built, runs no dependency, test code, Zotero
-#                binary or third-party action, and refuses to move the update
-#                channel backwards.
+#   build        read-only. Refuses every tag but a release pull request's merge
+#                commit on main, then installs with no install scripts and builds.
+#                esbuild, inside the build, is the only third-party code it runs.
+#                Its outputs, the artifact name and the asset digests, are what
+#                every later job trusts, and no other job can change them.
+#   verify       read-only: typecheck, lint, format, OKF, shellcheck, unit tests.
+#   real-zotero  read-only: the real-Zotero matrix (real-zotero.yml) on build's XPI,
+#                checked against build's digest.
+#   publish      contents: write, after all three. Publishes the exact bytes build
+#                made, runs no dependency, test code, Zotero binary or third-party
+#                action, never moves the update channel backwards, and finishes a
+#                publish an earlier attempt left half done.
+#   badges       contents: write, after publish. Refreshes the README badges, and
+#                can fail and be re-run on its own.
 #
 # test/workflow-invariants.test.ts locks these properties in.
 name: Build & Release
@@ -19,80 +27,105 @@ on:
 permissions:
   contents: read
 
+# GitHub runs `shell: bash` as `bash --noprofile --norc -eo pipefail {0}`. Without
+# it a failure anywhere but the end of a pipeline passes.
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  verify:
-    name: Verify
-    runs-on: ubuntu-latest
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
-    timeout-minutes: 20
+      # The release guard reads which pull request put the tagged commit on main.
+      pull-requests: read
+    timeout-minutes: 15
     outputs:
+      artifact: ${{ steps.digest.outputs.artifact }}
       asset-sums: ${{ steps.digest.outputs.sums }}
       xpi-sha256: ${{ steps.digest.outputs.xpi-sha256 }}
     steps:
-      # Depth 2: the version-bump guard compares the tagged commit with its parent.
+      # Full history: the release guard walks main's first-parent history and reads
+      # package.json at the release pull request's base commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 0
 
       # No dependency cache: a release restores nothing another run could have written.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
 
-      # A published release reaches every installed copy. Until tag classification
-      # lands (plan U15), only a final version may publish.
-      - name: Tag is a final release version
-        id: guard-final-tag
+      # Before anything is installed. A tag on any other commit would publish code
+      # review never approved, or a version that has already shipped.
+      - name: The tag is a release pull request's merge commit on main
+        id: release-guard
         env:
           TAG: ${{ github.ref_name }}
-        run: |
-          if [[ "$TAG" == *-* ]]; then
-            echo "::error::$TAG is a prerelease tag. Prerelease tags are refused until tag classification lands (plan U15 in docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md): today every published release reaches every installed copy."
-            exit 1
-          fi
-          final='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-          if ! [[ "$TAG" =~ $final ]]; then
-            echo "::error::$TAG is not vMAJOR.MINOR.PATCH"
-            exit 1
-          fi
-          echo "$TAG is a final release version"
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-guard-cli.mjs "$TAG" "$GITHUB_SHA"
 
-      # A hand-made tag whose name differs from package.json would publish an
-      # update.json that links a release asset under the wrong tag.
-      - name: Tag matches the package.json version
-        id: guard-tag-version
+      # npm install, not npm ci (CLAUDE.md, CI Notes), with no dependency's install
+      # script; the build passes without them.
+      - run: npm install --no-audit --no-fund --ignore-scripts
+
+      - name: Lockfile unchanged by install
+        run: git diff --exit-code package-lock.json
+
+      - run: npm run build
+
+      # publish and every real-Zotero cell check the assets against these digests.
+      # Any job in the run can write an artifact; none can change these outputs. The
+      # attempt number keeps "Re-run all jobs" from colliding with an artifact an
+      # earlier attempt uploaded, and publish reads the name from here, so "Re-run
+      # failed jobs" still finds the first attempt's artifact.
+      - name: Record the release asset digests
+        id: digest
+        working-directory: build
         env:
-          TAG: ${{ github.ref_name }}
+          ARTIFACT: release-assets-${{ github.run_attempt }}
         run: |
-          version=$(node -p 'require("./package.json").version')
-          if [ "$TAG" != "v$version" ]; then
-            echo "::error::Tag $TAG does not match package.json version $version; expected v$version"
-            exit 1
-          fi
-          echo "Tag $TAG matches package.json version $version"
+          shopt -s failglob
+          xpis=(citegeist-*.xpi)
+          if [ "${#xpis[@]}" -ne 1 ]; then echo "::error::Expected one XPI, found: ${xpis[*]}"; exit 1; fi
+          sums=$(sha256sum "${xpis[0]}" update.json)
+          echo "$sums"
+          {
+            echo "artifact=$ARTIFACT"
+            echo "sums<<CITEGEIST_SUMS"
+            echo "$sums"
+            echo "CITEGEIST_SUMS"
+            echo "xpi-sha256=$(sha256sum "${xpis[0]}" | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
 
-      # A tag on any other commit, such as a later main or a branch commit a squash
-      # merge left behind, would ship code the release pull request never carried.
-      - name: The tagged commit bumps package.json to the tag version
-        id: guard-version-bump
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          version_at() {
-            git show "$1:package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version'
-          }
-          tagged=$(version_at HEAD)
-          parent=$(version_at HEAD^)
-          if [ "v$tagged" != "$TAG" ] || [ "$parent" = "$tagged" ]; then
-            echo "::error::$TAG must be on the commit that changes package.json's version to ${TAG#v}, the release pull request's merge commit. This commit has $tagged and its parent has $parent."
-            exit 1
-          fi
-          echo "This commit changes package.json's version from $parent to $tagged"
+      - name: Upload the release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.digest.outputs.artifact }}
+          path: |
+            build/citegeist-*.xpi
+            build/update.json
+          if-no-files-found: error
 
-      # npm install, not npm ci (CLAUDE.md, CI Notes). No dependency's install
-      # script runs; the build and every unit test pass without them.
+  verify:
+    name: Verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No dependency cache, as in build.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
       - run: npm install --no-audit --no-fund --ignore-scripts
 
       - name: Lockfile unchanged by install
@@ -106,92 +139,60 @@ jobs:
 
       - run: npm run okf:check
 
+      - run: shellcheck scripts/*.sh
+
       - run: npm test
 
-      - run: npm run build
-
-      # publish re-checks these digests and the real-Zotero cells check the XPI's.
-      # Every job in the run can write artifacts, including the real-Zotero cells
-      # running third-party code, and none of them can change this job's outputs.
-      - name: Record the release asset digests
-        id: digest
-        working-directory: build
-        run: |
-          shopt -s failglob
-          xpis=(citegeist-*.xpi)
-          if [ "${#xpis[@]}" -ne 1 ]; then echo "::error::Expected one XPI, found: ${xpis[*]}"; exit 1; fi
-          sums=$(sha256sum "${xpis[0]}" update.json)
-          echo "$sums"
-          {
-            echo "sums<<CITEGEIST_SUMS"
-            echo "$sums"
-            echo "CITEGEIST_SUMS"
-            echo "xpi-sha256=$(sha256sum "${xpis[0]}" | cut -d' ' -f1)"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Upload the release assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-assets
-          path: |
-            build/citegeist-*.xpi
-            build/update.json
-          if-no-files-found: error
-
-  # The matrix pull requests run, on the XPI verify built rather than a rebuild,
-  # so the suite tests the bytes publish ships.
+  # The matrix pull requests run, on the XPI build made rather than a rebuild, so
+  # the suite tests the bytes publish ships.
   real-zotero:
     name: Real Zotero
-    needs: verify
+    needs: build
     permissions:
       contents: read
     uses: ./.github/workflows/real-zotero.yml
     with:
-      xpi-artifact: release-assets
-      xpi-sha256: ${{ needs.verify.outputs.xpi-sha256 }}
+      xpi-artifact: ${{ needs.build.outputs.artifact }}
+      xpi-sha256: ${{ needs.build.outputs.xpi-sha256 }}
 
   publish:
     name: Publish
-    needs: [verify, real-zotero]
-    runs-on: ubuntu-latest
+    needs: [build, verify, real-zotero]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     timeout-minutes: 15
     # One publish at a time across all tags, so two runs cannot interleave the
-    # channel check and the channel move. A running publish is never cancelled;
-    # GitHub keeps only the newest pending one and cancels older pending ones.
+    # channel check and the channel move. A running publish is never cancelled.
+    # GitHub keeps only the newest pending one and cancels older pending ones, so
+    # after a release, re-run any Publish shown as cancelled
+    # (docs/RELEASE-CHECKLIST.md, section 5).
     concurrency:
       group: release-channel
       cancel-in-progress: false
     env:
       TAG: ${{ github.ref_name }}
+      SUMS: ${{ needs.build.outputs.asset-sums }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      # Nothing from the repository runs before the downloaded bytes are proven.
-      - name: Download the verified release assets
+      - name: Download the release assets
+        id: download
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-assets
+          name: ${{ needs.build.outputs.artifact }}
           path: ${{ runner.temp }}/release-assets
 
-      - name: Confirm the assets are the bytes verify built
-        id: digest-check
-        working-directory: ${{ runner.temp }}/release-assets
-        env:
-          SUMS: ${{ needs.verify.outputs.asset-sums }}
-        run: |
-          shopt -s nullglob dotglob
-          files=(*)
-          present=$(printf '%s\n' "${files[@]}" | sort)
-          listed=$(printf '%s\n' "$SUMS" | sed -E 's/^[0-9a-f]{64}  //' | sort)
-          if [ -z "$listed" ] || [ "$present" != "$listed" ]; then
-            echo "::error::The artifact holds [${present//$'\n'/ }], but verify hashed [${listed//$'\n'/ }]"
-            exit 1
-          fi
-          printf '%s\n' "$SUMS" | sha256sum --check --strict
+      # After the download, so the workspace holds the tagged commit and nothing the
+      # artifact carried. Credentials persist on purpose: the channel step pushes
+      # the `release` tag.
+      - name: Check out the tagged commit
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Credentials persist on purpose: this job pushes the `release` tag and the
-      # `badges` branch.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Nothing is written until the downloaded bytes are proven to be build's.
+      - name: Confirm the assets are the bytes build made
+        id: digest-check
+        run: bash scripts/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
 
       # A re-run of a superseded run, or a tag deleted and pushed again on another
       # commit, must not publish this run's commit.
@@ -208,95 +209,85 @@ jobs:
           fi
           echo "Tag $TAG still points at $GITHUB_SHA"
 
-      # Refuses a tag that would move the channel backwards: tag runs finishing
-      # out of order, or an older tag re-run after a newer one shipped. It runs
-      # before the versioned release exists, so a refused tag creates nothing.
-      - name: The tag is newer than every version on the live channel
+      # Refuses a version older than the channel's newest, and this version with
+      # other bytes. It reports "current" when an earlier attempt already published
+      # these exact bytes, and "repair" when it may restore a missing update.json.
+      # It runs before the versioned release exists, so a refused tag creates nothing.
+      - name: The live channel accepts this version
         id: channel-version
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/check-channel-version.mjs "${TAG#v}" "https://github.com/$GITHUB_REPOSITORY/releases/download/release/update.json"
+        run: node scripts/check-channel-version-cli.mjs "${TAG#v}" "https://github.com/$GITHUB_REPOSITORY/releases/download/release/update.json"
 
-      # A published versioned release is never overwritten. A re-run after a later
-      # step failed finds this tag's release in place and continues only if its
-      # assets are the bytes verify built.
-      - name: Create the GitHub Release
+      # Creates the release, or settles the one an earlier attempt left: a published
+      # release is never changed, and a draft is published or replaced.
+      - name: Create or settle the versioned release
+        id: versioned-release
         env:
           GH_TOKEN: ${{ github.token }}
-          SUMS: ${{ needs.verify.outputs.asset-sums }}
-        run: |
-          assets="$RUNNER_TEMP/release-assets"
-          if ! view_error=$(gh release view "$TAG" --json tagName 2>&1 >/dev/null); then
-            if [[ "$view_error" != *"release not found"* ]]; then
-              echo "::error::Could not tell whether release $TAG exists: $view_error"
-              exit 1
-            fi
-            gh release create "$TAG" "$assets"/citegeist-*.xpi "$assets/update.json" \
-              --verify-tag --generate-notes --title "$TAG"
-          else
-            existing="$RUNNER_TEMP/existing-release"
-            rm -rf "$existing"
-            mkdir -p "$existing"
-            gh release download "$TAG" --dir "$existing"
-            present=$(find "$existing" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
-            listed=$(printf '%s\n' "$SUMS" | sed -E 's/^[0-9a-f]{64}  //' | sort)
-            if [ "$present" != "$listed" ] || ! (cd "$existing" && printf '%s\n' "$SUMS" | sha256sum --check --strict); then
-              echo "::error::Release $TAG already exists with assets other than the ones verify built. A published release is never overwritten: installed copies may already have taken it."
-              exit 1
-            fi
-            echo "Release $TAG already carries the verified assets; leaving it unchanged"
-          fi
+        run: bash scripts/publish-versioned-release.sh "$TAG" "$RUNNER_TEMP/release-assets"
 
-      - name: Refresh the auto-update channel
+      - name: Move the auto-update channel
+        id: channel
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          CHANNEL_STATE: ${{ steps.channel-version.outputs.state }}
         run: |
+          case "$CHANNEL_STATE" in
+            current)
+              echo "The channel already serves $TAG's verified update.json; nothing to move"
+              exit 0
+              ;;
+            advance | first | repair) ;;
+            *)
+              echo "::error::The channel check reported '$CHANNEL_STATE', which this step does not know"
+              exit 1
+              ;;
+          esac
           # Move the floating `release` tag to this commit.
           git tag -f release
           git push --force origin refs/tags/release:refs/tags/release
           bash scripts/publish-update-channel.sh "$RUNNER_TEMP/release-assets/update.json"
 
-      - name: Refresh self-hosted README badges
+  badges:
+    name: README badges
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    timeout-minutes: 10
+    # One refresh at a time. Each reads every release when it runs, so a pending
+    # refresh GitHub cancels in favour of a newer one loses nothing.
+    concurrency:
+      group: readme-badges
+      cancel-in-progress: false
+    steps:
+      # Credentials persist on purpose: this job pushes the `badges` branch.
+      - name: Check out the tagged commit
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The README's release and downloads badges are shields endpoint badges that
+      # read JSON from the orphan `badges` branch over raw.githubusercontent.com, so
+      # shields never spends GitHub API tokens on them (its shared token pool froze
+      # the old github/* badges). shields refuses github.com release-asset URLs as
+      # endpoint sources, hence a branch, force-pushed as one fresh root commit.
+      - name: Refresh the README badges
+        id: refresh
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          # The README's release + downloads badges are shields *endpoint* badges that
-          # read JSON from the `badges` branch over raw.githubusercontent.com. shields
-          # never calls the GitHub API for them, so the shared-token-pool rate limit
-          # ("Unable to select next GitHub token from pool") that repeatedly froze the
-          # old github/* badges cannot break them. This step regenerates that JSON and
-          # force-pushes it to the orphan `badges` branch on every release.
-          # shields blocks github.com release-asset URLs as endpoint sources, so the
-          # data must live on raw.githubusercontent.com — hence a branch, not a Release.
-          REPO="${{ github.repository }}"
-
-          # Release badge — version is the pushed tag; no API query needed.
-          printf '{"schemaVersion":1,"label":"release","message":"%s","color":"5a9cff"}\n' \
-            "$VERSION" > /tmp/badge-release.json
-
-          # Downloads badge — sum of .xpi downloads across all releases (real installs).
-          # Excludes update.json, which Zotero's auto-updater polls on a schedule and
-          # would otherwise inflate the count (~2x as of v2.0.4).
-          DL=$(gh api "repos/$REPO/releases" --paginate \
-            --jq '[.[].assets[] | select(.name | endswith(".xpi")) | .download_count] | add // 0')
-          # The runner image's own Node; this job installs nothing.
-          MSG=$(node -e "const n=+process.argv[1];process.stdout.write(n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n))" "$DL")
-          printf '{"schemaVersion":1,"label":"downloads","message":"%s","color":"30d158"}\n' \
-            "$MSG" > /tmp/badge-downloads.json
-
-          # Publish to an orphan `badges` branch via a throwaway worktree, so the JSON
-          # never touches main and the branch never accumulates history (force-push a
-          # fresh root commit each release).
-          git worktree add --detach /tmp/cg-badges HEAD
-          cd /tmp/cg-badges
+          # --slurp returns one array of pages, so no release past the first 100 is lost.
+          gh api --paginate --slurp "repos/$REPO/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          node scripts/readme-badges-cli.mjs "$RUNNER_TEMP/releases.json" "$RUNNER_TEMP/badges"
+          git worktree add --detach "$RUNNER_TEMP/cg-badges" HEAD
+          cd "$RUNNER_TEMP/cg-badges"
           git checkout --orphan badges-tmp
           git rm -rf . --quiet
-          cp /tmp/badge-release.json badge-release.json
-          cp /tmp/badge-downloads.json badge-downloads.json
+          cp "$RUNNER_TEMP/badges/badge-release.json" "$RUNNER_TEMP/badges/badge-downloads.json" .
           git add badge-release.json badge-downloads.json
           git -c user.name="github-actions[bot]" \
-              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit --quiet -m "chore(badges): refresh for ${VERSION}"
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit --quiet -m "chore(badges): refresh after $TAG"
           git push --force origin badges-tmp:badges
