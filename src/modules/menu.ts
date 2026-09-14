@@ -164,7 +164,8 @@ function getMenuManager(): ZoteroMenuManager | null {
  * "Done — 0 of N updated" (old copy) confused users who'd already run
  * auto-fetch: every item came back `"cached"` (still fresh, no API call needed)
  * so the counter showed 0 even though the columns now displayed real data. New
- * copy distinguishes fresh / cached / suggestion / errors.
+ * copy distinguishes fresh / cached / suggestion / errors, and each reason a
+ * pass stopped early, so a pass the cache refused never reads as "N processed".
  */
 function summarizeBatch(r: FetchBatchResult, total: number): string {
   const parts: string[] = [];
@@ -174,9 +175,19 @@ function summarizeBatch(r: FetchBatchResult, total: number): string {
   if (r.errors > 0) parts.push(`${r.errors} couldn't be matched`);
   if (r.budgetStopped > 0) parts.push(`${r.budgetStopped} skipped (daily budget spent)`);
   if (r.authStopped > 0) parts.push(`${r.authStopped} skipped (check your API key in settings)`);
+  const unwritable = r.unwritableStopped ?? 0;
+  if (unwritable > 0) parts.push(`${unwritable} skipped (${UNWRITABLE_SKIP_REASON})`);
   if (parts.length === 0) parts.push(`${total} processed`);
   return `Done — ${parts.join(", ")}`;
 }
+
+/**
+ * Why a pass skipped its remaining items when the cache refuses writes
+ * (read-only CG-DB03 or CG-DB04; CG-DB02 once the cache has closed). The same
+ * words head the notice a read-only cache shows at startup, so the summary and
+ * that notice read as one condition.
+ */
+const UNWRITABLE_SKIP_REASON = "Citegeist is showing saved data only";
 
 /**
  * One-line summary of an author-identity backfill for the ProgressWindow.
@@ -190,6 +201,9 @@ function summarizeAuthorBackfill(r: AuthorBackfillResult, total: number): string
   if (r.unresolved > 0) parts.push(`${r.unresolved} no author match`);
   if (r.budgetStopped > 0) parts.push(`${r.budgetStopped} skipped (daily budget spent)`);
   if (r.authStopped > 0) parts.push(`${r.authStopped} skipped (check your API key in settings)`);
+  if (r.unwritableStopped > 0) {
+    parts.push(`${r.unwritableStopped} skipped (${UNWRITABLE_SKIP_REASON})`);
+  }
   if (r.errors > 0) parts.push(`${r.errors} failed`);
   if (parts.length === 0) parts.push(`${total} processed`);
   const head = r.cancelled ? "Stopped" : "Done";
@@ -280,6 +294,130 @@ function windowOf(target: unknown): Window | null {
   return (target as { ownerDocument?: Document | null }).ownerDocument?.defaultView ?? null;
 }
 
+// ── Progress windows ─────────────────────────────────────────────────────────
+
+/** What a runner reports into while its progress window is open. */
+interface ProgressUI {
+  readonly progress: _ZoteroTypes.ProgressWindowItem;
+  /** Fill the bar, show `text` as the last line, and close the window after `closeMs`. */
+  finish(text: string, closeMs: number): void;
+  /** Close the window at once, before an alert takes its place. */
+  close(): void;
+}
+
+/**
+ * Open a progress window in `win`, run `work` with it, and make sure it closes.
+ *
+ * `work` closes the window itself on every path it expects. The `finally` covers
+ * the path it doesn't: a throw once the window is up, such as the eligibility
+ * check failing under "Gathering items…", would otherwise leave that line on
+ * screen for good. The error still reaches the command's `.catch`, which records
+ * it through logError.
+ */
+async function withProgressWindow(
+  win: Window,
+  headline: string,
+  initialText: string,
+  work: (ui: ProgressUI) => Promise<void>,
+): Promise<void> {
+  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
+  progressWin.changeHeadline(headline);
+  // Explicit-color PNG inside the ProgressWindow — the SVG's `context-fill`
+  // keyword fails to resolve there and Zotero falls back to its default red
+  // loading curve, which clashes with the sage brand and reads as an error.
+  const progress = new progressWin.ItemProgress(iconURL("icon-16-color.png"), initialText);
+  progressWin.show();
+
+  let closing = false;
+  const ui: ProgressUI = {
+    progress,
+    finish(text, closeMs) {
+      progress.setProgress(100);
+      progress.setText(text);
+      progressWin.startCloseTimer(closeMs);
+      closing = true;
+    },
+    close() {
+      progressWin.close();
+      closing = true;
+    },
+  };
+  try {
+    await work(ui);
+  } finally {
+    if (!closing) progressWin.close();
+  }
+}
+
+/** "1 item", "2 items". */
+function itemCount(count: number): string {
+  return `${count} item${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Fetch `eligible` and report the outcome in `ui`: the step both fetch runners
+ * end with. `context` prefixes its logError labels ("menu fetch batch").
+ */
+async function fetchWithProgress(
+  ui: ProgressUI,
+  eligible: _ZoteroTypes.Item[],
+  context: string,
+): Promise<void> {
+  let result: FetchBatchResult;
+  try {
+    result = await fetchAndCacheItems(
+      eligible,
+      (current, total) => {
+        ui.progress.setProgress((current / total) * 100);
+        ui.progress.setText(`${current}/${total} items fetched`);
+      },
+      (itemId, status) => {
+        // Repaint each row's columns the moment its data lands, so a long
+        // collection/library fetch fills in progressively instead of all at
+        // the end. The repaint is coalesced/debounced inside the column module.
+        if (status === "ok" || status === "suggestion") {
+          invalidateColumnCache(itemId);
+        }
+      },
+    );
+  } catch (e) {
+    logError(`${context} batch`, e);
+    ui.finish("Citegeist: fetch failed — see Debug Output", PROGRESS_WINDOW_ERROR_CLOSE_MS);
+    return;
+  }
+
+  ui.finish(summarizeBatch(result, eligible.length), PROGRESS_WINDOW_DONE_CLOSE_MS);
+
+  // Targeted column repaint — pass the eligible item IDs so the Notifier event
+  // tells Zotero's ItemTreeManager exactly which rows need re-rendering.
+  try {
+    invalidateColumnCache(eligible.map((i) => i.id));
+  } catch (e) {
+    logError(`${context} column invalidate`, e);
+  }
+}
+
+/** Resolve authors for `eligible` and report the outcome in `ui`: the step both resolve runners end with. */
+async function resolveWithProgress(
+  ui: ProgressUI,
+  eligible: _ZoteroTypes.Item[],
+  context: string,
+): Promise<void> {
+  let result: AuthorBackfillResult;
+  try {
+    result = await resolveAuthorsForItems(eligible, (current, total) => {
+      ui.progress.setProgress((current / total) * 100);
+      ui.progress.setText(`${current}/${total} items processed`);
+    });
+  } catch (e) {
+    logError(`${context} batch`, e);
+    ui.finish("Citegeist: resolve failed — see Debug Output", PROGRESS_WINDOW_ERROR_CLOSE_MS);
+    return;
+  }
+
+  ui.finish(summarizeAuthorBackfill(result, eligible.length), PROGRESS_WINDOW_DONE_CLOSE_MS);
+}
+
 // ── Actions (shared by DOM + MenuManager handlers) ───────────────────────────
 
 /** Fetch citations for `items`, the selection in the right-clicked window. */
@@ -299,65 +437,18 @@ async function runFetchSelected(win: Window, items: readonly _ZoteroTypes.Item[]
     return;
   }
 
-  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
-  progressWin.changeHeadline("Citegeist: Fetching Citations");
-  // Explicit-color PNG inside the ProgressWindow — the SVG's `context-fill`
-  // keyword fails to resolve there and Zotero falls back to its default red
-  // loading curve, which clashes with the sage brand and reads as an error.
-  const progress = new progressWin.ItemProgress(
-    iconURL("icon-16-color.png"),
-    `Fetching ${eligible.length} item${eligible.length !== 1 ? "s" : ""}…`,
+  await withProgressWindow(
+    win,
+    "Citegeist: Fetching Citations",
+    `Fetching ${itemCount(eligible.length)}…`,
+    (ui) => fetchWithProgress(ui, eligible, "menu fetch"),
   );
-  progressWin.show();
-
-  let result: FetchBatchResult = {
-    fresh: 0,
-    cached: 0,
-    suggestion: 0,
-    errors: 0,
-    budgetStopped: 0,
-    authStopped: 0,
-  };
-  try {
-    result = await fetchAndCacheItems(
-      eligible,
-      (current, total) => {
-        progress.setProgress((current / total) * 100);
-        progress.setText(`${current}/${total} items fetched`);
-      },
-      (itemId, status) => {
-        // Repaint each row's columns the moment its data lands, so a long
-        // collection/library fetch fills in progressively instead of all at
-        // the end. The repaint is coalesced/debounced inside the column module.
-        if (status === "ok" || status === "suggestion") {
-          invalidateColumnCache(itemId);
-        }
-      },
-    );
-  } catch (e) {
-    logError("menu fetch batch", e);
-    progress.setProgress(100);
-    progress.setText("Citegeist: fetch failed — see Debug Output");
-    progressWin.startCloseTimer(PROGRESS_WINDOW_ERROR_CLOSE_MS);
-    return;
-  }
-
-  progress.setProgress(100);
-  progress.setText(summarizeBatch(result, eligible.length));
-  progressWin.startCloseTimer(PROGRESS_WINDOW_DONE_CLOSE_MS);
-
-  // Targeted column repaint — pass the eligible item IDs so the Notifier event
-  // tells Zotero's ItemTreeManager exactly which rows need re-rendering.
-  try {
-    invalidateColumnCache(eligible.map((i) => i.id));
-  } catch (e) {
-    logError("menu fetch column invalidate", e);
-  }
 }
 
-function runViewNetwork(items: readonly _ZoteroTypes.Item[], mode: NetworkMode): void {
+/** Open the citation browser for the one selected item, in the menu's window. */
+function runViewNetwork(win: Window, items: readonly _ZoteroTypes.Item[], mode: NetworkMode): void {
   if (items.length === 1) {
-    showCitationNetwork(items[0], mode).catch((e) => logError("menu showCitationNetwork", e));
+    showCitationNetwork(items[0], mode, win).catch((e) => logError("menu showCitationNetwork", e));
   }
 }
 
@@ -369,88 +460,43 @@ function runViewNetwork(items: readonly _ZoteroTypes.Item[], mode: NetworkMode):
  * never chose.
  *
  * The progress window opens before the items are gathered, so a large selection
- * shows "Gathering items…" instead of nothing while Zotero loads it.
+ * shows "Gathering items…" instead of nothing while Zotero loads it, and it
+ * closes on every path, a throw included (see withProgressWindow).
  */
 async function runFetchCollection(
   win: Window,
   targets: readonly CollectionTarget[],
 ): Promise<void> {
-  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
-  progressWin.changeHeadline("Citegeist: Fetching Citations");
-  const progress = new progressWin.ItemProgress(iconURL("icon-16-color.png"), "Gathering items…");
-  progressWin.show();
+  await withProgressWindow(win, "Citegeist: Fetching Citations", "Gathering items…", async (ui) => {
+    let allItems: Map<number, _ZoteroTypes.Item>;
+    try {
+      allItems = await gatherTargetItems(targets);
+    } catch (e) {
+      logError("menu fetch-collection gather", e);
+      ui.finish("Citegeist: fetch failed — see Debug Output", PROGRESS_WINDOW_ERROR_CLOSE_MS);
+      return;
+    }
+    const totalItems = allItems.size;
+    const eligible = [...allItems.values()].filter(canResolveWork);
 
-  let allItems: Map<number, _ZoteroTypes.Item>;
-  try {
-    allItems = await gatherTargetItems(targets);
-  } catch (e) {
-    logError("menu fetch-collection gather", e);
-    progress.setProgress(100);
-    progress.setText("Citegeist: fetch failed — see Debug Output");
-    progressWin.startCloseTimer(PROGRESS_WINDOW_ERROR_CLOSE_MS);
-    return;
-  }
-  const totalItems = allItems.size;
-  const eligible = [...allItems.values()].filter(canResolveWork);
+    // Hard fallback when nothing is eligible — the ProgressWindow's corner
+    // notification is easy to miss, leaving the user thinking the click did
+    // nothing. A modal alert makes the empty result unambiguous + says WHY.
+    if (eligible.length === 0) {
+      ui.close();
+      Services.prompt.alert(
+        win,
+        "Citegeist: Nothing to fetch",
+        totalItems === 0
+          ? emptySelectionMessage(targets)
+          : `None of the ${totalItems} item${totalItems === 1 ? "" : "s"} in ${selectionPhrase(targets)} has a recognized identifier (DOI, PMID, arXiv ID, or ISBN). Add an identifier to the items you want citation data for, then try again.`,
+      );
+      return;
+    }
 
-  // Hard fallback when nothing is eligible — the ProgressWindow's corner
-  // notification is easy to miss, leaving the user thinking the click did
-  // nothing. A modal alert makes the empty result unambiguous + says WHY.
-  if (eligible.length === 0) {
-    progressWin.close();
-    Services.prompt.alert(
-      win,
-      "Citegeist: Nothing to fetch",
-      totalItems === 0
-        ? emptySelectionMessage(targets)
-        : `None of the ${totalItems} item${totalItems === 1 ? "" : "s"} in ${selectionPhrase(targets)} has a recognized identifier (DOI, PMID, arXiv ID, or ISBN). Add an identifier to the items you want citation data for, then try again.`,
-    );
-    return;
-  }
-
-  progress.setText(`Fetching ${eligible.length} item${eligible.length === 1 ? "" : "s"}…`);
-
-  let result: FetchBatchResult = {
-    fresh: 0,
-    cached: 0,
-    suggestion: 0,
-    errors: 0,
-    budgetStopped: 0,
-    authStopped: 0,
-  };
-  try {
-    result = await fetchAndCacheItems(
-      eligible,
-      (current, total) => {
-        progress.setProgress((current / total) * 100);
-        progress.setText(`${current}/${total} items fetched`);
-      },
-      (itemId, status) => {
-        // Repaint each row's columns the moment its data lands, so a long
-        // collection/library fetch fills in progressively instead of all at
-        // the end. The repaint is coalesced/debounced inside the column module.
-        if (status === "ok" || status === "suggestion") {
-          invalidateColumnCache(itemId);
-        }
-      },
-    );
-  } catch (e) {
-    logError("menu fetch-collection batch", e);
-    progress.setProgress(100);
-    progress.setText("Citegeist: fetch failed — see Debug Output");
-    progressWin.startCloseTimer(PROGRESS_WINDOW_ERROR_CLOSE_MS);
-    return;
-  }
-
-  progress.setProgress(100);
-  progress.setText(summarizeBatch(result, eligible.length));
-  progressWin.startCloseTimer(PROGRESS_WINDOW_DONE_CLOSE_MS);
-
-  try {
-    invalidateColumnCache(eligible.map((i) => i.id));
-  } catch (e) {
-    logError("menu fetch-collection column invalidate", e);
-  }
+    ui.progress.setText(`Fetching ${itemCount(eligible.length)}…`);
+    await fetchWithProgress(ui, eligible, "menu fetch-collection");
+  });
 }
 
 /** Resolve author identities for `items`, the selection in the right-clicked window. */
@@ -470,31 +516,12 @@ async function runResolveAuthorsSelected(
     return;
   }
 
-  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
-  progressWin.changeHeadline("Citegeist: Resolving Author Identities");
-  const progress = new progressWin.ItemProgress(
-    iconURL("icon-16-color.png"),
-    `Resolving authors for ${eligible.length} item${eligible.length !== 1 ? "s" : ""}…`,
+  await withProgressWindow(
+    win,
+    "Citegeist: Resolving Author Identities",
+    `Resolving authors for ${itemCount(eligible.length)}…`,
+    (ui) => resolveWithProgress(ui, eligible, "menu resolve-authors"),
   );
-  progressWin.show();
-
-  let result: AuthorBackfillResult;
-  try {
-    result = await resolveAuthorsForItems(eligible, (current, total) => {
-      progress.setProgress((current / total) * 100);
-      progress.setText(`${current}/${total} items processed`);
-    });
-  } catch (e) {
-    logError("menu resolve-authors batch", e);
-    progress.setProgress(100);
-    progress.setText("Citegeist: resolve failed — see Debug Output");
-    progressWin.startCloseTimer(PROGRESS_WINDOW_ERROR_CLOSE_MS);
-    return;
-  }
-
-  progress.setProgress(100);
-  progress.setText(summarizeAuthorBackfill(result, eligible.length));
-  progressWin.startCloseTimer(PROGRESS_WINDOW_DONE_CLOSE_MS);
 }
 
 /**
@@ -506,56 +533,37 @@ async function runResolveAuthorsCollection(
   win: Window,
   targets: readonly CollectionTarget[],
 ): Promise<void> {
-  const progressWin = new Zotero.ProgressWindow({ window: win, closeOnClick: false });
-  progressWin.changeHeadline("Citegeist: Resolving Author Identities");
-  const progress = new progressWin.ItemProgress(iconURL("icon-16-color.png"), "Gathering items…");
-  progressWin.show();
+  await withProgressWindow(
+    win,
+    "Citegeist: Resolving Author Identities",
+    "Gathering items…",
+    async (ui) => {
+      let allItems: Map<number, _ZoteroTypes.Item>;
+      try {
+        allItems = await gatherTargetItems(targets);
+      } catch (e) {
+        logError("menu resolve-authors-collection gather", e);
+        ui.finish("Citegeist: resolve failed — see Debug Output", PROGRESS_WINDOW_ERROR_CLOSE_MS);
+        return;
+      }
+      const totalItems = allItems.size;
+      const eligible = [...allItems.values()].filter(canResolveWork);
+      if (eligible.length === 0) {
+        ui.close();
+        Services.prompt.alert(
+          win,
+          "Citegeist: Nothing to resolve",
+          totalItems === 0
+            ? emptySelectionMessage(targets)
+            : `None of the ${totalItems} item${totalItems === 1 ? "" : "s"} in ${selectionPhrase(targets)} has a recognized identifier to resolve authors from.`,
+        );
+        return;
+      }
 
-  let allItems: Map<number, _ZoteroTypes.Item>;
-  try {
-    allItems = await gatherTargetItems(targets);
-  } catch (e) {
-    logError("menu resolve-authors-collection gather", e);
-    progress.setProgress(100);
-    progress.setText("Citegeist: resolve failed — see Debug Output");
-    progressWin.startCloseTimer(PROGRESS_WINDOW_ERROR_CLOSE_MS);
-    return;
-  }
-  const totalItems = allItems.size;
-  const eligible = [...allItems.values()].filter(canResolveWork);
-  if (eligible.length === 0) {
-    progressWin.close();
-    Services.prompt.alert(
-      win,
-      "Citegeist: Nothing to resolve",
-      totalItems === 0
-        ? emptySelectionMessage(targets)
-        : `None of the ${totalItems} item${totalItems === 1 ? "" : "s"} in ${selectionPhrase(targets)} has a recognized identifier to resolve authors from.`,
-    );
-    return;
-  }
-
-  progress.setText(
-    `Resolving authors for ${eligible.length} item${eligible.length === 1 ? "" : "s"}…`,
+      ui.progress.setText(`Resolving authors for ${itemCount(eligible.length)}…`);
+      await resolveWithProgress(ui, eligible, "menu resolve-authors-collection");
+    },
   );
-
-  let result: AuthorBackfillResult;
-  try {
-    result = await resolveAuthorsForItems(eligible, (current, total) => {
-      progress.setProgress((current / total) * 100);
-      progress.setText(`${current}/${total} items processed`);
-    });
-  } catch (e) {
-    logError("menu resolve-authors-collection batch", e);
-    progress.setProgress(100);
-    progress.setText("Citegeist: resolve failed — see Debug Output");
-    progressWin.startCloseTimer(PROGRESS_WINDOW_ERROR_CLOSE_MS);
-    return;
-  }
-
-  progress.setProgress(100);
-  progress.setText(summarizeAuthorBackfill(result, eligible.length));
-  progressWin.startCloseTimer(PROGRESS_WINDOW_DONE_CLOSE_MS);
 }
 
 // ── MenuManager path (Zotero 8+) ─────────────────────────────────────────────
@@ -594,13 +602,14 @@ function registerViaMenuManager(mm: ZoteroMenuManager, pluginID: string): boolea
         menuType: "menuitem",
         l10nID: "citegeist-menu-citing",
         onShowing: (e, ctx) => ctx.setVisible(isSingleResolvable(contextItems(e, ctx))),
-        onCommand: (e, ctx) => runViewNetwork(contextItems(e, ctx), "citing"),
+        onCommand: (e, ctx) => runViewNetwork(menuWindow(e, ctx), contextItems(e, ctx), "citing"),
       },
       {
         menuType: "menuitem",
         l10nID: "citegeist-menu-refs",
         onShowing: (e, ctx) => ctx.setVisible(isSingleResolvable(contextItems(e, ctx))),
-        onCommand: (e, ctx) => runViewNetwork(contextItems(e, ctx), "references"),
+        onCommand: (e, ctx) =>
+          runViewNetwork(menuWindow(e, ctx), contextItems(e, ctx), "references"),
       },
       {
         menuType: "menuitem",
@@ -785,7 +794,7 @@ function registerViaDOM(win: Window): void {
       citingItem,
       "command",
       "menu view citing",
-      () => runViewNetwork(selectedItemsInWindow(win), "citing"),
+      () => runViewNetwork(win, selectedItemsInWindow(win), "citing"),
       { signal },
     );
     itemMenu.appendChild(citingItem);
@@ -797,7 +806,7 @@ function registerViaDOM(win: Window): void {
       refsItem,
       "command",
       "menu view references",
-      () => runViewNetwork(selectedItemsInWindow(win), "references"),
+      () => runViewNetwork(win, selectedItemsInWindow(win), "references"),
       { signal },
     );
     itemMenu.appendChild(refsItem);

@@ -91,17 +91,13 @@ declare namespace _ZoteroTypes {
   }
 
   /**
-   * A collection-tree row (`Zotero.CollectionTreeRow`), limited to what
-   * Citegeist reads. `type` names the row: "library", "group", "collection",
-   * "search", "feed", "feeds", "unfiled", "trash", "duplicates",
-   * "publications", "retracted", and others. `ref` depends on the type (a
-   * Collection, a Library or Group, a Search), so it stays `unknown` and
-   * `src/modules/host/selection.ts` narrows it.
+   * A collection-tree row (`Zotero.CollectionTreeRow`). Deliberately opaque:
+   * `src/modules/host/selection.ts` checks every field it reads (`type`, then
+   * `ref`, whose shape depends on the type), because the host object differs
+   * across Zotero versions and a declared shape would invite reads that skip
+   * those checks.
    */
-  interface CollectionTreeRow {
-    readonly type: string;
-    readonly ref: unknown;
-  }
+  type CollectionTreeRow = unknown;
 
   /**
    * The selection fields of a `Zotero.MenuManager` context on the library
@@ -345,6 +341,8 @@ declare const Zotero: {
   };
   launchURL(url: string): void;
   getMainWindow(): Window;
+  /** Every open main window; File > New Window opens more than one. */
+  getMainWindows(): Window[];
   [key: string]: unknown;
 };
 

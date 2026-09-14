@@ -11,12 +11,13 @@
 
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { AuthorBackfillResult, FetchBatchResult } from "../src/modules/citationService";
 import {
-  FakeDocument,
   UNSUPPORTED_ROW_TYPES,
   clearRecordedFailures,
   collectionRow,
   fakeProgressWindowClass,
+  fakeWindow,
   flushAsync,
   idsOf,
   libraryRow,
@@ -24,32 +25,41 @@ import {
   makeItem,
   otherRow,
   progressWindowParents,
+  progressWindows,
   recordedFailures,
   selectionUnreadableReports,
+  type FakeDocument,
+  type FakeWindow,
 } from "./_helpers/menuHarness";
 
 const mocks = vi.hoisted(() => ({
-  fetchAndCacheItems: vi.fn(async () => ({
-    fresh: 1,
-    cached: 0,
-    suggestion: 0,
-    errors: 0,
-    budgetStopped: 0,
-    authStopped: 0,
-  })),
+  fetchAndCacheItems: vi.fn(
+    async (): Promise<FetchBatchResult> => ({
+      fresh: 1,
+      cached: 0,
+      suggestion: 0,
+      errors: 0,
+      budgetStopped: 0,
+      authStopped: 0,
+      unwritableStopped: 0,
+    }),
+  ),
   canResolveWork: vi.fn(
     (item: { isRegularItem?: () => boolean; hasIdentifier?: boolean }) =>
       item.isRegularItem?.() !== false && item.hasIdentifier !== false,
   ),
-  resolveAuthorsForItems: vi.fn(async () => ({
-    resolved: 1,
-    already: 0,
-    unresolved: 0,
-    budgetStopped: 0,
-    authStopped: 0,
-    errors: 0,
-    cancelled: false,
-  })),
+  resolveAuthorsForItems: vi.fn(
+    async (): Promise<AuthorBackfillResult> => ({
+      resolved: 1,
+      already: 0,
+      unresolved: 0,
+      budgetStopped: 0,
+      authStopped: 0,
+      unwritableStopped: 0,
+      errors: 0,
+      cancelled: false,
+    }),
+  ),
   invalidateColumnCache: vi.fn(),
   showCitationNetwork: vi.fn(async () => {}),
 }));
@@ -81,7 +91,7 @@ interface CapturedMenu {
 }
 
 let doc: FakeDocument;
-let win: Window;
+let win: FakeWindow;
 let selectedItems: _ZoteroTypes.Item[];
 let libraryItems: _ZoteroTypes.Item[];
 let alertSpy: Mock;
@@ -140,8 +150,8 @@ async function loadMenu() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  doc = new FakeDocument();
-  win = { document: doc } as unknown as Window;
+  win = fakeWindow();
+  doc = win.document;
   selectedItems = [makeItem(1)];
   libraryItems = [makeItem(1), makeItem(2)];
   registerReturns = [];
@@ -156,6 +166,27 @@ function collectionContext(fields: Record<string, unknown>) {
 const elementIn = (w: Window) => ({ ownerDocument: { defaultView: w } });
 
 const findMenu = (target: string) => captured.find((c) => c.target === target)!;
+
+/** The items the first call to a batch mock acted on. */
+const firstCallItems = (batch: Mock) => batch.mock.calls[0][0] as _ZoteroTypes.Item[];
+
+/**
+ * Item id and mode of the first citation-browser open, and whether it was handed
+ * `expected` as its window. Windows are compared by identity: two fake windows
+ * are structurally equal, so a deep comparison could not tell them apart.
+ */
+function firstNetworkOpen(expected: Window): {
+  id: number;
+  mode: unknown;
+  inExpectedWindow: boolean;
+} {
+  const [item, mode, opener] = mocks.showCitationNetwork.mock.calls[0] as unknown as [
+    _ZoteroTypes.Item,
+    string,
+    Window,
+  ];
+  return { id: item.id, mode, inExpectedWindow: opener === expected };
+}
 
 describe("MenuManager path (Zotero 8+)", () => {
   it("registers item + collection menus via MenuManager, not the DOM", async () => {
@@ -252,10 +283,7 @@ describe("MenuManager path (Zotero 8+)", () => {
     const item = findMenu("main/library/item");
     selectedItems = [makeItem(7)];
     item.menus[1].onCommand!({} as Event, {});
-    expect(mocks.showCitationNetwork).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 7 }),
-      "citing",
-    );
+    expect(firstNetworkOpen(win)).toEqual({ id: 7, mode: "citing", inExpectedWindow: true });
   });
 
   it("runs the collection fetch action from onCommand", async () => {
@@ -340,7 +368,7 @@ describe("collection menu reads the selection from the context rows (Zotero 10, 
     return { fetch: menu.menus[0], resolve: menu.menus[1] };
   }
 
-  const fetchedIds = () => idsOf(mocks.fetchAndCacheItems.mock.calls[0][0] as _ZoteroTypes.Item[]);
+  const fetchedIds = () => idsOf(firstCallItems(mocks.fetchAndCacheItems));
 
   it("covers AE3: two selected collections fetch both collections' items, each item once", async () => {
     const { fetch } = await collectionMenu();
@@ -584,13 +612,13 @@ describe("menu commands run in the right-clicked window, never the main window",
   // `win` and `win2` have the same shape, so only an identity check (`toBe`)
   // tells them apart: it is what catches a runner that falls back to
   // Zotero.getMainWindow(), which returns `win`.
-  let win2: Window;
+  let win2: FakeWindow;
 
   async function menus() {
     installZotero(true);
     const { registerMenus } = await loadMenu();
     registerMenus(win);
-    win2 = { document: new FakeDocument() } as unknown as Window;
+    win2 = fakeWindow();
     return { item: findMenu("main/library/item"), collection: findMenu("main/library/collection") };
   }
 
@@ -616,6 +644,18 @@ describe("menu commands run in the right-clicked window, never the main window",
     expect(alertSpy).toHaveBeenCalledTimes(1);
     expect(alertSpy.mock.calls[0][0]).toBe(win2);
     expect(alertSpy.mock.calls[0][1]).toBe(title);
+    expect(Zotero.getMainWindow).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["View Citing Works", 1, "citing"],
+    ["View References", 2, "references"],
+  ])("%s opens the citation browser in the menu's window", async (_l, index, mode) => {
+    const { item } = await menus();
+
+    item.menus[index].onCommand!({} as Event, { menuElem: elementIn(win2), items: [makeItem(5)] });
+
+    expect(firstNetworkOpen(win2)).toEqual({ id: 5, mode, inExpectedWindow: true });
     expect(Zotero.getMainWindow).not.toHaveBeenCalled();
   });
 
@@ -686,39 +726,149 @@ describe("item commands act on the right-clicked pane's selection, not the most 
     item.menus[1].onCommand!({} as Event, { items: [makeItem(7)] });
     await flushAsync();
 
-    expect(idsOf(mocks.fetchAndCacheItems.mock.calls[0][0] as _ZoteroTypes.Item[])).toEqual([7]);
-    expect(idsOf(mocks.resolveAuthorsForItems.mock.calls[0][0] as _ZoteroTypes.Item[])).toEqual([
-      7,
-    ]);
-    expect(mocks.showCitationNetwork).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 7 }),
-      "citing",
+    expect(idsOf(firstCallItems(mocks.fetchAndCacheItems))).toEqual([7]);
+    expect(idsOf(firstCallItems(mocks.resolveAuthorsForItems))).toEqual([7]);
+    expect(firstNetworkOpen(win)).toEqual({ id: 7, mode: "citing", inExpectedWindow: true });
+  });
+});
+
+describe("each item entry without context items reads the menu window's pane, never the main window's", () => {
+  // Zotero.getMainWindow() returns `win`, whose own pane (also the active pane)
+  // selects an item Citegeist can't resolve; the menu's window selects one it
+  // can. An entry that reads the wrong pane shows the wrong visibility and acts
+  // on the wrong item, so each entry is checked on its own.
+  let menuWin: FakeWindow;
+
+  async function itemMenu() {
+    installZotero(true);
+    selectedItems = [makeItem(1, false)];
+    win = fakeWindow({ getSelectedItems: () => selectedItems });
+    doc = win.document;
+    menuWin = fakeWindow({ getSelectedItems: () => [makeItem(8)] });
+    const { registerMenus } = await loadMenu();
+    registerMenus(win);
+    return findMenu("main/library/item");
+  }
+
+  const ENTRIES: ReadonlyArray<readonly [string, number, () => void]> = [
+    [
+      "Fetch Citation Counts",
+      0,
+      () => expect(idsOf(firstCallItems(mocks.fetchAndCacheItems))).toEqual([8]),
+    ],
+    [
+      "View Citing Works",
+      1,
+      () =>
+        expect(firstNetworkOpen(menuWin)).toEqual({
+          id: 8,
+          mode: "citing",
+          inExpectedWindow: true,
+        }),
+    ],
+    [
+      "View References",
+      2,
+      () =>
+        expect(firstNetworkOpen(menuWin)).toEqual({
+          id: 8,
+          mode: "references",
+          inExpectedWindow: true,
+        }),
+    ],
+    [
+      "Resolve Author Identities",
+      3,
+      () => expect(idsOf(firstCallItems(mocks.resolveAuthorsForItems))).toEqual([8]),
+    ],
+  ];
+
+  describe.each([
+    ["a context with no items", {}],
+    ["a context with an empty items list", { items: [] }],
+  ])("given %s", (_label, extra) => {
+    it.each(ENTRIES)(
+      "%s shows for, and acts on, the menu window's selection",
+      async (_name, index, expectActedOnMenuWindow) => {
+        const entry = (await itemMenu()).menus[index];
+        const ctx = () => ({ ...extra, menuElem: elementIn(menuWin), setVisible: vi.fn() });
+
+        const showing = ctx();
+        entry.onShowing!({} as Event, showing);
+        expect(showing.setVisible).toHaveBeenCalledWith(true);
+
+        entry.onCommand!({} as Event, ctx());
+        await flushAsync();
+        expectActedOnMenuWindow();
+        expect(alertSpy).not.toHaveBeenCalled();
+      },
+    );
+  });
+});
+
+describe("batch summaries when the cache refuses writes (U16)", () => {
+  async function itemMenu() {
+    installZotero(true);
+    const { registerMenus } = await loadMenu();
+    registerMenus(win);
+    return findMenu("main/library/item");
+  }
+
+  /** The last line the first progress window showed. */
+  const lastProgressLine = () => progressWindows()[0].lines[0].setText.mock.calls.at(-1)?.[0];
+
+  const batch = (counts: Partial<FetchBatchResult>): FetchBatchResult => ({
+    fresh: 0,
+    cached: 0,
+    suggestion: 0,
+    errors: 0,
+    budgetStopped: 0,
+    authStopped: 0,
+    unwritableStopped: 0,
+    ...counts,
+  });
+
+  it("Fetch Citation Counts names the items the read-only cache skipped", async () => {
+    const fetch = (await itemMenu()).menus[0];
+    mocks.fetchAndCacheItems.mockResolvedValueOnce(batch({ cached: 2, unwritableStopped: 3 }));
+
+    fetch.onCommand!({} as Event, { items: [1, 2, 3, 4, 5].map((id) => makeItem(id)) });
+    await flushAsync();
+
+    expect(lastProgressLine()).toBe(
+      "Done — 2 already up to date, 3 skipped (Citegeist is showing saved data only)",
     );
   });
 
-  it("without context items, reads the pane of the window the menu opened in", async () => {
-    const item = await itemMenu();
-    selectedItems = [makeItem(1, false)]; // the most recent window: nothing eligible
-    const win2 = {
-      document: new FakeDocument(),
-      ZoteroPane: { getSelectedItems: () => [makeItem(8)] },
-    } as unknown as Window;
-    const ctx = () => ({ menuElem: elementIn(win2), setVisible: vi.fn() });
+  it("Fetch Citation Counts does not report items as processed when the cache skipped them all", async () => {
+    const fetch = (await itemMenu()).menus[0];
+    mocks.fetchAndCacheItems.mockResolvedValueOnce(batch({ unwritableStopped: 2 }));
 
-    const showing = ctx();
-    item.menus[0].onShowing!({} as Event, showing);
-    expect(showing.setVisible).toHaveBeenCalledWith(true);
-
-    item.menus[0].onCommand!({} as Event, ctx());
-    item.menus[2].onCommand!({} as Event, ctx());
+    fetch.onCommand!({} as Event, { items: [makeItem(1), makeItem(2)] });
     await flushAsync();
 
-    expect(idsOf(mocks.fetchAndCacheItems.mock.calls[0][0] as _ZoteroTypes.Item[])).toEqual([8]);
-    expect(mocks.showCitationNetwork).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 8 }),
-      "references",
+    expect(lastProgressLine()).toBe("Done — 2 skipped (Citegeist is showing saved data only)");
+  });
+
+  it("Resolve Author Identities names the items the read-only cache skipped", async () => {
+    const resolve = (await itemMenu()).menus[3];
+    mocks.resolveAuthorsForItems.mockResolvedValueOnce({
+      resolved: 1,
+      already: 0,
+      unresolved: 0,
+      budgetStopped: 0,
+      authStopped: 0,
+      unwritableStopped: 4,
+      errors: 0,
+      cancelled: false,
+    });
+
+    resolve.onCommand!({} as Event, { items: [1, 2, 3, 4, 5].map((id) => makeItem(id)) });
+    await flushAsync();
+
+    expect(lastProgressLine()).toBe(
+      "Done — 1 resolved, 4 skipped (Citegeist is showing saved data only)",
     );
-    expect(Zotero.getActiveZoteroPane).not.toHaveBeenCalled();
   });
 });
 
@@ -741,12 +891,11 @@ describe("registration is idempotent across repeat calls (issue #67)", () => {
     const { registerMenus } = await loadMenu();
     registerMenus(win);
 
-    const doc2 = new FakeDocument();
-    const win2 = { document: doc2 } as unknown as Window;
+    const win2 = fakeWindow();
     registerMenus(win2);
 
     expect(registerMenu).toHaveBeenCalledTimes(2);
-    expect(doc2.getElementById("citegeist-menu-fetch")).toBeNull();
+    expect(win2.document.getElementById("citegeist-menu-fetch")).toBeNull();
   });
 });
 

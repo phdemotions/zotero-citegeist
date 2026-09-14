@@ -351,8 +351,9 @@ describe("opening the dialog picks the default filing collection from the select
     const label = element();
     found.set("#cg-default-label", label);
     found.set("#cg-default-extra", element());
-    const document = { body: element(), documentElement: element(), createElementNS: element };
-    return { win: { document, ZoteroPane: pane } as unknown as Window, label };
+    const body = element();
+    const document = { body, documentElement: element(), createElementNS: element };
+    return { win: { document, ZoteroPane: pane } as unknown as Window, label, body };
   }
 
   const item = {
@@ -360,12 +361,20 @@ describe("opening the dialog picks the default filing collection from the select
     getField: () => "Brand love",
     getCreators: () => [],
   } as unknown as _ZoteroTypes.Item;
-  const opens: Array<[string, () => Promise<void>]> = [
-    ["showCitationNetwork", () => showCitationNetwork(item, "citing")],
-    ["showAuthorWorks", () => showAuthorWorks("A5")],
+  const opens: Array<[string, (win?: Window) => Promise<void>]> = [
+    ["showCitationNetwork", (win) => showCitationNetwork(item, "citing", win)],
+    ["showAuthorWorks", (win) => showAuthorWorks("A5", win)],
   ];
 
-  async function openWith(open: () => Promise<void>, pane: unknown) {
+  /** The dialog state handed to the first results load. */
+  function loadedState() {
+    const [state] = openMocks.loadResults.mock.calls.at(-1) as unknown as [
+      { win: Window; overlay: unknown; defaultCollectionIds: Set<number> },
+    ];
+    return state;
+  }
+
+  async function openWith(open: (win?: Window) => Promise<void>, pane: unknown) {
     const { win, label } = dialogWindow(pane);
     vi.stubGlobal("Zotero", {
       debug: vi.fn(),
@@ -373,11 +382,46 @@ describe("opening the dialog picks the default filing collection from the select
       getActiveZoteroPane: () => null,
     });
     await open();
-    const [state] = openMocks.loadResults.mock.calls.at(-1) as unknown as [
-      { defaultCollectionIds: Set<number> },
-    ];
-    return { label: label.textContent, filing: [...state.defaultCollectionIds] };
+    return { label: label.textContent, filing: [...loadedState().defaultCollectionIds] };
   }
+
+  it.each(opens)(
+    "%s opens in the window it is given and files into that window's selection, not the main window's",
+    async (_name, open) => {
+      // The main window (the most recent) has Grant A selected; the window the
+      // menu opened in has Grant B.
+      const main = dialogWindow(collections(3));
+      const menu = dialogWindow(collections(4));
+      vi.stubGlobal("Zotero", {
+        debug: vi.fn(),
+        getMainWindow: () => main.win,
+        getActiveZoteroPane: () => collections(3),
+      });
+
+      await open(menu.win);
+
+      const state = loadedState();
+      expect(state.win).toBe(menu.win);
+      expect([...state.defaultCollectionIds]).toEqual([4]);
+      expect(menu.label.textContent).toBe("Grant B");
+      expect(menu.body.appendChild).toHaveBeenCalledWith(state.overlay);
+      expect(main.body.appendChild).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(opens)("%s opens in the main window when it is given none", async (_name, open) => {
+    const main = dialogWindow(collections(3));
+    vi.stubGlobal("Zotero", {
+      debug: vi.fn(),
+      getMainWindow: () => main.win,
+      getActiveZoteroPane: () => null,
+    });
+
+    await open();
+
+    expect(loadedState().win).toBe(main.win);
+    expect(main.body.appendChild).toHaveBeenCalledWith(loadedState().overlay);
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();

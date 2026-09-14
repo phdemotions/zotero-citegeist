@@ -260,10 +260,13 @@ export async function onStartup(data: PluginData): Promise<void> {
     // Give the menu module the rootURI too, for its jar:-loaded icons.
     setMenuRootURI(rootURI);
 
-    // If the main window is already open, register menus now.
-    // onMainWindowLoad may not fire for windows that were open before startup.
-    const mainWin = Zotero.getMainWindow();
-    if (mainWin) {
+    // Register menus in every main window already open. onMainWindowLoad does
+    // not fire for a window opened before startup, and File > New Window can
+    // leave several open: Zotero.getMainWindow() alone (the most recent) would
+    // leave the others without the FTL and, on the DOM path, without menus.
+    // registerMenus is idempotent, per window on the DOM path and per process
+    // for MenuManager.
+    for (const mainWin of Zotero.getMainWindows()) {
       Zotero.debug("[Citegeist] Main window already open at startup — wiring FTL + menus");
       // onMainWindowLoad does NOT fire for a window opened before startup, so
       // inject the FTL here too. Without this the pane's l10nIDs (and the
@@ -343,16 +346,28 @@ export async function onShutdown(_data: PluginData): Promise<void> {
   cacheReady = false;
   removeBridge();
 
-  const win = Zotero.getMainWindow() as Window | null;
   // Each UI-teardown step is best-effort: a throw in any one of them must not
   // strand the open SQLite handle. closeCache() runs unconditionally last.
+  //
+  // Per-window teardown runs in every main window, not only the most recent
+  // one: another window would otherwise keep its DOM menu entries and their
+  // listeners after a disable or upgrade, and a re-enable would add a second
+  // set beside them. A window that fails does not skip the rest.
+  let windows: Window[] = [];
   try {
-    if (win) unregisterMenus(win);
+    windows = Zotero.getMainWindows();
   } catch (e) {
-    logError("shutdown unregisterMenus", e);
+    logError("shutdown getMainWindows", e);
+  }
+  for (const win of windows) {
+    try {
+      unregisterMenus(win);
+    } catch (e) {
+      logError("shutdown unregisterMenus", e);
+    }
   }
   // Global MenuManager teardown is process-scoped, not window-scoped: run it
-  // unconditionally, independent of whether getMainWindow() returned a window.
+  // unconditionally, however many windows are open.
   // (unregisterMenus above only clears per-window DOM nodes.)
   try {
     unregisterGlobalMenus();

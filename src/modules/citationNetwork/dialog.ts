@@ -192,15 +192,25 @@ function renderSkeletonRows(body: HTMLElement): void {
   safeInnerHTML(body, skeleton);
 }
 
+/**
+ * Open the citation browser for `item`.
+ *
+ * `openerWindow` is the window the request came from. A context menu passes the
+ * window it opened in, so the dialog parents to that window and takes its
+ * default filing collection from that window's selection rather than the most
+ * recent window's. Callers that pass none (the item pane today) get the most
+ * recent main window.
+ */
 export async function showCitationNetwork(
   item: _ZoteroTypes.Item,
   mode: NetworkMode,
+  openerWindow?: Window | null,
 ): Promise<void> {
   Zotero.debug(`[Citegeist] showCitationNetwork called: mode=${mode}, itemID=${item.id}`);
 
   if (!canResolveWork(item)) {
     Services.prompt.alert(
-      null,
+      openerWindow ?? null,
       "Citegeist",
       "Citegeist can't identify this item. Add a DOI, PMID, arXiv ID, or ISBN — or confirm a title match — then try again.",
     );
@@ -212,8 +222,9 @@ export async function showCitationNetwork(
   closeActiveDialog();
   dialogOpenSeq++;
 
-  // Show dialog immediately with skeleton loading state
-  const win = Zotero.getMainWindow();
+  // Show dialog immediately with skeleton loading state, in the opener's window
+  // (the most recent main window when the caller passed none; see the docblock).
+  const win = openerWindow ?? Zotero.getMainWindow();
   const doc = win.document;
   const parent = doc.body || doc.documentElement;
   const title = item.getField("title");
@@ -378,7 +389,10 @@ export async function showCitationNetwork(
  * mid-fetch. Once the shell exists, `activeDialog`/`activeState` guard the rest
  * exactly as the work-mode entry does.
  */
-export async function showAuthorWorks(authorId: string): Promise<void> {
+export async function showAuthorWorks(
+  authorId: string,
+  openerWindow?: Window | null,
+): Promise<void> {
   Zotero.debug(`[Citegeist] showAuthorWorks called: authorId=${authorId}`);
 
   // Tear down any currently-open dialog before opening this one, and claim this
@@ -388,7 +402,10 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
   closeActiveDialog();
   const myOpen = ++dialogOpenSeq;
 
-  const win = Zotero.getMainWindow();
+  // The window the request came from, as in showCitationNetwork: it parents the
+  // dialog and supplies the default collection. Callers that pass none (the
+  // item pane today) get the most recent main window.
+  const win = openerWindow ?? Zotero.getMainWindow();
   const doc = win.document;
   const parent = doc.body || doc.documentElement;
 
@@ -403,7 +420,11 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
     // code is appended to the message — a user reporting "the author view
     // won't open" still has something to quote.
     const code = codeForError(e);
-    Services.prompt.alert(null, "Citegeist", `${describeCode(code).message}\n\n${code}`);
+    Services.prompt.alert(
+      openerWindow ?? null,
+      "Citegeist",
+      `${describeCode(code).message}\n\n${code}`,
+    );
     return;
   }
 
@@ -411,7 +432,11 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
   if (myOpen !== dialogOpenSeq) return;
 
   if (!profile) {
-    Services.prompt.alert(null, "Citegeist", "This author has no OpenAlex profile to show.");
+    Services.prompt.alert(
+      openerWindow ?? null,
+      "Citegeist",
+      "This author has no OpenAlex profile to show.",
+    );
     return;
   }
 

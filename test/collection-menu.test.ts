@@ -12,13 +12,15 @@
  */
 
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { PROGRESS_WINDOW_DONE_CLOSE_MS } from "../src/constants";
+import type { AuthorBackfillResult, FetchBatchResult } from "../src/modules/citationService";
 import { registerMenus, unregisterMenus } from "../src/modules/menu";
 import {
-  FakeDocument,
   UNSUPPORTED_ROW_TYPES,
   clearRecordedFailures,
   collectionRow,
   fakeProgressWindowClass,
+  fakeWindow,
   flushAsync,
   idsOf,
   libraryRow,
@@ -29,26 +31,48 @@ import {
   progressWindows,
   recordedFailures,
   selectionUnreadableReports,
+  type FakeDocument,
+  type FakeWindow,
 } from "./_helpers/menuHarness";
+
+/** A batch result with every count zero except those given. */
+function batch(counts: Partial<FetchBatchResult>): FetchBatchResult {
+  return {
+    fresh: 0,
+    cached: 0,
+    suggestion: 0,
+    errors: 0,
+    budgetStopped: 0,
+    authStopped: 0,
+    unwritableStopped: 0,
+    ...counts,
+  };
+}
 
 const mocks = vi.hoisted(() => ({
   fetchAndCacheItems: vi.fn(
-    async (): Promise<{ fresh: number; cached: number; suggestion: number; errors: number }> => ({
+    async (): Promise<FetchBatchResult> => ({
       fresh: 2,
       cached: 0,
       suggestion: 0,
       errors: 0,
+      budgetStopped: 0,
+      authStopped: 0,
+      unwritableStopped: 0,
     }),
   ),
-  resolveAuthorsForItems: vi.fn(async () => ({
-    resolved: 1,
-    already: 0,
-    unresolved: 0,
-    budgetStopped: 0,
-    authStopped: 0,
-    errors: 0,
-    cancelled: false,
-  })),
+  resolveAuthorsForItems: vi.fn(
+    async (): Promise<AuthorBackfillResult> => ({
+      resolved: 1,
+      already: 0,
+      unresolved: 0,
+      budgetStopped: 0,
+      authStopped: 0,
+      unwritableStopped: 0,
+      errors: 0,
+      cancelled: false,
+    }),
+  ),
   canResolveWork: vi.fn(
     (item: { isRegularItem?: () => boolean; hasIdentifier?: boolean }) =>
       item.isRegularItem?.() !== false && item.hasIdentifier !== false,
@@ -72,7 +96,7 @@ vi.mock("../src/modules/citationNetwork", () => ({
 // ─── Shared setup ────────────────────────────────────────────────────────────
 
 let doc: FakeDocument;
-let win: Window;
+let win: FakeWindow;
 let focusedRow: _ZoteroTypes.CollectionTreeRow | false | 0;
 let activeSelection: _ZoteroTypes.Item[];
 let alertSpy: Mock;
@@ -83,8 +107,8 @@ beforeEach(async () => {
   vi.clearAllMocks();
   await clearRecordedFailures();
 
-  doc = new FakeDocument();
-  win = { document: doc } as unknown as Window;
+  win = fakeWindow();
+  doc = win.document;
   focusedRow = libraryRow(1);
   activeSelection = [];
   alertSpy = vi.fn();
@@ -375,6 +399,42 @@ describe("progress while a large selection is gathered", () => {
       expect((await recordedFailures()).map((d) => d.context)).toEqual([context]);
     },
   );
+
+  it.each([
+    ["Fetch All", triggerFetchAll, "menu fetch-collection"],
+    ["Resolve All", triggerResolveAll, "menu resolve-authors-collection"],
+  ])(
+    "%s closes the 'Gathering items…' window when the eligibility check throws, and records the failure",
+    async (_l, trigger, context) => {
+      mocks.canResolveWork.mockImplementationOnce(() => {
+        throw new Error("item is gone");
+      });
+      await trigger();
+
+      const [gathering] = progressWindows();
+      expect(gathering.lines[0].initialText).toBe("Gathering items…");
+      expect(gathering.close).toHaveBeenCalledTimes(1);
+      expect(mocks.fetchAndCacheItems).not.toHaveBeenCalled();
+      expect(mocks.resolveAuthorsForItems).not.toHaveBeenCalled();
+      expect((await recordedFailures()).map((d) => [d.code, d.context])).toEqual([
+        ["CG-BUG01", context],
+      ]);
+    },
+  );
+
+  it.each([
+    ["Fetch All", triggerFetchAll],
+    ["Resolve All", triggerResolveAll],
+  ])(
+    "%s leaves a finished window to its close timer, and closes it only once",
+    async (_l, trigger) => {
+      await trigger();
+      const [finished] = progressWindows();
+      expect(finished.startCloseTimer).toHaveBeenCalledTimes(1);
+      expect(finished.startCloseTimer).toHaveBeenCalledWith(PROGRESS_WINDOW_DONE_CLOSE_MS);
+      expect(finished.close).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ─── Rows Citegeist does not act on ──────────────────────────────────────────
@@ -564,34 +624,29 @@ describe("popupshowing hides the entries before it reads the selection", () => {
 // ─── Window routing ──────────────────────────────────────────────────────────
 
 describe("the DOM menus act on their own window's selection, not the most recent window's", () => {
-  let doc2: FakeDocument;
-  let win2: Window;
+  let win2: FakeWindow;
 
   beforeEach(() => {
     // The most recent window (the active pane) has Trash focused and item 1 selected.
     focusedRow = otherRow("trash");
     activeSelection = [makeItem(1)];
 
-    doc2 = new FakeDocument();
-    win2 = {
-      document: doc2,
-      ZoteroPane: {
-        getSelectedItems: () => [makeItem(8)],
-        getCollectionTreeRows: () => [collectionRow(makeCollection([makeItem(30), makeItem(31)]))],
-      },
-    } as unknown as Window;
+    win2 = fakeWindow({
+      getSelectedItems: () => [makeItem(8)],
+      getCollectionTreeRows: () => [collectionRow(makeCollection([makeItem(30), makeItem(31)]))],
+    });
     registerMenus(win2);
   });
 
   it("the collection popup shows the entries for the second window's collection", () => {
-    doc2.getElementById("zotero-collectionmenu")!.dispatch("popupshowing");
-    expect(entriesHidden(doc2)).toEqual([false, false, false]);
+    win2.document.getElementById("zotero-collectionmenu")!.dispatch("popupshowing");
+    expect(entriesHidden(win2.document)).toEqual([false, false, false]);
     expect(getActiveZoteroPane).not.toHaveBeenCalled();
   });
 
   it("Fetch All and Resolve All gather the second window's collection, in that window", async () => {
-    await command("citegeist-menu-fetch-collection", doc2);
-    await command("citegeist-menu-resolve-collection", doc2);
+    await command("citegeist-menu-fetch-collection", win2.document);
+    await command("citegeist-menu-resolve-collection", win2.document);
     expect(idsOf(fetchedItems())).toEqual([30, 31]);
     expect(idsOf(resolvedItems())).toEqual([30, 31]);
     expect(getAll()).not.toHaveBeenCalled();
@@ -599,23 +654,28 @@ describe("the DOM menus act on their own window's selection, not the most recent
     for (const parent of progressWindowParents()) expect(parent).toBe(win2);
   });
 
-  it("Fetch Citation Counts, Resolve Author Identities and View Citing Works act on the second window's items", async () => {
-    await command("citegeist-menu-fetch", doc2);
-    await command("citegeist-menu-resolve-authors", doc2);
-    await command("citegeist-menu-citing", doc2);
+  it("Fetch Citation Counts, Resolve Author Identities and both View entries act on the second window's items, in that window", async () => {
+    await command("citegeist-menu-fetch", win2.document);
+    await command("citegeist-menu-resolve-authors", win2.document);
+    await command("citegeist-menu-citing", win2.document);
+    await command("citegeist-menu-refs", win2.document);
     expect(idsOf(fetchedItems())).toEqual([8]);
     expect(idsOf(resolvedItems())).toEqual([8]);
-    expect(mocks.showCitationNetwork).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 8 }),
-      "citing",
-    );
+    const opens = mocks.showCitationNetwork.mock.calls as unknown as Array<
+      [_ZoteroTypes.Item, string, Window]
+    >;
+    expect(opens.map(([item, mode]) => [item.id, mode])).toEqual([
+      [8, "citing"],
+      [8, "references"],
+    ]);
+    for (const [, , opener] of opens) expect(opener).toBe(win2);
     expect(getActiveZoteroPane).not.toHaveBeenCalled();
   });
 
   it("the item popup decides from the second window's selection", () => {
     activeSelection = [makeItem(1, false)];
-    doc2.getElementById("zotero-itemmenu")!.dispatch("popupshowing");
-    expect(itemEntriesHidden(doc2)).toEqual([false, false, false, false, false]);
+    win2.document.getElementById("zotero-itemmenu")!.dispatch("popupshowing");
+    expect(itemEntriesHidden(win2.document)).toEqual([false, false, false, false, false]);
   });
 });
 
@@ -639,6 +699,7 @@ describe("unregisterMenus removes the DOM menus' listeners from Zotero's popups"
     for (const popup of popups()) popup.dispatch("popupshowing");
     expect(getActiveZoteroPane).not.toHaveBeenCalled();
     expect(doc.getElementById("citegeist-menu-fetch")).toBeNull();
+    expect(popups().map((p) => p.children.length)).toEqual([0, 0]);
   });
 
   it("binds exactly one listener per popup when the window registers again", () => {
@@ -647,6 +708,24 @@ describe("unregisterMenus removes the DOM menus' listeners from Zotero's popups"
     registerMenus(win);
     registerMenus(win); // a repeat for a window that already has the entries is skipped
     expect(popups().map((p) => p.listenerCount("popupshowing"))).toEqual([1, 1]);
+  });
+
+  it("builds the listener signal from the window's own AbortController and aborts it on unregister", () => {
+    const controllers: AbortController[] = [];
+    win.AbortController = class extends AbortController {
+      constructor() {
+        super();
+        controllers.push(this);
+      }
+    };
+
+    registerMenus(win);
+    expect(controllers).toHaveLength(1);
+    expect(controllers[0].signal.aborted).toBe(false);
+
+    unregisterMenus(win);
+    expect(controllers[0].signal.aborted).toBe(true);
+    expect(popups().map((p) => p.listenerCount("popupshowing"))).toEqual([0, 0]);
   });
 });
 
@@ -661,7 +740,7 @@ describe("progressive column repaint", () => {
         onItemDone?: (id: number, status: string) => void,
       ) => {
         for (const it of items) onItemDone?.(it.id, "ok");
-        return { fresh: items.length, cached: 0, suggestion: 0, errors: 0 };
+        return batch({ fresh: items.length });
       },
     );
     await triggerFetchAll();
@@ -682,11 +761,25 @@ describe("progressive column repaint", () => {
       ) => {
         onItemDone?.(items[0].id, "ok");
         onItemDone?.(items[1].id, "error");
-        return { fresh: 1, cached: 0, suggestion: 0, errors: 1 };
+        return batch({ fresh: 1, errors: 1 });
       },
     );
     await triggerFetchAll();
     expect(mocks.invalidateColumnCache).toHaveBeenCalledWith(1);
     expect(mocks.invalidateColumnCache).not.toHaveBeenCalledWith(2);
+  });
+});
+
+describe("Fetch All summary when the cache refuses writes (U16)", () => {
+  it("names the items the read-only cache skipped instead of reporting success", async () => {
+    focusedRow = collectionRow(makeCollection([makeItem(1), makeItem(2), makeItem(3)]));
+    mocks.fetchAndCacheItems.mockResolvedValueOnce(batch({ cached: 1, unwritableStopped: 2 }));
+
+    await triggerFetchAll();
+
+    const setText = progressWindows()[0].lines[0].setText;
+    expect(setText.mock.calls.at(-1)?.[0]).toBe(
+      "Done — 1 already up to date, 2 skipped (Citegeist is showing saved data only)",
+    );
   });
 });

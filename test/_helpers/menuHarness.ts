@@ -12,6 +12,7 @@ import { vi, type Mock } from "vitest";
 export class FakeElement {
   id = "";
   hidden = false;
+  parent: FakeElement | null = null;
   readonly children: FakeElement[] = [];
   readonly attrs = new Map<string, string>();
   private readonly listeners = new Map<string, EventListener[]>();
@@ -19,12 +20,18 @@ export class FakeElement {
   constructor(private readonly doc: FakeDocument) {}
 
   appendChild(child: FakeElement): void {
+    child.parent = this;
     this.children.push(child);
     if (child.id) this.doc.elements.set(child.id, child);
   }
 
+  /** Detach from the parent and the document, as the DOM does, so `children` shows what is left. */
   remove(): void {
-    if (this.id) this.doc.elements.delete(this.id);
+    if (this.id && this.doc.elements.get(this.id) === this) this.doc.elements.delete(this.id);
+    if (this.parent) {
+      this.parent.children.splice(this.parent.children.indexOf(this), 1);
+      this.parent = null;
+    }
   }
 
   setAttribute(name: string, value: string): void {
@@ -80,9 +87,35 @@ export class FakeDocument {
     return this.elements.get(id) ?? null;
   }
 
+  /** Nothing matches: the only query the lifecycle hooks make is for their FTL link. */
+  querySelector(): null {
+    return null;
+  }
+
   createXULElement(): FakeElement {
     return new FakeElement(this);
   }
+}
+
+/** A main window as the menus see it. */
+export type FakeWindow = Window & {
+  readonly document: FakeDocument;
+  AbortController: typeof AbortController;
+  ZoteroPane?: unknown;
+};
+
+/**
+ * A main window for menu tests: its own document, its own Zotero pane when one
+ * is given, and the `AbortController` constructor every chrome window carries.
+ * The DOM menus build their listener signal from the window's own constructor,
+ * so a fake without one would only ever exercise the global fallback.
+ */
+export function fakeWindow(pane?: unknown): FakeWindow {
+  return {
+    document: new FakeDocument(),
+    AbortController,
+    ZoteroPane: pane,
+  } as unknown as FakeWindow;
 }
 
 /** One fake progress window and the progress lines added to it. */

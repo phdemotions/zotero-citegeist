@@ -296,6 +296,39 @@ describe("collectionTargetsFromMenuContext — unreadable context (CG-UI02)", ()
     collectionTargetsFromMenuContext({});
     expect(await selectionUnreadableReports()).toHaveLength(1);
   });
+
+  it("records a dialog failure while a menu failure is still in the buffer, each once", async () => {
+    collectionTargetsFromPane({ getCollectionTreeRows: boom });
+    selectedCollectionsFromPane({
+      getSelectedCollections: boom,
+      getSelectedCollection: () => false,
+    });
+    collectionTargetsFromPane({ getCollectionTreeRows: boom });
+    selectedCollectionsFromPane({
+      getSelectedCollections: boom,
+      getSelectedCollection: () => false,
+    });
+
+    const reports = await selectionUnreadableReports();
+    expect(reports.map((d) => d.context)).toEqual([
+      "collection menu selection",
+      "network dialog default collection",
+    ]);
+  });
+
+  it("records a different failed read on the same surface, each once", async () => {
+    const notAnArray = { collectionTreeRows: "rows" } as unknown as Ctx;
+    collectionTargetsFromMenuContext({});
+    collectionTargetsFromMenuContext(notAnArray);
+    collectionTargetsFromMenuContext({});
+    collectionTargetsFromMenuContext(notAnArray);
+
+    const reports = await selectionUnreadableReports();
+    expect(reports.map((d) => d.detail)).toEqual([
+      expect.stringMatching(/^menu context has neither collectionTreeRows nor collectionTreeRow\b/),
+      expect.stringMatching(/^menu context collectionTreeRows is not an array\b/),
+    ]);
+  });
 });
 
 describe("a failed selection read never carries host error text into the report", () => {

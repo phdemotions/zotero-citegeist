@@ -23,8 +23,8 @@ const paneMocks = vi.hoisted(() => ({
 }));
 
 const menuMocks = vi.hoisted(() => ({
-  registerMenus: vi.fn(),
-  unregisterMenus: vi.fn(),
+  registerMenus: vi.fn((_win: Window) => {}),
+  unregisterMenus: vi.fn((_win: Window) => {}),
   unregisterGlobalMenus: vi.fn(),
   setMenuPluginID: vi.fn(),
   setMenuRootURI: vi.fn(),
@@ -38,13 +38,22 @@ const openAlexAuthorsMocks = vi.hoisted(() => ({
   clearAuthorProfileCache: vi.fn(),
 }));
 
-const BATCH = { fresh: 1, cached: 0, suggestion: 0, errors: 0, budgetStopped: 0, authStopped: 0 };
+const BATCH = {
+  fresh: 1,
+  cached: 0,
+  suggestion: 0,
+  errors: 0,
+  budgetStopped: 0,
+  authStopped: 0,
+  unwritableStopped: 0,
+};
 const BACKFILL = {
   resolved: 1,
   already: 0,
   unresolved: 0,
   budgetStopped: 0,
   authStopped: 0,
+  unwritableStopped: 0,
   errors: 0,
   cancelled: false,
 };
@@ -80,22 +89,24 @@ describe("hooks", () => {
     vi.stubGlobal("Services", {
       prompt: { alert: vi.fn() },
     });
+    const mainWindow = {
+      setTimeout: (fn: () => void) => fn(),
+      document: {
+        getElementById: vi.fn(() => null),
+        createElement: vi.fn(() => ({
+          id: "",
+          rel: "",
+          href: "",
+        })),
+        documentElement: { appendChild: vi.fn() },
+      },
+    };
     vi.stubGlobal("Zotero", {
       debug: vi.fn(),
       Prefs: makeFakePrefs(),
       PreferencePanes: { register: vi.fn() },
-      getMainWindow: vi.fn(() => ({
-        setTimeout: (fn: () => void) => fn(),
-        document: {
-          getElementById: vi.fn(() => null),
-          createElement: vi.fn(() => ({
-            id: "",
-            rel: "",
-            href: "",
-          })),
-          documentElement: { appendChild: vi.fn() },
-        },
-      })),
+      getMainWindow: vi.fn(() => mainWindow),
+      getMainWindows: vi.fn(() => [mainWindow]),
     });
   });
 
@@ -181,6 +192,50 @@ describe("hooks", () => {
 
     expect(cacheMocks.closeCache).toHaveBeenCalled();
   });
+
+  it("wires the FTL and the menus in every main window open at startup, not only the most recent", async () => {
+    const insertFTLIfNeeded = vi.fn();
+    const windows = [1, 2].map(() => ({ MozXULElement: { insertFTLIfNeeded } }));
+    vi.mocked(Zotero.getMainWindows).mockReturnValue(windows as unknown as Window[]);
+    const { onStartup } = await import("../src/hooks");
+
+    await onStartup(STARTUP);
+
+    expect(menuMocks.registerMenus).toHaveBeenCalledTimes(2);
+    expect(menuMocks.registerMenus.mock.calls[0][0]).toBe(windows[0]);
+    expect(menuMocks.registerMenus.mock.calls[1][0]).toBe(windows[1]);
+    expect(insertFTLIfNeeded).toHaveBeenCalledTimes(2);
+  });
+
+  it("unregisters the menus in every main window at shutdown, carrying on past one that throws", async () => {
+    const windows = [{}, {}, {}] as unknown as Window[];
+    vi.mocked(Zotero.getMainWindows).mockReturnValue(windows);
+    menuMocks.unregisterMenus.mockImplementationOnce(() => {
+      throw new Error("window is closing");
+    });
+    const { onShutdown } = await import("../src/hooks");
+
+    await onShutdown(STARTUP);
+
+    expect(menuMocks.unregisterMenus.mock.calls.map(([w]) => windows.indexOf(w))).toEqual([
+      0, 1, 2,
+    ]);
+    expect(menuMocks.unregisterGlobalMenus).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.closeCache).toHaveBeenCalled();
+  });
+
+  it("still tears the menus down globally and closes the cache when the window list can't be read", async () => {
+    vi.mocked(Zotero.getMainWindows).mockImplementation(() => {
+      throw new Error("no window mediator");
+    });
+    const { onShutdown } = await import("../src/hooks");
+
+    await onShutdown(STARTUP);
+
+    expect(menuMocks.unregisterMenus).not.toHaveBeenCalled();
+    expect(menuMocks.unregisterGlobalMenus).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.closeCache).toHaveBeenCalled();
+  });
 });
 
 /**
@@ -212,6 +267,7 @@ describe("Zotero.Citegeist bridge", () => {
       PreferencePanes: { register: vi.fn() },
       Items: { getAsync: vi.fn(async (ids: number[]) => ids.map(fakeItem)) },
       getMainWindow: vi.fn(() => null),
+      getMainWindows: vi.fn(() => []),
     });
   });
 
@@ -371,6 +427,7 @@ describe("startup with flags under the doubled pref name (U18)", () => {
       Prefs: fake,
       PreferencePanes: { register: vi.fn() },
       getMainWindow: vi.fn(() => ({ setTimeout: (fn: () => void) => fn() })),
+      getMainWindows: vi.fn(() => []),
     });
   }
 

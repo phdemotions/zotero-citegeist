@@ -131,7 +131,7 @@ export const DIAGNOSTIC_CODES = {
     code: "CG-UI02",
     area: "UI",
     message:
-      "Citegeist couldn't tell which collection or library was right-clicked, so it hid its collection menu items instead of guessing. Updating Citegeist usually fixes this; if it doesn't, report this code on GitHub.",
+      "Citegeist couldn't read which collections or libraries are selected. Instead of guessing, it hid its collection menu items, or opened the citation browser with no default collection, so items added there go to My Library. Updating Citegeist usually fixes this; if it doesn't, report this code on GitHub.",
   },
   "CG-BUG01": {
     code: "CG-BUG01",

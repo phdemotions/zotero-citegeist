@@ -22,7 +22,7 @@
  */
 
 import { recentDiagnostics } from "../diagnostics";
-import { CitegeistError, logError } from "../utils";
+import { CitegeistError, logError, normalizeError, redactSensitive } from "../utils";
 
 /** What a batch collection action runs on. A library target covers the whole library. */
 export type CollectionTarget =
@@ -245,18 +245,30 @@ function isCollection(value: unknown): value is _ZoteroTypes.Collection {
 }
 
 /**
- * Record CG-UI02, unless an earlier CG-UI02 is still in the diagnostics buffer.
- * The menu opens many times, and a repeat of the same host-contract break would
- * push older, more useful entries out of the buffer. Once that entry has aged out
- * (or the user cleared the buffer), the next failed read records again, so a
- * report never hides a failure that is still happening.
+ * Record CG-UI02, unless the same failure is still in the diagnostics buffer:
+ * the same surface (`context`) and the same failed read (`detail`). The menu
+ * opens many times, and a repeat of one host-contract break would push older,
+ * more useful entries out of the buffer. A different failed read, or a read
+ * failing on the other surface, is a separate fact about the host and records
+ * its own entry. Once an entry has aged out (or the user cleared the buffer),
+ * the same failure records again, so a report never hides a failure that is
+ * still happening.
  *
  * `detail` is a fixed string naming the read that failed, never host error text:
  * a Zotero error message could carry a collection name into the shareable report.
+ * The comparison uses the context and detail exactly as `logError` stores them
+ * (redacted and normalized), so it matches what an earlier call recorded.
  */
 function reportUnreadable(context: string, detail: string): null {
-  if (!recentDiagnostics().some((d) => d.code === "CG-UI02")) {
-    logError(context, new CitegeistError(detail, "CG-UI02"));
-  }
+  const error = new CitegeistError(detail, "CG-UI02");
+  const recordedContext = redactSensitive(context);
+  const recordedDetail = normalizeError(error);
+  const alreadyRecorded = recentDiagnostics().some(
+    (entry) =>
+      entry.code === "CG-UI02" &&
+      entry.context === recordedContext &&
+      entry.detail === recordedDetail,
+  );
+  if (!alreadyRecorded) logError(context, error);
   return null;
 }
