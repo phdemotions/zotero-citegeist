@@ -1,43 +1,42 @@
 /**
  * Build script for Citegeist.
  *
- * Every step works on a staging copy, build/.addon-staging/:
+ * Before it reads package.json, the build finishes any promotion an interrupted build left half
+ * done and removes everything an earlier build left in build/ except build/addon, so no earlier
+ * XPI or update.json survives a build that then fails. Every later step works on a staging copy,
+ * build/.addon-staging/:
  *
  * 1. Copies addon/ into it and replaces __placeholders__ with values from package.json
  * 2. Compiles TypeScript into it via the esbuild JS API
  * 3. Verifies it: no placeholder survives, and manifest.json's name, version, id and
  *    Zotero range equal package.json's
- * 4. In production mode: zips it into the XPI, verifies the update.json object for this
- *    version, then writes update.json
- * 5. Replaces build/addon with it
+ * 4. In production mode: zips it into the XPI, extracts the XPI and verifies what it holds the
+ *    same way, then hashes the XPI, verifies the update.json object for this version and writes it
+ * 5. Swaps it in as build/addon, moving the previous copy aside and deleting that only once the
+ *    new copy is in place
  *
  * A dev install loads build/addon through a proxy file, so it only ever sees a copy that
  * passed every check. If any step throws, the build removes the staging copy, the XPI and
- * update.json, and does not replace build/addon.
+ * update.json, and build/addon keeps the last copy that passed.
  */
 
 import { build } from "esbuild";
-import {
-  cpSync,
-  mkdirSync,
-  rmSync,
-  readFileSync,
-  writeFileSync,
-  readdirSync,
-  renameSync,
-} from "fs";
-import { join, resolve, dirname } from "path";
+import { cpSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync } from "fs";
+import { basename, join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { createHash } from "crypto";
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import {
   readBuildMetadata,
   placeholdersFor,
   replacePlaceholders,
   updateManifestFor,
   verifyBuiltAddon,
+  verifyPackagedAddon,
   verifyUpdateManifest,
   formatRange,
+  promoteStaging,
+  recoverInterruptedPromotion,
 } from "./build-metadata.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -45,7 +44,25 @@ const ROOT = resolve(__dirname, "..");
 const BUILD_DIR = join(ROOT, "build");
 const ADDON_DIR = join(BUILD_DIR, "addon");
 const STAGING_DIR = join(BUILD_DIR, ".addon-staging");
+const PREVIOUS_DIR = join(BUILD_DIR, ".addon-previous");
 const isDev = process.argv.includes("--dev");
+
+/**
+ * Removes everything in build/ except build/addon and build/.addon-previous. The second exists
+ * here only when a promotion could not move it back, and it is then the last copy that passed.
+ */
+function removeStaleArtefacts() {
+  const kept = new Set([basename(ADDON_DIR), basename(PREVIOUS_DIR)]);
+  for (const entry of readdirSync(BUILD_DIR)) {
+    if (!kept.has(entry)) {
+      rmSync(join(BUILD_DIR, entry), { recursive: true, force: true, maxRetries: 3 });
+    }
+  }
+}
+
+mkdirSync(BUILD_DIR, { recursive: true });
+recoverInterruptedPromotion({ target: ADDON_DIR, previous: PREVIOUS_DIR });
+removeStaleArtefacts();
 
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8"));
 const meta = readBuildMetadata(pkg);
@@ -70,12 +87,6 @@ const buildId = `${gitSha}-${new Date().toISOString().slice(11, 19).replace(/:/g
 console.log(
   `\n  Citegeist build — v${version} (${isDev ? "dev" : "production"}) build ${buildId}\n`,
 );
-
-// Clear everything the previous build left except build/addon, which only a passing build replaces.
-mkdirSync(BUILD_DIR, { recursive: true });
-for (const entry of readdirSync(BUILD_DIR)) {
-  if (entry !== "addon") rmSync(join(BUILD_DIR, entry), { recursive: true, force: true });
-}
 
 try {
   // Step 1: Stage and replace placeholders
@@ -118,7 +129,10 @@ try {
 
   // Step 4: Package XPI (production only)
   if (!isDev) {
-    execSync(`cd "${STAGING_DIR}" && zip -r "${XPI_PATH}" .`, { stdio: "pipe" });
+    execFileSync("zip", ["-q", "-r", XPI_PATH, "."], { cwd: STAGING_DIR, stdio: "pipe" });
+
+    // The XPI is what ships, so it is verified itself, before its hash goes into update.json.
+    const packagedRange = verifyPackagedAddon(XPI_PATH, meta);
 
     const xpiBuffer = readFileSync(XPI_PATH);
     const hash = createHash("sha256").update(xpiBuffer).digest("hex");
@@ -129,6 +143,7 @@ try {
     writeFileSync(UPDATE_JSON_PATH, JSON.stringify(updateJson, null, 2));
 
     console.log(`  [4/4] XPI packaged: ${xpiName} (${(xpiBuffer.length / 1024).toFixed(1)} KB)`);
+    console.log(`        manifest.json inside it declares Zotero ${formatRange(packagedRange)}`);
     console.log(`        SHA-256: ${hash}`);
     console.log(
       `        update.json entry for ${version} declares Zotero ${formatRange(publishedRange)}`,
@@ -138,13 +153,18 @@ try {
   }
 
   // Step 5: Every check passed, so the staging copy becomes build/addon.
-  rmSync(ADDON_DIR, { recursive: true, force: true });
-  renameSync(STAGING_DIR, ADDON_DIR);
+  promoteStaging({ staging: STAGING_DIR, target: ADDON_DIR, previous: PREVIOUS_DIR });
 } catch (error) {
-  for (const artefact of [STAGING_DIR, XPI_PATH, UPDATE_JSON_PATH]) {
-    rmSync(artefact, { recursive: true, force: true });
+  // A failure to clean up is reported beside the build error, never in place of it.
+  try {
+    removeStaleArtefacts();
+    console.error("\n  Build failed; removed the staging copy, the XPI and update.json.\n");
+  } catch (cleanupError) {
+    console.error(
+      `\n  Build failed, and removing the staging copy, the XPI and update.json failed too: ` +
+        `${cleanupError.message}\n`,
+    );
   }
-  console.error("\n  Build failed; removed the staging copy, the XPI and update.json.\n");
   throw error;
 }
 

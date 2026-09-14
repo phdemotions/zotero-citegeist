@@ -1,4 +1,15 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { extname, join, relative, sep } from "node:path";
 
 export function readBuildMetadata(pkg) {
@@ -22,7 +33,8 @@ export function readBuildMetadata(pkg) {
     ),
     version: requiredString(pkg, "version", "package.json version"),
   };
-  assertRangeShape(rangeFromMetadata(meta));
+  assertVersionShape(meta.version);
+  assertRangeShape(rangeFromMetadata(meta), "package.json config");
   return meta;
 }
 
@@ -34,43 +46,74 @@ function requiredString(source, key, label) {
   return value;
 }
 
-// Firefox's add-on manager, which Zotero runs, reads these fields with nsVersionComparator:
-// a missing part counts as 0 and "*" as infinity. A cap of "10" therefore refuses 10.0.1,
-// "10.*" and "*" admit Zotero minors the suite has never run on (KTD2), and XPIInstall
-// throws on any "*" in strict_min_version.
-const FLOOR_SHAPE = /^\d+(\.\d+)*$/;
-const CAP_SHAPE = /^\d+\.\d+\.\*$/;
+// One version part as Firefox's versionString format writes it: 0, or at most nine digits with no
+// leading zero. nsVersionComparator reads a part outside the int32 range as 0, so a tenth digit
+// could silently turn a cap of 10000000000.0.* into 0.0.*.
+const PART = "(?:0|[1-9]\\d{0,8})";
 
-function assertRangeShape({ min, max }) {
-  if (!FLOOR_SHAPE.test(min)) {
+// Firefox's add-on manager, which Zotero runs, reads these fields with nsVersionComparator: a
+// missing part counts as 0 and "*" as INT32_MAX, above any part PART admits. A cap of "10"
+// therefore refuses 10.0.1, "10.*" and "*" admit Zotero minors the suite has never run on (KTD2),
+// and XPIInstall throws on any "*" in strict_min_version. versionString allows at most four parts.
+const FLOOR_SHAPE = new RegExp(`^${PART}(?:\\.${PART}){0,3}$`);
+const CAP_SHAPE = new RegExp(`^${PART}\\.${PART}\\.\\*$`);
+
+// nsVersionComparator compares any text after a part's number as a string, so "3.0.0-rc2" sorts
+// above "3.0.0-rc10". With the prerelease number in a part of its own it compares as a number:
+// "3.0.0-rc.9" sorts below "3.0.0-rc.10", alpha below beta below rc, and every prerelease below
+// "3.0.0", because a part with trailing text sorts below the same part without it.
+const VERSION_SHAPE = new RegExp(`^${PART}\\.${PART}\\.${PART}(?:-(?:alpha|beta|rc)\\.${PART})?$`);
+
+function assertVersionShape(version) {
+  if (!VERSION_SHAPE.test(version)) {
     throw new Error(
-      `package.json config.zoteroMinVersion must be a dotted number such as "7.0.10" ` +
-        `(Zotero refuses "*" in strict_min_version), got ${JSON.stringify(min)}`,
-    );
-  }
-  if (!CAP_SHAPE.test(max)) {
-    throw new Error(
-      `package.json config.zoteroMaxVersion must be major.minor.* such as "10.0.*" ` +
-        `(a bare "10" refuses 10.0.1; "10.*" or "*" admits untested minors), ` +
-        `got ${JSON.stringify(max)}`,
-    );
-  }
-  if (compareVersions(min, max) > 0) {
-    throw new Error(
-      `package.json config.zoteroMinVersion ${min} is above the cap ${max}, ` +
-        `so no Zotero version satisfies the range`,
+      `package.json version must be major.minor.patch, optionally followed by -alpha.N, -beta.N ` +
+        `or -rc.N, such as "3.0.0" or "3.0.0-rc.1", each number 0 or at most nine digits with no ` +
+        `leading zero (Zotero orders other shapes wrongly: "3.0.0-rc2" sorts above "3.0.0-rc10"), ` +
+        `got ${JSON.stringify(version)}`,
     );
   }
 }
 
 /**
- * Compares two dotted versions the way nsVersionComparator does: a missing part counts as 0
- * and a "*" part as larger than any number. So "10" equals "10.0", "7.0.10" sorts below
- * "10.0", and "10.0.1" sorts below "10.0.*" while "10.1" sorts above it. Returns -1, 0 or 1.
+ * Throws unless `{ min, max }` is a range Zotero reads the way the build means it: a numeric
+ * floor, a major.minor.* cap, and the floor no higher than the cap. `sourceLabel` names where the
+ * range came from, such as "package.json config", and leads each message.
  */
-export function compareVersions(a, b) {
+export function assertRangeShape({ min, max }, sourceLabel) {
+  if (typeof min !== "string" || !FLOOR_SHAPE.test(min)) {
+    throw new Error(
+      `Zotero floor in ${sourceLabel} must be up to four dotted numbers such as "7.0.10", each 0 ` +
+        `or at most nine digits with no leading zero (Zotero refuses "*" in strict_min_version), ` +
+        `got ${JSON.stringify(min)}`,
+    );
+  }
+  if (typeof max !== "string" || !CAP_SHAPE.test(max)) {
+    throw new Error(
+      `Zotero cap in ${sourceLabel} must be major.minor.* such as "10.0.*", each number 0 or at ` +
+        `most nine digits with no leading zero (a bare "10" refuses 10.0.1; "10.*" or "*" admits ` +
+        `untested minors), got ${JSON.stringify(max)}`,
+    );
+  }
+  if (compareVersions(min, max) > 0) {
+    throw new Error(
+      `Zotero floor ${min} in ${sourceLabel} is above the cap ${max}, ` +
+        `so no Zotero version satisfies the range`,
+    );
+  }
+}
+
+const INT32_MAX = 2 ** 31 - 1;
+
+/**
+ * Compares two versions FLOOR_SHAPE or CAP_SHAPE admit, the way nsVersionComparator does: a
+ * missing part counts as 0 and "*" as INT32_MAX. So "10" equals "10.0", and "10.0.1" sorts below
+ * "10.0.*" while "10.1" sorts above it. Returns -1, 0 or 1. It reads numbers and "*" only, so it
+ * would misorder a prerelease such as "3.0.0-rc.1", and nothing outside assertRangeShape calls it.
+ */
+function compareVersions(a, b) {
   const parse = (version) =>
-    version.split(".").map((part) => (part === "*" ? Infinity : Number(part)));
+    version.split(".").map((part) => (part === "*" ? INT32_MAX : Number(part)));
   const left = parse(a);
   const right = parse(b);
   for (let i = 0; i < Math.max(left.length, right.length); i++) {
@@ -85,20 +128,20 @@ export function compareVersions(a, b) {
 // the build log compare and print one shape. U15's release-lines.json adds a reader here.
 
 /** The range package.json's config declares. */
-export function rangeFromMetadata(meta) {
+function rangeFromMetadata(meta) {
   return { min: meta.zoteroMinVersion, max: meta.zoteroMaxVersion };
 }
 
 /** The range in an `applications.zotero` block, the layout manifest.json and update.json share. */
-export function rangeFromApplication(zotero) {
+function rangeFromApplication(zotero) {
   return { min: zotero?.strict_min_version, max: zotero?.strict_max_version };
 }
 
-export function applicationFromRange({ min, max }) {
+function applicationFromRange({ min, max }) {
   return { strict_min_version: min, strict_max_version: max };
 }
 
-export function rangesEqual(a, b) {
+function rangesEqual(a, b) {
   return a.min === b.min && a.max === b.max;
 }
 
@@ -172,14 +215,24 @@ function listFiles(dir) {
 }
 
 /**
- * Every file under `dir` that holds no NUL byte, with its path relative to `dir`. A NUL
- * byte marks a binary asset such as the PNG icons, which neither replacement nor the scan reads.
+ * Every text file under `dir`, with its path relative to `dir`. A file holding a NUL byte is a
+ * binary asset such as the PNG icons, which neither replacement nor the scan reads, unless its
+ * extension is in PLACEHOLDER_FILE_EXTENSIONS. There a NUL byte means text in another encoding,
+ * such as UTF-16, whose placeholders the build could neither replace nor find, so it throws.
  */
 function readTextFiles(dir) {
   return listFiles(dir).flatMap((file) => {
-    const bytes = readFileSync(file);
-    if (bytes.includes(0)) return [];
     const path = relative(dir, file).split(sep).join("/");
+    const bytes = readFileSync(file);
+    if (bytes.includes(0)) {
+      if (isPlaceholderFile(path)) {
+        throw new Error(
+          `${path} contains a NUL byte, so it is not UTF-8 text and the build can neither replace ` +
+            `nor find placeholders in it. Save it as UTF-8; UTF-16 is the usual cause.`,
+        );
+      }
+      return [];
+    }
     return [{ file, path, content: bytes.toString("utf-8") }];
   });
 }
@@ -297,13 +350,110 @@ export function verifyBuiltAddon(addonDir, meta) {
 }
 
 /**
+ * Verifies the XPI itself rather than the directory it was zipped from: extracts it into a
+ * temporary directory with `unzip` and runs `verifyBuiltAddon` there. A build that zipped the
+ * wrong directory, such as addon/ with its placeholders or a previous build's copy, fails here
+ * before the XPI's hash reaches update.json. Returns the packaged manifest's range.
+ */
+export function verifyPackagedAddon(xpiPath, meta) {
+  const extracted = mkdtempSync(join(tmpdir(), "citegeist-xpi-"));
+  try {
+    try {
+      execFileSync("unzip", ["-q", xpiPath, "-d", extracted], { stdio: "pipe" });
+    } catch (error) {
+      const detail = error.stderr?.toString().trim() || error.message;
+      throw new Error(`Could not extract ${xpiPath} to verify it: ${detail}`, { cause: error });
+    }
+    try {
+      return verifyBuiltAddon(extracted, meta);
+    } catch (error) {
+      throw new Error(`The packaged XPI ${xpiPath} fails verification:\n${error.message}`, {
+        cause: error,
+      });
+    }
+  } finally {
+    rmSync(extracted, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+// Windows, antivirus and indexing tools briefly lock a directory that was just written, and a
+// rename then fails with one of these codes. graceful-fs retries renames on the same three.
+const RETRYABLE_RENAME_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+
+/**
+ * Renames `from` to `to`, retrying a rename that fails with a lock code up to `attempts` times
+ * in all, pausing `delayMs` times the attempt number between tries. Any other error, and the
+ * last locked attempt's error, propagates.
+ */
+export function renameWithRetry(
+  from,
+  to,
+  { rename = renameSync, attempts = 5, delayMs = 50 } = {},
+) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rename(from, to);
+      return;
+    } catch (error) {
+      if (attempt >= attempts || !RETRYABLE_RENAME_CODES.has(error?.code)) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs * attempt);
+    }
+  }
+}
+
+/**
+ * Finishes a promotion an earlier build was interrupted in. With `target` missing and `previous`
+ * present, that build stopped after moving the last good copy aside, so it moves back. With both
+ * present, the swap finished and `previous` is a redundant older copy, so it goes.
+ */
+export function recoverInterruptedPromotion({ target, previous }, renameOptions) {
+  if (!existsSync(previous)) return;
+  if (existsSync(target)) {
+    rmSync(previous, { recursive: true, force: true, maxRetries: 3 });
+  } else {
+    renameWithRetry(previous, target, renameOptions);
+  }
+}
+
+/**
+ * Replaces `target` with `staging` without deleting the last good copy before its replacement is
+ * in place: `target` moves aside to `previous`, `staging` moves in, and only then does `previous`
+ * go. If `staging` cannot move in, `previous` moves back before the error propagates. If that
+ * fails too, the copy stays at `previous` and `recoverInterruptedPromotion` restores it.
+ */
+export function promoteStaging({ staging, target, previous }, renameOptions) {
+  recoverInterruptedPromotion({ target, previous }, renameOptions);
+  const hadTarget = existsSync(target);
+  if (hadTarget) renameWithRetry(target, previous, renameOptions);
+  try {
+    renameWithRetry(staging, target, renameOptions);
+  } catch (error) {
+    if (hadTarget) {
+      try {
+        renameWithRetry(previous, target, renameOptions);
+      } catch (restoreError) {
+        throw new AggregateError(
+          [error, restoreError],
+          `Could not move ${staging} to ${target}, nor move the last good copy back from ` +
+            `${previous}; the next build restores it from there`,
+        );
+      }
+    }
+    throw error;
+  }
+  rmSync(previous, { recursive: true, force: true, maxRetries: 3 });
+}
+
+/**
  * Finds update.json's entry for the version being built and throws unless it declares
  * package.json's range. Returns that range.
  *
- * While build.mjs makes update.json from the same metadata this check cannot fail. It becomes
- * load-bearing once U15 builds update.json from every line in release-lines.json, because the
- * entry for the tagged version then comes from the lines file and must still equal
- * package.json (KTD3).
+ * While build.mjs makes update.json from the same metadata this check cannot fail. U15 builds
+ * update.json from every line in release-lines.json, and this equality then holds only at a tag
+ * build, where the tagged version's entry must equal package.json (KTD3). Outside a tag build a
+ * line's published cap may exceed package.json's, which is how a same-version cap raise works,
+ * but never fall below it (AE6). U15 must therefore call this check only in tag context, and
+ * apply the never-below rule otherwise.
  */
 export function verifyUpdateManifest(updateManifest, meta) {
   const updates = updateManifest?.addons?.[meta.addonID]?.updates;
