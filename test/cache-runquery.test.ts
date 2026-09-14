@@ -1,13 +1,17 @@
 /**
- * runQuery is the static-message shield that keeps Zotero's bound-parameter dump
- * (which includes item titles, DOIs, and co-author names/ORCIDs) out of the
- * shareable diagnostic report. It is the SOLE defense for a free-text title —
- * DOIs/ids/paths have redaction nets, a title does not — so it earns a direct
- * behavioral test, not just the item_cache integration path.
+ * The cache's statement path, tested directly.
+ *
+ * Its static failure message keeps Zotero's bound-parameter dump (which includes
+ * item titles, DOIs, and co-author names/ORCIDs) out of the shareable diagnostic
+ * report. It is the SOLE defense for a free-text title — DOIs/ids/paths have
+ * redaction nets, a title does not — so it earns a direct behavioral test, not
+ * just the item_cache integration path. `runRead` also copies Zotero's row
+ * Proxies into plain objects and refuses to run a write.
  */
 import { describe, it, expect, vi } from "vitest";
-import { runQuery } from "../src/modules/cache/db";
+import { runRead } from "../src/modules/cache/db";
 import { CacheError, normalizeError } from "../src/modules/utils";
+import { hostRow } from "./_helpers/fakeDb";
 
 vi.stubGlobal("Zotero", { debug: vi.fn() });
 
@@ -19,14 +23,24 @@ function failingConn(message: string): _ZoteroTypes.DBConnection {
   } as unknown as _ZoteroTypes.DBConnection;
 }
 
-describe("runQuery", () => {
+function connReturning(result: unknown) {
+  const queryAsync = vi.fn(() => Promise.resolve(result));
+  return { conn: { queryAsync } as unknown as _ZoteroTypes.DBConnection, queryAsync };
+}
+
+describe("runRead", () => {
   const leakyMessage =
-    "SQLITE_BUSY [QUERY: UPDATE authors SET display_name=?, orcid=?] " +
+    "SQLITE_BUSY [QUERY: SELECT display_name FROM authors WHERE author_id=?] " +
     '[PARAMS: "Jane Q. Researcher", "0000-0002-1825-0097", A5023888391] ' +
     "[cache: 10.1038/nature12373]";
 
   it("converts a failure into a CacheError with a STATIC message", async () => {
-    const err = await runQuery(failingConn(leakyMessage), "UPDATE …", ["x"]).catch((e) => e);
+    const err = await runRead(
+      failingConn(leakyMessage),
+      "SELECT display_name FROM authors WHERE author_id = ?",
+      ["x"],
+      ["display_name"],
+    ).catch((e) => e);
     expect(err).toBeInstanceOf(CacheError);
     expect(err.message).toBe("cache query failed");
     expect(err.code).toBe("CG-DB01");
@@ -42,10 +56,39 @@ describe("runQuery", () => {
     expect(recorded).toContain("cache query failed");
   });
 
-  it("passes a successful result straight through", async () => {
-    const conn = {
-      queryAsync: () => Promise.resolve([{ n: 1 }]),
-    } as unknown as _ZoteroTypes.DBConnection;
-    expect(await runQuery<{ n: number }>(conn, "SELECT 1", [])).toEqual([{ n: 1 }]);
+  it("copies each host row into a plain object holding exactly the named columns", async () => {
+    // Positive control: a host row spreads to nothing, so a copy made by spreading
+    // would lose every column.
+    expect({ ...hostRow({ n: 1 }) }).toEqual({});
+    expect(Object.keys(hostRow({ n: 1 }))).toEqual([]);
+
+    const { conn } = connReturning([hostRow({ n: 1, m: "x" })]);
+    const rows = await runRead<{ n: number }>(conn, "SELECT n, m FROM t", [], ["n"]);
+
+    expect(rows).toEqual([{ n: 1 }]);
+    expect({ ...rows[0] }).toEqual({ n: 1 });
+  });
+
+  it("fails a read that names a column the host row lacks, as Zotero's Proxy does", async () => {
+    const { conn } = connReturning([hostRow({ n: 1 })]);
+    await expect(runRead<{ m: number }>(conn, "SELECT n FROM t", [], ["m"])).rejects.toThrow(
+      /DB column 'm' not found/,
+    );
+  });
+
+  it("reads no rows when Zotero resolves undefined", async () => {
+    const { conn } = connReturning(undefined);
+    expect(await runRead(conn, "SELECT n FROM t WHERE 0", [], [])).toEqual([]);
+  });
+
+  it.each([
+    "delete from item_cache",
+    "  INSERT OR REPLACE INTO item_cache (library_id) VALUES (?)",
+    "PRAGMA user_version = 5",
+    "vacuum",
+  ])("refuses to run the write %j as a read, before it reaches the connection", async (sql) => {
+    const { conn, queryAsync } = connReturning([]);
+    await expect(runRead(conn, sql, [], [])).rejects.toMatchObject({ code: "CG-BUG01" });
+    expect(queryAsync).not.toHaveBeenCalled();
   });
 });

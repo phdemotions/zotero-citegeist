@@ -16,6 +16,7 @@
  * keeps hostile author names / titles inert.
  */
 import {
+  cacheWriteRefusalCode,
   getCachedData,
   clearCache,
   isCacheStale,
@@ -41,7 +42,7 @@ import {
   persistProfileMetrics,
   type AuthorRowViewModel,
 } from "./authorProfile";
-import { logError, isBookType, toOrdinal, saveItemGuarded } from "./utils";
+import { codeForError, logError, isBookType, toOrdinal, saveItemGuarded } from "./utils";
 import { buildDiagnosticElement, guard, guardAsync, type DiagnosticCode } from "./diagnostics";
 import { cgDesignTokens } from "./ui/tokens";
 import { cgComponents } from "./ui/components";
@@ -60,6 +61,17 @@ function applyHostScheme(body: HTMLElement): void {
   const root = body.querySelector<HTMLElement>("#citegeist-pane-root");
   const win = root?.ownerDocument?.defaultView;
   if (root && win) root.style.colorScheme = resolveHostScheme(win as Window);
+}
+
+/**
+ * The window a pane element is drawn in. Each main window has its own item pane,
+ * and a dialog the pane opens belongs to that window: it parents there and takes
+ * that window's selected collection as its default. `Zotero.getMainWindow()` is
+ * the most recently active window instead, which a click in another window's
+ * pane does not make it.
+ */
+function paneWindow(element: Element): Window | null {
+  return element.ownerDocument.defaultView;
 }
 
 /**
@@ -207,6 +219,53 @@ function renderDiagnosticState(
   card.appendChild(buildDiagnosticElement(container.ownerDocument, code, context));
   container.appendChild(card);
   setSummary("Error");
+}
+
+/**
+ * Append the coded notice that the cache refuses writes (read-only CG-DB03 or
+ * CG-DB04, closed CG-DB02) below what the pane shows. It stands where the user
+ * would otherwise expect a save, so the pane never implies one. A notice already
+ * there is replaced, so a repeat render doesn't stack them.
+ */
+function appendWriteRefusalNotice(
+  container: HTMLElement,
+  code: DiagnosticCode,
+  context: string,
+): void {
+  container.querySelector(".cg-write-refused")?.remove();
+  const doc = container.ownerDocument;
+  const card = doc.createElement("div");
+  card.className = "cg-card cg-write-refused";
+  card.appendChild(buildDiagnosticElement(doc, code, context));
+  container.appendChild(card);
+}
+
+/**
+ * For a pane action that would have written: show what the cache already holds
+ * for the item with the refusal notice under it, or the coded state alone when
+ * nothing is saved.
+ */
+function renderSavedWithRefusal(
+  container: HTMLElement,
+  item: _ZoteroTypes.Item,
+  setSectionSummary: (s: string) => void,
+  code: DiagnosticCode,
+  context: string,
+): void {
+  const cached = getCachedData(item);
+  if (cached) {
+    renderPane(container, cached, item);
+    setSectionSummary(citationSummary(cached.citedByCount, item));
+    appendWriteRefusalNotice(container, code, context);
+    return;
+  }
+  const pending = getPendingSuggestion(item);
+  if (pending) {
+    // renderSuggestion adds the notice itself, in place of its actions.
+    renderSuggestion(container, pending, item, setSectionSummary);
+    return;
+  }
+  renderDiagnosticState(container, setSectionSummary, code, context);
 }
 
 function clearSuggestionAria(container: HTMLElement): void {
@@ -665,18 +724,21 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
               if (alreadyCached) {
                 // A refetch of stale data failed, but onRender already painted the
                 // cached data — keep it rather than replace good content with an
-                // error surface.
+                // error surface. A cache that refuses writes still gets its
+                // notice: this data stays stale for the whole session.
+                if (result.status === "error" && result.error === "cache-unwritable") {
+                  appendWriteRefusalNotice(
+                    container,
+                    result.code ?? "CG-DB03",
+                    `pane fetch (item ${item.id})`,
+                  );
+                }
               } else if (result.status === "error" && result.error === "no-match") {
                 // "Not on OpenAlex" and "no identifier" are outcomes, not failures
                 // — plain copy, no diagnostic affordance, so the pane stays quiet
                 // when nothing is actually broken. A network or unexpected failure
                 // gets the coded state, because that is what a user reports.
                 renderEmptyState(container, setSectionSummary, "notFoundTitle");
-              } else if (
-                result.status === "error" &&
-                (result.error === "not-found" || result.error === "no-identifier")
-              ) {
-                renderEmptyState(container, setSectionSummary, "notFound");
               } else {
                 renderDiagnosticState(
                   container,
@@ -723,6 +785,22 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
                 const gen = paneGeneration;
                 try {
                   const container = body.querySelector("#citegeist-content") as HTMLElement;
+                  // Refresh clears the row, then refetches. A cache that refuses
+                  // writes would do neither, so keep what's saved on screen and
+                  // say why it won't refresh.
+                  const refusal = cacheWriteRefusalCode();
+                  if (refusal) {
+                    if (container) {
+                      renderSavedWithRefusal(
+                        container,
+                        item,
+                        setSectionSummary,
+                        refusal,
+                        `pane refresh (item ${item.id})`,
+                      );
+                    }
+                    return;
+                  }
                   if (container) renderEmptyState(container, setSectionSummary, "refreshing");
                   await clearCache(item); // wide-clear: also nukes pending suggestion
                   const result = await fetchAndCacheItem(item);
@@ -750,7 +828,9 @@ export function registerCitationPane(pluginID: string, rootURI: string): void {
                       }
                     } else if (
                       result.status === "error" &&
-                      (result.error === "network" || result.error === "unexpected")
+                      (result.error === "network" ||
+                        result.error === "unexpected" ||
+                        result.error === "cache-unwritable")
                     ) {
                       renderDiagnosticState(
                         container,
@@ -893,6 +973,19 @@ function renderSuggestion(
     // newly-selected item's pane displaying the previous item's freshly-
     // fetched work data.
     const gen = paneGeneration;
+    // The card can outlive the cache it was drawn against: closed after a failed
+    // UI registration, or reopened read-only. Show the refusal, never a match
+    // that was not saved.
+    const refusal = cacheWriteRefusalCode();
+    if (refusal) {
+      renderDiagnosticState(
+        container,
+        setSectionSummary,
+        refusal,
+        `pane confirm match (item ${item.id})`,
+      );
+      return;
+    }
     try {
       // confirmTitleMatch atomically promotes pending→confirmed and clears
       // the pending block in a single upsert (see cache/write.ts), so no
@@ -928,6 +1021,16 @@ function renderSuggestion(
       }
     } catch (e) {
       logError("renderSuggestion confirm", e);
+      // A save that failed must not leave a card that looks as if the click did
+      // nothing: show the coded state the failure carries.
+      if (gen === paneGeneration) {
+        renderDiagnosticState(
+          container,
+          setSectionSummary,
+          codeForError(e),
+          `pane confirm match (item ${item.id})`,
+        );
+      }
     }
   };
 
@@ -936,6 +1039,17 @@ function renderSuggestion(
     // must not paint this item's "dismissed" state into the newly-selected
     // item's pane (Zotero reuses the body element across selections).
     const gen = paneGeneration;
+    // Same as onConfirm: never "dismissed" when the dismissal can't be saved.
+    const refusal = cacheWriteRefusalCode();
+    if (refusal) {
+      renderDiagnosticState(
+        container,
+        setSectionSummary,
+        refusal,
+        `pane dismiss match (item ${item.id})`,
+      );
+      return;
+    }
     try {
       // Atomic clear+no-match: prevents a concurrent fetch from landing
       // work data between the two writes and producing a row with both
@@ -946,6 +1060,14 @@ function renderSuggestion(
       invalidateColumnCache(item.id);
     } catch (e) {
       logError("renderSuggestion dismiss", e);
+      if (gen === paneGeneration) {
+        renderDiagnosticState(
+          container,
+          setSectionSummary,
+          codeForError(e),
+          `pane dismiss match (item ${item.id})`,
+        );
+      }
     }
   };
 
@@ -981,11 +1103,17 @@ function renderSuggestion(
   headerRow.appendChild(chip);
   card.appendChild(headerRow);
 
+  // A decision nobody can save isn't asked for. On a cache that refuses writes
+  // the card keeps the candidate, which is still worth verifying, and the coded
+  // notice below it stands where Confirm and "Not this paper" would be.
+  const refusal = cacheWriteRefusalCode();
+
   // What this is + the ask.
   const prompt = doc.createElement("div");
   prompt.className = "cg-match-prompt";
-  prompt.textContent =
-    "No exact identifier \u2014 we matched this item to OpenAlex by title and year. Is this the right paper?";
+  prompt.textContent = refusal
+    ? "No exact identifier \u2014 we matched this item to OpenAlex by title and year."
+    : "No exact identifier \u2014 we matched this item to OpenAlex by title and year. Is this the right paper?";
   card.appendChild(prompt);
 
   // Candidate identity so the decision is informed.
@@ -1017,19 +1145,21 @@ function renderSuggestion(
   // Primary / secondary actions — reuse the shared button primitives so the
   // suggestion card matches the data view exactly (the cg-match-* classes are
   // kept only as JS/`:disabled` hooks).
-  const actions = doc.createElement("div");
-  actions.className = "cg-actions";
-  actions.appendChild(
-    makeGuardedButton("Confirm match", "cg-btn cg-btn--filled cg-match-confirm", () =>
-      onConfirm().catch((e) => logError("onConfirm", e)),
-    ),
-  );
-  actions.appendChild(
-    makeGuardedButton("Not this paper", "cg-btn cg-btn--tinted cg-match-dismiss", () =>
-      onDismiss().catch((e) => logError("onDismiss", e)),
-    ),
-  );
-  card.appendChild(actions);
+  if (!refusal) {
+    const actions = doc.createElement("div");
+    actions.className = "cg-actions";
+    actions.appendChild(
+      makeGuardedButton("Confirm match", "cg-btn cg-btn--filled cg-match-confirm", () =>
+        onConfirm().catch((e) => logError("onConfirm", e)),
+      ),
+    );
+    actions.appendChild(
+      makeGuardedButton("Not this paper", "cg-btn cg-btn--tinted cg-match-dismiss", () =>
+        onDismiss().catch((e) => logError("onDismiss", e)),
+      ),
+    );
+    card.appendChild(actions);
+  }
 
   // Non-destructive escape: open the candidate on OpenAlex to verify before
   // deciding. Only link a well-formed work id.
@@ -1052,6 +1182,7 @@ function renderSuggestion(
   }
 
   container.appendChild(card);
+  if (refusal) appendWriteRefusalNotice(container, refusal, `pane suggestion (item ${item.id})`);
 }
 
 /**
@@ -1182,7 +1313,7 @@ function renderPane(
     btn.setAttribute("aria-label", ariaLabel);
     btn.addEventListener("click", () => {
       Zotero.debug(`[Citegeist] ${mode} button clicked for item ${item.id}`);
-      showCitationNetwork(item, mode).catch((e: unknown) => {
+      showCitationNetwork(item, mode, paneWindow(btn)).catch((e: unknown) => {
         logError(`showCitationNetwork(${mode})`, e);
       });
     });
@@ -1366,7 +1497,7 @@ function authorRow(doc: Document, vm: AuthorRowViewModel): HTMLElement {
 
   const authorId = vm.authorId as string;
   btn.addEventListener("click", () =>
-    showAuthorWorks(authorId).catch((e) => logError("showAuthorWorks", e)),
+    showAuthorWorks(authorId, paneWindow(btn)).catch((e) => logError("showAuthorWorks", e)),
   );
   return btn;
 }

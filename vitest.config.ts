@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import path from "path";
 
 export default defineConfig({
@@ -10,6 +10,9 @@ export default defineConfig({
   },
   test: {
     include: ["test/**/*.test.ts"],
+    // Mocha specs and their harness that run INSIDE real Zotero via
+    // `npm run test:zotero` (zotero-plugin-scaffold), never under vitest.
+    exclude: [...configDefaults.exclude, "test/real-zotero/**"],
   },
   resolve: {
     alias: {

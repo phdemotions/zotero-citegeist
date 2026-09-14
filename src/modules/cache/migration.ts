@@ -25,10 +25,29 @@ import {
   PREF_MIGRATION_COMPLETE,
   SHOW_PROGRESS_UI_THRESHOLD,
 } from "../../constants";
+import {
+  getPref,
+  getTimestampPref,
+  setPref,
+  setTimestampPref,
+  type PlainPref,
+  type PrefValue,
+  type TimestampPref,
+} from "../prefs";
 import { logError, normalizeError, safeParseFloat, safeParseIntOrNull } from "../utils";
-import { deleteMirrorEntries, mirrorSnapshot, requireDb, upsertRow } from "./db";
+import {
+  deleteMirrorEntries,
+  mirrorSnapshot,
+  requireDb,
+  requireWritableDb,
+  runRead,
+  runWrite,
+  skipMaintenanceOnReadOnlyCache,
+  upsertRow,
+  type WritableDb,
+} from "./db";
 import { setExtraConfirmedMatch } from "./write";
-import { garbageCollectOrphanAuthors } from "./authors/db";
+import { deleteOrphanItemAuthors, deleteUnreferencedAuthors } from "./authors/db";
 import {
   CONFIRMED_MATCH_EXTRA_PREFIX,
   emptyRow,
@@ -435,12 +454,23 @@ const MIN_ZOTERO_VERSION_FOR_MIGRATION = "7.0.10";
  * prompt appears.
  */
 export async function migrateFromExtraV1(): Promise<boolean> {
+  // A read-only cache (CG-DB03/CG-DB04) skips migration up front, not per row:
+  // every row write would be refused before its Extra strip, so the loop could
+  // only write a backup file and a refusal per candidate for an outcome the
+  // startup notice already explains.
+  if (skipMaintenanceOnReadOnlyCache("migrateFromExtraV1")) return false;
+
+  // Any other refusal throws here, before the completion pref is read or reset,
+  // any backup file is written or any Extra field changes: a caller that didn't
+  // await initCache(), or a cache that closed under startup, gets CG-DB02.
+  requireWritableDb("migrateFromExtraV1");
+
   // REL-002 silent-data-loss guard: the pref says "we already migrated", but
   // if SQLite is empty AND any library still contains legacy Citegeist data
   // in Extra, something went wrong (manual SQLite deletion, antivirus
   // quarantine, partial profile restore). Clear the pref and re-run rather
   // than silently leaving the user with stripped Extra and no cache.
-  if (Zotero.Prefs.get(PREF_MIGRATION_COMPLETE)) {
+  if (getPref(PREF_MIGRATION_COMPLETE)) {
     if (await shouldForceRerun()) {
       Zotero.debug(
         "[Citegeist] migration pref says complete but state mismatch detected — re-running",
@@ -450,10 +480,6 @@ export async function migrateFromExtraV1(): Promise<boolean> {
       return false;
     }
   }
-
-  // Verify init even though we don't keep the connection — we want a clear
-  // error here if a caller forgot to await initCache() first.
-  requireDb();
 
   // Version gate.
   const zVersion = Zotero.version ?? "0.0.0";
@@ -550,11 +576,16 @@ export async function migrateFromExtraV1(): Promise<boolean> {
       // per-item SELECTs with one SELECT — order-of-magnitude win on first
       // run of a 50k-item library where every candidate would otherwise pay
       // a SQLite round trip just to confirm "not yet migrated."
-      const conn0 = requireDb();
+      // The loop below writes, so a cache that stopped taking writes during the
+      // backup refuses here with its code rather than failing the read.
+      requireWritableDb("migration_progress read");
       const checkpointed = new Set<string>();
       {
-        const rows = await conn0.queryAsync<{ library_id: number; item_key: string }>(
+        const rows = await runRead<{ library_id: number; item_key: string }>(
+          requireDb(),
           `SELECT library_id, item_key FROM migration_progress`,
+          undefined,
+          ["library_id", "item_key"],
         );
         for (const r of rows) checkpointed.add(mirrorKey(r.library_id, r.item_key));
       }
@@ -569,7 +600,7 @@ export async function migrateFromExtraV1(): Promise<boolean> {
         if (done % progressTick === 0) ui?.update(done, total);
 
         try {
-          const conn = requireDb();
+          const writable = requireWritableDb("migration item");
 
           if (checkpointed.has(mirrorKey(item.libraryID, item.key))) continue;
 
@@ -612,11 +643,11 @@ export async function migrateFromExtraV1(): Promise<boolean> {
                 // subsequent candidate (REL-M-001).
                 await saveTxWithDeadline(item);
               }
-              await checkpointItem(conn, item.libraryID, item.key);
+              await checkpointItem(writable, item.libraryID, item.key);
               checkpointed.add(mirrorKey(item.libraryID, item.key));
             } else if (!extra.includes(CONFIRMED_MATCH_EXTRA_PREFIX)) {
               // Genuinely clean — no legacy fields, no confirmed-match line.
-              await checkpointItem(conn, item.libraryID, item.key);
+              await checkpointItem(writable, item.libraryID, item.key);
               checkpointed.add(mirrorKey(item.libraryID, item.key));
             } else {
               // Has a confirmed-match line that didn't parse as a valid W-ID.
@@ -681,7 +712,7 @@ export async function migrateFromExtraV1(): Promise<boolean> {
           // `unresolvedSkips` state, blocking the completion pref forever.
           checkpointed.add(mirrorKey(item.libraryID, item.key));
           try {
-            await checkpointItem(conn, item.libraryID, item.key);
+            await checkpointItem(writable, item.libraryID, item.key);
           } catch (cpErr) {
             Zotero.debug(
               `[Citegeist] migration: checkpoint INSERT failed for ${item.libraryID}:${item.key} — ${normalizeError(cpErr)} (item is fully migrated; next launch will re-checkpoint)`,
@@ -723,8 +754,9 @@ export async function migrateFromExtraV1(): Promise<boolean> {
   // matters on 50k-item libraries with 1% transient errors.
   if (unresolvedSkips === 0) {
     try {
-      const conn = requireDb();
-      await conn.queryAsync(`DELETE FROM migration_progress`);
+      await requireWritableDb("migration_progress cleanup").transaction((tx) =>
+        runWrite(tx, `DELETE FROM migration_progress`),
+      );
     } catch (e) {
       logError("migration_progress cleanup (non-fatal)", e);
     }
@@ -871,23 +903,35 @@ async function pruneOldBackups(): Promise<void> {
   }
 }
 
-/** `Zotero.Prefs.set` writes to `prefs.js` and can throw on a locked profile. */
-function trySetPref(name: string, value: unknown): void {
+/** A pref write lands in `prefs.js` and can throw on a locked profile. */
+function trySetPref(name: PlainPref, value: PrefValue): void {
   try {
-    Zotero.Prefs.set(name, value);
+    setPref(name, value);
+  } catch (e) {
+    logError(`Prefs.set('${name}') (non-fatal)`, e);
+  }
+}
+
+/** {@link trySetPref} for a timestamp, stored in the form that reads back exactly. */
+function trySetTimestampPref(name: TimestampPref, ms: number): void {
+  try {
+    setTimestampPref(name, ms);
   } catch (e) {
     logError(`Prefs.set('${name}') (non-fatal)`, e);
   }
 }
 
 async function checkpointItem(
-  conn: _ZoteroTypes.DBConnection,
+  writable: WritableDb,
   libraryID: number,
   itemKey: string,
 ): Promise<void> {
-  await conn.queryAsync(
-    `INSERT OR REPLACE INTO migration_progress (library_id, item_key, migrated_at) VALUES (?, ?, ?)`,
-    [libraryID, itemKey, new Date().toISOString()],
+  await writable.transaction((tx) =>
+    runWrite(
+      tx,
+      `INSERT OR REPLACE INTO migration_progress (library_id, item_key, migrated_at) VALUES (?, ?, ?)`,
+      [libraryID, itemKey, new Date().toISOString()],
+    ),
   );
 }
 
@@ -902,11 +946,11 @@ async function checkpointItem(
  * — group-library items get SQLite rows too, and we must not purge them.
  */
 export async function garbageCollectOrphans(options: { force?: boolean } = {}): Promise<void> {
-  const lastRunRaw = Zotero.Prefs.get(PREF_LAST_ORPHAN_GC_AT);
-  const lastRun = typeof lastRunRaw === "number" ? lastRunRaw : 0;
+  if (skipMaintenanceOnReadOnlyCache("garbageCollectOrphans")) return;
+  const lastRun = getTimestampPref(PREF_LAST_ORPHAN_GC_AT);
   if (!options.force && Date.now() - lastRun < ORPHAN_GC_MIN_INTERVAL_MS) return;
 
-  const conn = requireDb();
+  const writable = requireWritableDb("garbageCollectOrphans");
 
   // Build the live key set as (libraryID, itemKey) tuples so we don't
   // mistake a same-named key in a different library for an orphan.
@@ -935,7 +979,7 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
   }
 
   if (orphans.length === 0) {
-    trySetPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
+    trySetTimestampPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
     return;
   }
 
@@ -948,19 +992,25 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
     for (const o of slice) {
       params.push(o.libraryID, o.itemKey);
     }
-    await conn.queryAsync(
-      `DELETE FROM item_cache WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
-      params,
-    );
-    await conn.queryAsync(
-      `DELETE FROM migration_progress WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
-      params,
-    );
+    // One transaction per chunk: the chunk's rows leave all three tables
+    // together, and the mirror follows only once they have committed.
+    await writable.transaction(async (tx) => {
+      await runWrite(
+        tx,
+        `DELETE FROM item_cache WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
+        params,
+      );
+      await runWrite(
+        tx,
+        `DELETE FROM migration_progress WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
+        params,
+      );
+      await deleteOrphanItemAuthors(tx, slice);
+    });
     deleteMirrorEntries(slice.map((o) => o.composite));
   }
-  // Two-level author sweep on the same orphan set: drop their item_authors
-  // rows, then any authors left unreferenced.
-  await garbageCollectOrphanAuthors(conn, orphans);
-  trySetPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
+  // Then any author no item_authors row references any more.
+  await writable.transaction((tx) => deleteUnreferencedAuthors(tx));
+  trySetTimestampPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
   Zotero.debug(`[Citegeist] orphan GC removed ${orphans.length} rows`);
 }

@@ -137,6 +137,9 @@ export async function cacheWorkData(
  * a full `_ZoteroTypes.Item` get the mirror cleanup.
  */
 export async function clearCache(item: CacheItemKey | _ZoteroTypes.Item): Promise<void> {
+  // deleteRow runs first and rejects on a cache that refuses writes, so the
+  // Extra strip below never runs alone: a row that keeps its confirmation never
+  // loses the Extra line that mirrors it.
   await deleteRow(item.libraryID, item.key);
   // Detect whether the caller passed a full Item (with getField/saveTx) vs.
   // just the structural { libraryID, key } shape used by tests + internal code.

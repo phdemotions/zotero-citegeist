@@ -19,7 +19,7 @@ npm run format             # Prettier write
 npm run format:check       # Prettier check (no write)
 npm run okf:check          # OKF docs-conformance (every docs/ file has a `type`)
 npm run okf:drift          # Compare OKF spec upstream HEAD vs the pinned commit
-npm run release            # Bump version, tag, push (triggers GitHub Actions release)
+npm run release            # Bump version + commit locally (no tag, no push); refuses unrelated changes
 ```
 
 **Pre-commit checklist:** `npm run typecheck && npm test && npm run lint && npm run format:check && npm run okf:check && npm run build`
@@ -106,23 +106,31 @@ typings/                        # Zotero type declarations
 
 ## Release Process
 
-**Gate first.** Before tagging any `v*`, run `docs/RELEASE-CHECKLIST.md` — the manual host-verification gates (real-Zotero smoke on 7/8/9, diagnostics end-to-end, and the 2-device sync round-trip). The test suite mocks Zotero, so the highest-risk surface (pane render, sidenav icon, sync integrity) has no automated coverage; auto-update hits 100% of users with no canary, so a bad tag is fleet-wide. The mechanical steps below only run once those gates pass.
+**Gate first.** Before tagging any `v*`, run `docs/RELEASE-CHECKLIST.md` — the manual host-verification gates (real-Zotero smoke, diagnostics end-to-end, and the 2-device sync round-trip). CI runs the real-Zotero suite on Linux only and nothing automated exercises sync, so those surfaces still need a human; auto-update hits 100% of users with no canary, so a bad tag is fleet-wide. The mechanical steps below only run once those gates pass.
 
-Shipping to users requires a **tagged release**, not just a push to `main`:
+Shipping to users requires a **tagged release**, not just a merge to `main`. The steps are in **`docs/RELEASE-CHECKLIST.md` section 5, which is canonical**; this file does not repeat them. In outline: between releases `main` carries the next version's `X.Y.Z-alpha.0`, a release pull request changes it to `X.Y.Z` and is squash-merged, and the tag goes on that pull request's merge commit, named by SHA.
 
-1. Bump versions in `package.json`, `package-lock.json` (top-level + `packages[""]`), and `CITATION.cff` — all three must match
-2. Move `[Unreleased]` in `CHANGELOG.md` to the new version with today's date, add comparison link at bottom
-3. Commit, then: `git tag vX.Y.Z && git push origin main && git push origin vX.Y.Z`
-4. GitHub Actions builds the XPI, creates a GitHub Release, and force-updates the `release` floating tag
-5. `addon/manifest.json` points `update_url` at `releases/download/release/update.json` — installed Zotero copies auto-update on next restart
+What `release.yml` enforces. A change to it must keep each of these true; `test/workflow-invariants.test.ts` fails if a workflow breaks one, and `test/release-guard.test.ts` and `test/release-scripts.test.ts` test the scripts:
 
-Or just run `npm run release` (uses bumpp) and then push the tag.
+- **`Build`** (`contents: read`, `pull-requests: read`) runs `scripts/release-guard-cli.mjs` before installing anything. It refuses a tag unless it is `vMAJOR.MINOR.PATCH`, `package.json` at the tagged commit has that version, the commit is on `main`'s first-parent history, it is the merge commit GitHub recorded for a merged pull request into `main` (squash, merge commit or rebase), and that pull request changed the version. It then installs with `--ignore-scripts`, builds, and records the SHA-256 of the XPI and `update.json`; esbuild is the only third-party code it runs. The artifact name carries the run attempt, and every later job reads the name and digests from Build's outputs.
+- **`Verify`** (read-only) runs typecheck, lint, format, OKF, shellcheck and the unit tests.
+- **The real-Zotero matrix** (read-only) tests the XPI `Build` made, after checking its SHA-256.
+- **`Publish`** needs all three and holds `contents: write`. Before anything writes, `scripts/verify-release-assets.sh` proves the downloaded assets are Build's bytes. It runs one at a time across tags (the `release-channel` concurrency group), refuses a tag that has moved off the run's commit, and runs `scripts/check-channel-version-cli.mjs`, which refuses a version older than the live channel's newest and the same version from other bytes. `scripts/publish-versioned-release.sh` creates the release, publishes or replaces a draft an earlier attempt left, and never changes a published one. The channel step moves the `release` tag and uploads `update.json` through `scripts/publish-update-channel.sh`, and does nothing when the channel already serves these bytes, so a re-run finishes a half-done publish. It runs no npm, test code, Zotero binary or third-party action, and the invariants test allowlists every command it and the scripts it calls run.
+- **`README badges`** (`contents: write`) runs after `Publish` and can fail and be re-run alone.
+
+`addon/manifest.json` points `update_url` at `releases/download/release/update.json` — installed Zotero copies auto-update on next restart.
 
 **Dev copy** (proxy-file install): `npm run build:dev` + restart Zotero. Does not auto-update.
 
 ---
 
 ## CI Notes
+
+**Gates and permissions.** `ci.yml` runs typecheck, lint, format, OKF, shellcheck, unit tests and build (the `test (22)` job) beside the real-Zotero matrix, which is defined once in `real-zotero.yml` and also called by `release.yml`. Branch protection on `main` requires the single `CI gate` check, which passes only when every other `ci.yml` job succeeded, so adding or bumping a Zotero cell needs no settings change. Every workflow declares least-privilege `permissions:`, and `test/workflow-invariants.test.ts` holds each job to an exact table: jobs that run npm dependencies, scaffold or a Zotero binary hold `contents: read` (Build adds `pull-requests: read`), only `release.yml`'s `Publish` and `README badges` hold `contents: write`, and `okf-watch.yml`'s job holds `issues: write` (KTD13 in `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`). A new workflow, job or scope fails the test until the table lists it.
+
+**Why GitHub Actions, not Vercel.** The real-Zotero suite needs a runner that can launch the Zotero desktop app, and the repository is public, so Actions minutes cost nothing. The monorepo's Vercel-first CI rule targets Vercel-deployed sites, and Citegeist has none.
+
+**Supply chain.** Every third-party action is pinned to a full commit SHA with a `# vX.Y.Z` comment; update both together. Every job runs on `ubuntu-24.04`, every workflow sets `defaults: run: shell: bash` so pipelines fail on any failing command, no `run:` script contains a `${{ }}` expression (values reach scripts through `env:`), and workflows use no YAML anchors, aliases or merge keys. Every checkout sets `persist-credentials: false` except in `Publish` and `README badges`, which push and run no dependency. Workflows install with `npm install --no-audit --no-fund --ignore-scripts`, then fail if the install changed `package-lock.json`. Each Zotero tarball is checked against `ZOTERO_TARBALL_SHA256` in `real-zotero.yml`: a pinned hash that differs fails the cell, and `UNPINNED` only warns and prints the hash to pin. `real-zotero.yml` takes `workflow_call` inputs (`xpi-artifact` with `xpi-sha256`, `zotero-versions`, `negative-control-version`); `ci.yml` passes none and builds its own XPI, `release.yml` passes Build's artifact and digest, and neither overrides the versions or the negative control. `test/workflow-invariants.test.ts` reads every file in `.github/workflows/` and locks in these properties plus gate wiring, step order, digest checks, concurrency, lockfile checks and step deadlines. If it fails, fix the workflow — never weaken the test.
 
 Workflows use `npm install --no-audit --no-fund`, **not** `npm ci`. This is intentional — `npm ci` fails with `EBADPLATFORM` on `@esbuild/openharmony-arm64@0.28.0` (a transitive optional dep from vitest → vite → esbuild). Do not "fix" this back to `npm ci`.
 
@@ -149,7 +157,7 @@ Locally, always verify with `rm -rf node_modules && npm install` before releasin
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `docs/STATUS.md`            | Current project state, what was done last session, upcoming work                                                                                                                        |
 | `docs/ISSUES.md`            | Open bugs and feature requests with priorities                                                                                                                                          |
-| `docs/RELEASE-CHECKLIST.md` | Manual verification gates that must pass before tagging any `v*` (real-Zotero smoke 7/8/9, diagnostics end-to-end, 2-device sync) — run before the Release Process steps                |
+| `docs/RELEASE-CHECKLIST.md` | Manual verification gates that must pass before tagging any `v*` (real-Zotero smoke on every `zotero-versions` host, diagnostics end-to-end, 2-device sync) — run before the Release Process steps |
 | `docs/solutions/`           | Documented fixes to past problems (bugs, patterns), by category with YAML frontmatter (`module`, `tags`, `problem_type`) — relevant when debugging or implementing in a documented area |
 | `docs/BACKLOG.md`           | Curated longer-term enhancement ideas                                                                                                                                                   |
 | `docs/STANDARDS.md`         | OKF documentation standard — pin, scope (docs-only), cadence                                                                                                                            |

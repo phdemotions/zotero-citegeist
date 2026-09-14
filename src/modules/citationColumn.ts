@@ -6,16 +6,21 @@
  * Rankings:       UTD24, FT50, ABDC (2022), AJG (2021)
  *
  * Uses Zotero 7's ItemTreeManager.registerColumn API.
- * Reads cached data from Extra field and triggers background fetches.
+ * Reads cached metrics and queues background lookups (see willBackgroundFetch).
  * All columns share a single fetch queue to avoid duplicate requests.
  * Journal rankings are resolved from a bundled lookup table (zero API calls).
  */
 
-import { getCachedMetrics, isNoMatchSuppressed, type AllMetrics } from "./cache";
-import { fetchAndCacheItem, extractIdentifier } from "./citationService";
+import {
+  cacheWriteRefusalCode,
+  getCachedMetrics,
+  isNoMatchSuppressed,
+  type AllMetrics,
+} from "./cache";
+import { canResolveWork, fetchAndCacheItem, fetchStopFor, type FetchStop } from "./citationService";
 import { lookupRanking, RANKING_VERSIONS, type JournalRanking } from "../data/journalRankings";
 import { getCachedSourceISSNs } from "./openalex";
-import { logError, isBookType } from "./utils";
+import { logError, isBookType, OpenAlexAuthError, OpenAlexBudgetError } from "./utils";
 import { guard } from "./diagnostics";
 import {
   AUTO_FETCH_PREF_TTL_MS,
@@ -25,8 +30,8 @@ import {
   FETCH_QUEUE_DEBOUNCE_MS,
   MAX_ATTEMPTED_FETCH_CACHE,
   NO_MATCH_RETRY_DAYS,
-  PREF_AUTO_FETCH,
 } from "../constants";
+import { getOpenAlexApiKey, isAutoFetchEnabled } from "./prefs";
 
 // Column data keys
 const COL_CITATIONS = "citegeist-citation-count";
@@ -55,9 +60,38 @@ let registered = false;
 let registeredPluginID: string | null = null;
 let fetchTimer: ReturnType<typeof setTimeout> | null = null;
 let processingQueue = false;
+/** Items waiting for a background lookup, oldest first. */
 const fetchQueue = new Set<number>();
-const fetchAttempted = new Set<number>();
+/** Items whose background lookup is running now. */
+const fetchInFlight = new Set<number>();
+/**
+ * Items the background queue has looked up this session, so a repaint does not
+ * queue them again. Each maps to the {@link fetchEpoch} it was last looked up or
+ * drawn in, and the map stays in epoch order, oldest first. Bounded; see
+ * {@link rememberAttempt}.
+ */
+const fetchAttempted = new Map<number, number>();
+/**
+ * How many queue passes have finished. A pass's lookups, and every paint from
+ * the end of the previous pass until it ends, share one epoch.
+ */
+let fetchEpoch = 0;
 let repaintTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Why background fetching stopped, or null while it runs. A rejected API key
+ * (CG-API01) or a spent budget (CG-API42) fails every later request the same
+ * way, and a cache that refuses writes would throw every result away, so the
+ * queue stops at the first such result instead of working through the library.
+ *
+ * `apiKey` is the key the refused requests carried, and a different key resumes
+ * fetching. A cache refusal carries none: it lasts until Citegeist restarts.
+ */
+interface BackgroundPause {
+  readonly stop: FetchStop;
+  readonly apiKey: string | null;
+}
+let backgroundPause: BackgroundPause | null = null;
 
 /**
  * Coalesced, reliable column repaint. `invalidateColumnCache` clears the per-row
@@ -104,13 +138,12 @@ function namespacedColumnKey(pluginID: string, dataKey: string): string {
 }
 
 /**
- * Per-render-tick memo so all 9 columns share one `queueFetch` decision and
- * one `AllMetrics` object identity per item. The underlying `getCachedMetrics`
- * is already O(1) against the in-memory mirror, but consolidating here
- * ensures fetch queueing fires at most once per item per tick regardless of
- * which column triggered the render.
+ * Per-render-tick memo of each row's cached metrics, so the five metric columns
+ * and the ranking lookup share one `AllMetrics` per item. The underlying
+ * `getCachedMetrics` is already O(1) against the in-memory mirror. Only the
+ * metrics are memoized: whether a lookup is due is decided on every paint.
  */
-const metricsCache = new Map<number, AllMetrics | null>();
+const metricsCache = new Map<number, AllMetrics>();
 
 /**
  * Per-item ranking cache. Resolved from ISSN on the Zotero item
@@ -122,46 +155,98 @@ let autoFetchCached: boolean | null = null;
 let autoFetchCacheTime = 0;
 
 function getAutoFetch(): boolean {
-  const now = Date.now();
-  if (autoFetchCached === null || now - autoFetchCacheTime > AUTO_FETCH_PREF_TTL_MS) {
-    autoFetchCached = Zotero.Prefs.get(PREF_AUTO_FETCH) as boolean;
-    autoFetchCacheTime = now;
+  if (autoFetchCached === null || Date.now() - autoFetchCacheTime > AUTO_FETCH_PREF_TTL_MS) {
+    return readAutoFetchNow();
   }
   return autoFetchCached;
 }
 
+/** Read the auto-fetch setting past the TTL, and cache what it says. */
+function readAutoFetchNow(): boolean {
+  autoFetchCached = isAutoFetchEnabled();
+  autoFetchCacheTime = Date.now();
+  return autoFetchCached;
+}
+
+/** The API key the settings hold now, or `fallback` when Zotero cannot read it. */
+function readApiKey(fallback: string): string {
+  try {
+    return getOpenAlexApiKey();
+  } catch {
+    return fallback;
+  }
+}
+
+/** Whether background fetching is paused. A pause for a refused key or budget ends once the key changes. */
+function backgroundFetchPaused(): boolean {
+  if (backgroundPause === null) return false;
+  const { apiKey } = backgroundPause;
+  if (apiKey !== null && readApiKey(apiKey) !== apiKey) {
+    backgroundPause = null;
+    return false;
+  }
+  return true;
+}
+
 /**
- * Shared logic: check if an item needs fetching and queue it if so.
- * Returns the cached metrics for immediate display.
+ * Whether the background queue will look this item up. It is the one rule
+ * behind both queueing an item and drawing "…" in its cells, so a cell never
+ * promises a lookup the queue will not make, and the queue never spends a batch
+ * slot on an item with nothing to look up. All of these hold:
+ *
+ * - "Automatically fetch citation data" is ticked;
+ * - the queue has not looked the item up this session and is not doing so now;
+ * - background fetching is not paused ({@link BackgroundPause});
+ * - the cache takes writes;
+ * - the cached metrics are missing or stale, the test the fetch itself uses to
+ *   skip a row;
+ * - no title search has found nothing for the item, nor the user dismissed its
+ *   match, in the last NO_MATCH_RETRY_DAYS;
+ * - the item is in the library, not the trash, and resolves to a work without a
+ *   title search: a DOI, PMID, arXiv ID or ISBN, or an OpenAlex ID the user
+ *   confirmed ({@link canResolveWork}, the fetch's own resolution).
  */
-function getMetricsAndMaybeQueue(item: _ZoteroTypes.Item): AllMetrics | null {
+function willBackgroundFetch(item: _ZoteroTypes.Item, metrics: AllMetrics): boolean {
+  return (
+    getAutoFetch() &&
+    !fetchAttempted.has(item.id) &&
+    !fetchInFlight.has(item.id) &&
+    !backgroundFetchPaused() &&
+    cacheWriteRefusalCode() === null &&
+    metrics.isStale &&
+    !isNoMatchSuppressed(item, NO_MATCH_RETRY_DAYS) &&
+    !item.deleted &&
+    canResolveWork(item)
+  );
+}
+
+/** What a metric column draws from: the row's cached metrics, and whether a lookup is coming. */
+interface CellState {
+  metrics: AllMetrics;
+  /** A background lookup is queued, running, or due: the cell shows "…" until it lands. */
+  pending: boolean;
+}
+
+/**
+ * A row's cached metrics, queueing its background lookup when
+ * {@link willBackgroundFetch} says one is due. Runs on every paint, including a
+ * row whose metrics are memoized, so ticking the setting takes effect on rows
+ * already drawn.
+ */
+function cellState(item: _ZoteroTypes.Item): CellState | null {
   if (!item.isRegularItem()) return null;
 
-  if (metricsCache.has(item.id)) {
-    return metricsCache.get(item.id)!;
+  let metrics = metricsCache.get(item.id);
+  if (!metrics) {
+    metrics = getCachedMetrics(item);
+    metricsCache.set(item.id, metrics);
   }
 
-  const metrics = getCachedMetrics(item);
-  const hasFetchable = extractIdentifier(item) !== null;
-  const hasUsableTitle = ((item.getField("title") as string) || "").trim().length > 0;
-
-  // Nothing to show and nothing to fetch — skip entirely
-  if (!hasFetchable && !hasUsableTitle && metrics.count === null && metrics.suggestion === null)
-    return null;
-
-  metricsCache.set(item.id, metrics);
-
-  // Queue for fetch if stale/missing, not already attempted, and not suppressed
-  if (
-    getAutoFetch() &&
-    (metrics.count === null || metrics.isStale) &&
-    !fetchAttempted.has(item.id) &&
-    !isNoMatchSuppressed(item, NO_MATCH_RETRY_DAYS)
-  ) {
-    queueFetch(item.id);
-  }
-
-  return metrics;
+  if (fetchInFlight.has(item.id) || fetchQueue.has(item.id)) return { metrics, pending: true };
+  if (metrics.isStale) keepAttemptWhileDrawn(item.id);
+  const due = willBackgroundFetch(item, metrics);
+  if (due) queueFetch(item.id);
+  return { metrics, pending: due };
 }
 
 /**
@@ -296,8 +381,9 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
     dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const metrics = getMetricsAndMaybeQueue(item);
-      if (!metrics) return "";
+      const cell = cellState(item);
+      if (!cell) return "";
+      const { metrics } = cell;
       if (metrics.count !== null) {
         // Suppress zero for books — OpenAlex coverage is incomplete for books,
         // so 0 almost always means "not tracked" rather than genuinely uncited.
@@ -309,7 +395,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
         if (metrics.suggestion.count === 0 && isBookType(item)) return "";
         return metrics.suggestion.tier === "high" ? `~${metrics.suggestion.count}` : "?";
       }
-      return getAutoFetch() ? "…" : "";
+      return cell.pending ? "…" : "";
     },
   });
 
@@ -320,8 +406,9 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
     dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const metrics = getMetricsAndMaybeQueue(item);
-      if (!metrics) return "";
+      const cell = cellState(item);
+      if (!cell) return "";
+      const { metrics } = cell;
       if (metrics.fwci !== null) return metrics.fwci.toFixed(2);
       if (metrics.count !== null) {
         // Suppress the "—" placeholder for 0-count books (same coverage rationale)
@@ -332,7 +419,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
       if (metrics.suggestion?.tier === "high" && metrics.suggestion.fwci !== null) {
         return `~${metrics.suggestion.fwci.toFixed(2)}`;
       }
-      return getAutoFetch() ? "…" : "";
+      return cell.pending ? "…" : "";
     },
   });
 
@@ -343,14 +430,15 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
     dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const metrics = getMetricsAndMaybeQueue(item);
-      if (!metrics) return "";
+      const cell = cellState(item);
+      if (!cell) return "";
+      const { metrics } = cell;
       if (metrics.percentile !== null) return metrics.percentile.toFixed(1);
       if (metrics.count !== null) {
         if (metrics.count === 0 && isBookType(item)) return "";
         return "—";
       }
-      return getAutoFetch() ? "…" : "";
+      return cell.pending ? "…" : "";
     },
   });
 
@@ -363,11 +451,12 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
     dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const metrics = getMetricsAndMaybeQueue(item);
-      if (!metrics) return "";
+      const cell = cellState(item);
+      if (!cell) return "";
+      const { metrics } = cell;
       if (metrics.citedness2yr !== null) return metrics.citedness2yr.toFixed(2);
       if (metrics.count !== null) return "—";
-      return getAutoFetch() ? "…" : "";
+      return cell.pending ? "…" : "";
     },
   });
 
@@ -378,11 +467,12 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
     dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const metrics = getMetricsAndMaybeQueue(item);
-      if (!metrics) return "";
+      const cell = cellState(item);
+      if (!cell) return "";
+      const { metrics } = cell;
       if (metrics.journalHIndex !== null) return String(metrics.journalHIndex);
       if (metrics.count !== null) return "—";
-      return getAutoFetch() ? "…" : "";
+      return cell.pending ? "…" : "";
     },
   });
 
@@ -512,7 +602,10 @@ export function unregisterCitationColumn(): void {
     fetchTimer = null;
   }
   fetchQueue.clear();
+  fetchInFlight.clear();
   fetchAttempted.clear();
+  fetchEpoch = 0;
+  backgroundPause = null;
   metricsCache.clear();
   rankingCache.clear();
   autoFetchCached = null;
@@ -538,54 +631,146 @@ function queueFetch(itemId: number): void {
   }
 }
 
+/**
+ * Work through the queue a batch at a time, including items queued while it
+ * runs. Stops when the queue empties, when "Automatically fetch citation data"
+ * is unticked (read at every batch, past the TTL), or when a result pauses
+ * background fetching.
+ */
 async function processFetchQueue(): Promise<void> {
   fetchTimer = null;
   if (!registered || processingQueue) return;
   processingQueue = true;
 
-  const ids = Array.from(fetchQueue);
-  fetchQueue.clear();
-
-  if (fetchAttempted.size > MAX_ATTEMPTED_FETCH_CACHE) {
-    fetchAttempted.clear();
-  }
-
-  for (let i = 0; i < ids.length; i += FETCH_BATCH_SIZE) {
-    if (!registered) break;
-
-    const batch = ids.slice(i, i + FETCH_BATCH_SIZE);
-    await Promise.all(
-      batch.map(async (id) => {
-        fetchAttempted.add(id);
-        try {
-          const item = Zotero.Items.get(id);
-          if (item) {
-            const result = await fetchAndCacheItem(item as _ZoteroTypes.Item);
-            // Invalidate per-id for both "ok" (real metrics) and "suggestion"
-            // (pending preview) so individual rows refresh as soon as their
-            // data lands, instead of waiting for the bulk metricsCache.clear()
-            // + refreshAndMaintainSelection() at the end of the batch. Makes
-            // partial-batch repaints crisper on large queues.
-            if (result.status === "ok" || result.status === "suggestion") {
-              invalidateColumnCache(id);
-            }
-          }
-        } catch (e) {
-          logError(`processFetchQueue item ${id}`, e);
-        }
-      }),
-    );
-
-    if (i + FETCH_BATCH_SIZE < ids.length) {
-      await new Promise((r) => setTimeout(r, FETCH_BATCH_DELAY_MS));
+  try {
+    while (registered && fetchQueue.size > 0) {
+      if (!readAutoFetchNow()) {
+        fetchQueue.clear();
+        break;
+      }
+      if (await runBackgroundBatch(takeFromQueue(FETCH_BATCH_SIZE))) break;
+      if (fetchQueue.size > 0) {
+        await new Promise((r) => setTimeout(r, FETCH_BATCH_DELAY_MS));
+      }
     }
+  } catch (e) {
+    logError("processFetchQueue", e);
+  } finally {
+    processingQueue = false;
   }
 
-  processingQueue = false;
+  // The pass is over, so the repaint below and the next pass start a new epoch.
+  fetchEpoch++;
+  // Repaint so a cell whose lookup found nothing, or was dropped, stops showing "…".
   metricsCache.clear();
   scheduleColumnRepaint();
+}
 
-  if (fetchQueue.size > 0 && !fetchTimer && registered) {
-    fetchTimer = setTimeout(processFetchQueue, FETCH_QUEUE_DEBOUNCE_MS);
+/** Remove up to `count` items from the front of the queue. */
+function takeFromQueue(count: number): number[] {
+  const batch: number[] = [];
+  for (const id of fetchQueue) {
+    if (batch.length === count) break;
+    batch.push(id);
   }
+  for (const id of batch) fetchQueue.delete(id);
+  return batch;
+}
+
+/** Look up one batch side by side. True when a result paused background fetching. */
+async function runBackgroundBatch(ids: number[]): Promise<boolean> {
+  const apiKey = readApiKey("");
+  for (const id of ids) fetchInFlight.add(id);
+  const stops = await Promise.all(ids.map(backgroundFetch));
+  const stop = stops.find((s) => s !== null);
+  if (!stop) return false;
+  pauseBackgroundFetching(stop, apiKey);
+  return true;
+}
+
+/** One background lookup. Resolves to what stopped it, or null; never rejects. */
+async function backgroundFetch(id: number): Promise<FetchStop | null> {
+  try {
+    const item = Zotero.Items.get(id) as _ZoteroTypes.Item | false | undefined;
+    if (!item) {
+      rememberAttempt(id);
+      return null;
+    }
+    // Free identifier lookups only: the metered title search runs when the user
+    // opens the item or fetches from the menu. A refusal is recorded once, for
+    // the whole stop, by pauseBackgroundFetching.
+    const result = await fetchAndCacheItem(item, {
+      identifierLookupsOnly: true,
+      recordRefusals: false,
+    });
+    const stop = fetchStopFor(result);
+    // Not remembered as tried, so the item is looked up once fetching resumes.
+    if (stop) return stop;
+    rememberAttempt(id);
+    // Repaint this row as soon as its data lands, rather than at the end of the pass.
+    if (result.status === "ok") invalidateColumnCache(id);
+    return null;
+  } catch (e) {
+    logError(`processFetchQueue item ${id}`, e);
+    rememberAttempt(id);
+    return null;
+  } finally {
+    fetchInFlight.delete(id);
+  }
+}
+
+/**
+ * Stop background fetching: drop the queue, and let no new lookup start until
+ * {@link backgroundFetchPaused} says otherwise. A refused request is recorded
+ * here, once for the stop; a cache that refuses writes is not, because opening
+ * it read-only already recorded why.
+ */
+function pauseBackgroundFetching(stop: FetchStop, apiKey: string): void {
+  fetchQueue.clear();
+  if (stop === "cache-unwritable") {
+    backgroundPause = { stop, apiKey: null };
+    return;
+  }
+  backgroundPause = { stop, apiKey };
+  logError(
+    "column background fetch paused until the OpenAlex API key changes",
+    stop === "auth" ? new OpenAlexAuthError() : new OpenAlexBudgetError(),
+  );
+}
+
+/**
+ * Remember that the queue looked an item up, in the current epoch.
+ *
+ * Past MAX_ATTEMPTED_FETCH_CACHE entries the oldest are forgotten, and only
+ * those can be looked up again; clearing the whole set would re-run every
+ * earlier lookup on the next repaint. An entry of the current epoch is never
+ * forgotten: an item this pass looked up, or a stale row a paint drew since the
+ * last pass ended. Each pass ends with a repaint, so forgetting a row that
+ * repaint draws queues it again, and sorting by a Citegeist column draws every
+ * row. A library with more stale rows than the cap would otherwise look the
+ * overflow up again on every pass, all session.
+ *
+ * So the map holds at most MAX_ATTEMPTED_FETCH_CACHE entries, or, when one epoch
+ * draws and looks up more items than that, as many as that epoch touched: never
+ * more than the rows Zotero's item trees hold.
+ */
+function rememberAttempt(id: number): void {
+  fetchAttempted.delete(id);
+  fetchAttempted.set(id, fetchEpoch);
+  for (const [oldest, epoch] of fetchAttempted) {
+    if (fetchAttempted.size <= MAX_ATTEMPTED_FETCH_CACHE || epoch === fetchEpoch) break;
+    fetchAttempted.delete(oldest);
+  }
+}
+
+/**
+ * Move a drawn row's entry into the current epoch, so {@link rememberAttempt}
+ * does not forget an item a repaint still draws. Re-inserting it at the end
+ * keeps the map in epoch order.
+ */
+function keepAttemptWhileDrawn(id: number): void {
+  const epoch = fetchAttempted.get(id);
+  if (epoch === undefined || epoch === fetchEpoch) return;
+  fetchAttempted.delete(id);
+  fetchAttempted.set(id, fetchEpoch);
 }

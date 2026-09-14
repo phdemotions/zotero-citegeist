@@ -4,15 +4,16 @@
  * metric-preserving writes, and two-level orphan GC.
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetCacheHarness, fakeDb } from "./_helpers/cacheHarness";
-import { initCache, _resetForTesting, deleteRow } from "../src/modules/cache/db";
+import { resetCacheHarness, fakeDb, mockZotero } from "./_helpers/cacheHarness";
+import { initCache, _resetForTesting, deleteRow, upsertRow } from "../src/modules/cache/db";
+import { garbageCollectOrphans } from "../src/modules/cache/migration";
+import { emptyRow } from "../src/modules/cache/types";
 import {
   cacheItemAuthors,
   getItemAuthors,
   getAuthor,
   setCuratedItemAuthor,
   updateAuthorMetrics,
-  garbageCollectOrphanAuthors,
   reconcileAuthorMerge,
   type CacheAuthorshipInput,
 } from "../src/modules/cache/authors";
@@ -136,13 +137,18 @@ describe("orphan GC", () => {
   });
 
   it("two-level sweep removes orphaned item_authors then unreferenced authors", async () => {
+    for (const key of ["GONE", "STAY"])
+      await upsertRow({ ...emptyRow(1, key), open_alex_id: "W1" });
     await cacheItemAuthors({ libraryID: 1, key: "GONE" }, [authorship("A1")]);
     await cacheItemAuthors({ libraryID: 1, key: "STAY" }, [authorship("A2")]);
+    // Only STAY is still in the library.
+    mockZotero.Items.getAll.mockResolvedValue([
+      { libraryID: 1, key: "STAY" },
+    ] as unknown as _ZoteroTypes.Item[]);
 
-    await garbageCollectOrphanAuthors(fakeDb as unknown as _ZoteroTypes.DBConnection, [
-      { libraryID: 1, itemKey: "GONE" },
-    ]);
+    await garbageCollectOrphans({ force: true });
 
+    expect(fakeDb.table.has("1:GONE")).toBe(false);
     expect(await getItemAuthors(1, "GONE")).toHaveLength(0);
     expect(await getItemAuthors(1, "STAY")).toHaveLength(1);
     expect(await getAuthor("A1")).toBeNull(); // orphaned author swept

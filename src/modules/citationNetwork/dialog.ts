@@ -35,6 +35,7 @@ import {
   buildCollectionTree,
 } from "./collectionPicker";
 import { resolveHostScheme } from "../ui/theme";
+import { paneForWindow, selectedCollectionsFromPane } from "../host/selection";
 import { fetchAuthorProfile, type OpenAlexAuthorProfile } from "../openalexAuthors";
 import {
   buildProfileViewModel,
@@ -56,6 +57,18 @@ export let activeDialog: HTMLElement | null = null;
  * silently committed. (ADV-U1)
  */
 let activeState: NetworkState | null = null;
+
+/**
+ * The dialog's default filing collection: the collection selected in `win`'s
+ * pane when exactly one is selected, otherwise none. With several selected, no
+ * single one is clearly where the user wants new items to go. The read never
+ * throws: a selection it cannot read gives no default, and `host/selection.ts`
+ * records why.
+ */
+export function defaultCollectionIdsFromPane(win?: Window | null): Set<number> {
+  const selected = selectedCollectionsFromPane(paneForWindow(win));
+  return new Set(selected.length === 1 ? [selected[0].id] : []);
+}
 
 /**
  * Monotonic open counter, bumped synchronously by BOTH entry points right after
@@ -179,15 +192,25 @@ function renderSkeletonRows(body: HTMLElement): void {
   safeInnerHTML(body, skeleton);
 }
 
+/**
+ * Open the citation browser for `item`.
+ *
+ * `openerWindow` is the window the request came from. A context menu passes the
+ * window it opened in, and the item pane the window it is drawn in, so the
+ * dialog parents to that window and takes its default filing collection from
+ * that window's selection rather than the most recent window's. A caller that
+ * passes none gets the most recent main window.
+ */
 export async function showCitationNetwork(
   item: _ZoteroTypes.Item,
   mode: NetworkMode,
+  openerWindow?: Window | null,
 ): Promise<void> {
   Zotero.debug(`[Citegeist] showCitationNetwork called: mode=${mode}, itemID=${item.id}`);
 
   if (!canResolveWork(item)) {
     Services.prompt.alert(
-      null,
+      openerWindow ?? null,
       "Citegeist",
       "Citegeist can't identify this item. Add a DOI, PMID, arXiv ID, or ISBN — or confirm a title match — then try again.",
     );
@@ -199,8 +222,9 @@ export async function showCitationNetwork(
   closeActiveDialog();
   dialogOpenSeq++;
 
-  // Show dialog immediately with skeleton loading state
-  const win = Zotero.getMainWindow();
+  // Show dialog immediately with skeleton loading state, in the opener's window
+  // (the most recent main window when the caller passed none; see the docblock).
+  const win = openerWindow ?? Zotero.getMainWindow();
   const doc = win.document;
   const parent = doc.body || doc.documentElement;
   const title = item.getField("title");
@@ -251,14 +275,7 @@ export async function showCitationNetwork(
   // Fetch work + existing DOIs in parallel (user sees skeleton)
   phase = "loading-data";
   const allCollections = buildCollectionTree();
-  const defaultCollectionIds = new Set<number>();
-  try {
-    const zp = Zotero.getActiveZoteroPane();
-    const currentCol = zp?.getSelectedCollection?.();
-    if (currentCol) defaultCollectionIds.add(currentCol.id);
-  } catch {
-    /* library root */
-  }
+  const defaultCollectionIds = defaultCollectionIdsFromPane(win);
 
   let work;
   let existingDOIs;
@@ -372,7 +389,10 @@ export async function showCitationNetwork(
  * mid-fetch. Once the shell exists, `activeDialog`/`activeState` guard the rest
  * exactly as the work-mode entry does.
  */
-export async function showAuthorWorks(authorId: string): Promise<void> {
+export async function showAuthorWorks(
+  authorId: string,
+  openerWindow?: Window | null,
+): Promise<void> {
   Zotero.debug(`[Citegeist] showAuthorWorks called: authorId=${authorId}`);
 
   // Tear down any currently-open dialog before opening this one, and claim this
@@ -382,7 +402,10 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
   closeActiveDialog();
   const myOpen = ++dialogOpenSeq;
 
-  const win = Zotero.getMainWindow();
+  // The window the request came from, as in showCitationNetwork: it parents the
+  // dialog and supplies the default collection. A caller that passes none gets
+  // the most recent main window.
+  const win = openerWindow ?? Zotero.getMainWindow();
   const doc = win.document;
   const parent = doc.body || doc.documentElement;
 
@@ -397,7 +420,11 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
     // code is appended to the message — a user reporting "the author view
     // won't open" still has something to quote.
     const code = codeForError(e);
-    Services.prompt.alert(null, "Citegeist", `${describeCode(code).message}\n\n${code}`);
+    Services.prompt.alert(
+      openerWindow ?? null,
+      "Citegeist",
+      `${describeCode(code).message}\n\n${code}`,
+    );
     return;
   }
 
@@ -405,7 +432,11 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
   if (myOpen !== dialogOpenSeq) return;
 
   if (!profile) {
-    Services.prompt.alert(null, "Citegeist", "This author has no OpenAlex profile to show.");
+    Services.prompt.alert(
+      openerWindow ?? null,
+      "Citegeist",
+      "This author has no OpenAlex profile to show.",
+    );
     return;
   }
 
@@ -427,14 +458,7 @@ export async function showAuthorWorks(authorId: string): Promise<void> {
   const body = dialog.querySelector(".cg-dialog-body") as HTMLElement;
   if (body) renderSkeletonRows(body);
 
-  const defaultCollectionIds = new Set<number>();
-  try {
-    const zp = Zotero.getActiveZoteroPane();
-    const currentCol = zp?.getSelectedCollection?.();
-    if (currentCol) defaultCollectionIds.add(currentCol.id);
-  } catch {
-    /* library root */
-  }
+  const defaultCollectionIds = defaultCollectionIdsFromPane(win);
 
   const state: NetworkState = {
     phase: "ready",

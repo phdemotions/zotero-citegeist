@@ -25,7 +25,9 @@ import {
   OPENALEX_RATE_REMAINING_HEADER,
   MAX_ABSTRACT_LENGTH,
   MAX_ABSTRACT_POSITION,
-  PREF_OPENALEX_API_KEY,
+  PREF_OPENALEX_BASE_URL,
+  OPENALEX_API_BASE_URL,
+  OPENALEX_BASE_URL_OVERRIDE_HOSTS,
 } from "../constants";
 import {
   OpenAlexNetworkError,
@@ -35,8 +37,7 @@ import {
   normalizeError,
   logError,
 } from "./utils";
-
-const OPENALEX_BASE = "https://api.openalex.org";
+import { getOpenAlexApiKey, getPref } from "./prefs";
 
 export interface OpenAlexWork {
   id: string;
@@ -108,10 +109,50 @@ export interface OpenAlexListResponse {
  */
 function getApiKey(): string {
   try {
-    const key = Zotero.Prefs.get(PREF_OPENALEX_API_KEY) as string;
-    return (key || "").trim();
+    return getOpenAlexApiKey();
   } catch {
     return "";
+  }
+}
+
+/** Where requests go: the production API, or a loopback stub the override pref names. */
+export interface OpenAlexBase {
+  url: string;
+  /** True only when a valid loopback override is in effect. */
+  overridden: boolean;
+}
+
+/**
+ * Resolve the OpenAlex base URL from the raw value of the override pref.
+ *
+ * The override exists so the real-Zotero suite can point Citegeist at a local
+ * stub server. It is honoured only for an http(s) URL whose host is loopback
+ * and which carries no credentials, query or fragment. Anything else resolves
+ * to the production API: unset, malformed, another host, or a userinfo trick
+ * such as `http://127.0.0.1@evil.example` (whose host is `evil.example`). Pure,
+ * so the allowlist is unit-tested without Zotero.
+ */
+export function resolveOpenAlexBase(raw: unknown): OpenAlexBase {
+  const production: OpenAlexBase = { url: OPENALEX_API_BASE_URL, overridden: false };
+  if (typeof raw !== "string" || raw.trim() === "") return production;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw.trim());
+  } catch {
+    return production;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return production;
+  if (!OPENALEX_BASE_URL_OVERRIDE_HOSTS.includes(parsed.hostname)) return production;
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) return production;
+  return { url: `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`, overridden: true };
+}
+
+/** Read the base-URL override pref; a pref Zotero cannot read resolves to production. */
+function getOpenAlexBase(): OpenAlexBase {
+  try {
+    return resolveOpenAlexBase(getPref(PREF_OPENALEX_BASE_URL));
+  } catch {
+    return resolveOpenAlexBase(undefined);
   }
 }
 
@@ -121,18 +162,21 @@ function getApiKey(): string {
  * key-attachment + centralized-redaction contract instead of re-implementing it.
  */
 export function buildUrl(path: string, params: Record<string, string> = {}): string {
+  const base = getOpenAlexBase();
   // The key rides the query string (OpenAlex's documented mechanism as of
   // July 2026 — a header form is an open question). It is never logged: the
   // retry/error paths log `label`, not the URL, and normalizeError() redacts
   // any URL that reaches it. Prefer a header here if OpenAlex confirms one.
-  const apiKey = getApiKey();
+  // It is only ever attached for the production host: a loopback override is a
+  // test stub, not OpenAlex, so it gets anonymous requests.
+  const apiKey = base.overridden ? "" : getApiKey();
   if (apiKey) {
     params.api_key = apiKey;
   }
   const query = Object.entries(params)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join("&");
-  return `${OPENALEX_BASE}${path}${query ? "?" + query : ""}`;
+  return `${base.url}${path}${query ? "?" + query : ""}`;
 }
 
 /**
@@ -148,26 +192,47 @@ export function resolveCanonicalId(body: { id?: string | null } | null | undefin
 }
 
 // ── Centralized rate limiter ──
-// OpenAlex polite pool allows 10 req/s. We target 8 to stay safe.
+// Every OpenAlex request, first attempt or retry, starts at least
+// OPENALEX_RATE_LIMIT_MS after the one before it: 8 req/s.
+
+/** When the latest request was let through. */
 let lastRequestTime = 0;
+/** The latest caller's turn. The next caller waits for it. */
+let latestSlot: Promise<void> = Promise.resolve();
 
 /**
- * The single global rate limiter for every OpenAlex call (8 req/s). Exported so
- * the sibling authors client shares this one `lastRequestTime` — a second copy
- * would silently break the global budget. Never call `Zotero.HTTP` for OpenAlex
- * directly; route through here.
+ * Wait for this request's turn. Each caller waits for the caller before it, then
+ * for the rest of the interval, so callers arriving in the same tick go out one
+ * interval apart instead of all reading the same `lastRequestTime` and firing
+ * together. One wait never exceeds the interval, so a clock set backwards cannot
+ * hold requests off.
  */
-export async function rateLimitedFetch<T>(url: string, label: string, attempt = 0): Promise<T> {
-  const now = Date.now();
-  const elapsed = now - lastRequestTime;
-  if (elapsed < OPENALEX_RATE_LIMIT_MS) {
-    await new Promise((r) => setTimeout(r, OPENALEX_RATE_LIMIT_MS - elapsed));
-  }
-  lastRequestTime = Date.now();
-  return fetchJson<T>(url, label, attempt);
+function waitForRequestSlot(): Promise<void> {
+  const slot = latestSlot.then(async () => {
+    const wait = Math.min(
+      OPENALEX_RATE_LIMIT_MS,
+      OPENALEX_RATE_LIMIT_MS - (Date.now() - lastRequestTime),
+    );
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastRequestTime = Date.now();
+  });
+  latestSlot = slot;
+  return slot;
 }
 
+/**
+ * The single global rate limiter for every OpenAlex call. Exported so the
+ * sibling authors client waits in this one line — a second copy would silently
+ * break the global rate. Never call `Zotero.HTTP` for OpenAlex directly; route
+ * through here.
+ */
+export async function rateLimitedFetch<T>(url: string, label: string): Promise<T> {
+  return fetchJson<T>(url, label, 0);
+}
+
+/** One attempt at a request. It waits its turn first, and a retry calls it again, so a retry waits too. */
 async function fetchJson<T>(url: string, label: string, attempt: number): Promise<T> {
+  await waitForRequestSlot();
   let response: {
     status: number;
     responseText: string;

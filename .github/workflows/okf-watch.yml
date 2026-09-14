@@ -18,7 +18,11 @@ on:
 
 permissions:
   contents: read
-  issues: write
+
+# GitHub runs `shell: bash` as `bash --noprofile --norc -eo pipefail {0}`.
+defaults:
+  run:
+    shell: bash
 
 concurrency:
   group: okf-watch
@@ -26,11 +30,18 @@ concurrency:
 
 jobs:
   drift:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Only this job opens or comments on the tracking issue.
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 10
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Check OKF upstream drift
         id: drift
@@ -60,13 +71,14 @@ jobs:
             echo '```'
             echo
             echo "Process: \`docs/STANDARDS.md\` -> \"Tracking upstream\". Bump the pin in \`docs/STANDARDS.md\` + the canonical \`~/developer/docs/standards/okf-adoption.md\` once reviewed."
-          } > /tmp/okf-issue.md
+          } > "$RUNNER_TEMP/okf-issue.md"
+          # jq's first, not a pipe into head, which pipefail would fail when gh sees the pipe close.
           existing=$(gh issue list --state open --json number,title \
-            --jq ".[] | select(.title==\"$title\") | .number" | head -1)
+            --jq "map(select(.title == \"$title\")) | first | .number // empty")
           if [ -n "${existing:-}" ]; then
-            gh issue comment "$existing" --body-file /tmp/okf-issue.md
+            gh issue comment "$existing" --body-file "$RUNNER_TEMP/okf-issue.md"
           else
-            gh issue create --title "$title" --body-file /tmp/okf-issue.md
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/okf-issue.md"
           fi
 
       - name: Fail on drift-check error

@@ -5,6 +5,24 @@
  * reviewers can audit limits without grepping the codebase.
  */
 
+// ── OpenAlex endpoint ──
+/**
+ * Production OpenAlex API origin: the only non-loopback host Citegeist ever
+ * sends a request, or the opt-in `api_key`, to.
+ */
+export const OPENALEX_API_BASE_URL = "https://api.openalex.org";
+/**
+ * Hosts the {@link PREF_OPENALEX_BASE_URL} override may point at. Loopback only,
+ * so the real-Zotero suite can aim Citegeist at a local stub server while a
+ * user's key can never be redirected to another machine. `[::1]` is how the
+ * WHATWG URL parser spells the IPv6 loopback in `URL.hostname`.
+ */
+export const OPENALEX_BASE_URL_OVERRIDE_HOSTS: readonly string[] = [
+  "127.0.0.1",
+  "[::1]",
+  "localhost",
+];
+
 // ── OpenAlex rate limiting ──
 /** Polite pool target: 8 req/s (cap is 10 req/s). */
 export const OPENALEX_RATE_LIMIT_MS = 125;
@@ -41,7 +59,13 @@ export const DEFAULT_CACHE_LIFETIME_DAYS = 7;
 export const AUTO_FETCH_PREF_TTL_MS = 5000;
 
 // ── Column fetch queue ──
-/** Max items we'll remember as "already attempted" before clearing. */
+/**
+ * Items the column queue remembers as looked up this session before it forgets
+ * any, oldest first; only those can be looked up again. It never forgets an item
+ * the running pass looked up or a stale row drawn since the last pass ended, so
+ * one pass over more rows than this grows the set to that many (see
+ * rememberAttempt in citationColumn.ts).
+ */
 export const MAX_ATTEMPTED_FETCH_CACHE = 10_000;
 /** Debounce before a column fetch batch kicks off. */
 export const FETCH_QUEUE_DEBOUNCE_MS = 500;
@@ -55,6 +79,12 @@ export const BULK_FETCH_DELAY_MS = 100;
 export const PROGRESS_WINDOW_ERROR_CLOSE_MS = 5000;
 /** How long the batch ProgressWindow lingers after a successful summary before auto-closing. */
 export const PROGRESS_WINDOW_DONE_CLOSE_MS = 6000;
+/**
+ * The words for a cache Citegeist can read but must not write (CG-DB03, CG-DB04).
+ * They head the notice startup shows once, and they give the reason a batch
+ * summary names for the items it skipped, so the two read as one condition.
+ */
+export const CACHE_READ_ONLY_HEADLINE = "Citegeist is showing saved data only";
 /**
  * Debounce for the coalesced column repaint. A burst of per-item cache
  * invalidations (a collection/library fetch resolving item by item) collapses
@@ -70,6 +100,11 @@ export const MAX_RENDERED_RESULTS = 200;
 export const UNDO_TIMEOUT_MS = 3000;
 /** Default per-page size for citation network queries. */
 export const DEFAULT_NETWORK_PAGE_SIZE = 25;
+/**
+ * Largest page the citation browser requests. OpenAlex rejects a `per_page`
+ * above 200, and the settings field stops there too (`max="200"`).
+ */
+export const NETWORK_PAGE_SIZE_MAX = 200;
 /** Debounce for the dialog search input. */
 export const SEARCH_DEBOUNCE_MS = 200;
 /** Infinite-scroll threshold in px from bottom. */
@@ -94,6 +129,43 @@ export const ORPHAN_GC_CHUNK_SIZE = 200;
 export const MAX_BACKUP_FILES = 5;
 /** Minimum interval between orphan-GC sweeps at startup. */
 export const ORPHAN_GC_MIN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// ── SQLite cache schema version (plan KTD11) ──
+/**
+ * Schema major of `citegeist.sqlite`. Bump it for any change an older build of
+ * the same major could damage by writing to the database:
+ * - adding a column to `item_cache` or `item_authors`. Older builds write those
+ *   tables with `INSERT OR REPLACE` and an explicit column list (upsertRow,
+ *   mutateRow, cacheItemAuthors, setCuratedItemAuthor), which deletes the row and
+ *   reinserts only the columns they know, so the new column's value is wiped;
+ * - tightening a constraint (NOT NULL, UNIQUE, CHECK) an older build's writes
+ *   can violate;
+ * - dropping, renaming or retyping a table or column, or changing what a column
+ *   means.
+ * A build that opens a database stamped with a newer major refuses every write
+ * (CG-DB03). The rule and its reasoning live in docs/DESIGN.md.
+ */
+export const CACHE_SCHEMA_MAJOR = 1;
+/**
+ * Schema minor: counts additive changes that no older build's write can damage,
+ * such as a new table or index, within a major. A newer minor changes nothing
+ * for an older build of the same major. Must stay below
+ * {@link CACHE_SCHEMA_STAMP_MULTIPLIER}.
+ */
+export const CACHE_SCHEMA_MINOR = 0;
+/**
+ * `PRAGMA user_version` stores major × this + minor, so schema 1.0 is 1000 and
+ * SQLite's default of 0 always means "unstamped".
+ */
+export const CACHE_SCHEMA_STAMP_MULTIPLIER = 1000;
+/**
+ * A stored schema major at or above this was never written by any Citegeist
+ * release (it would take 99 major bumps). Such a stamp, like a negative or
+ * unreadable one, points at a damaged file or another tool rather than a newer
+ * Citegeist, so the read-only session says to move the file aside (CG-DB04)
+ * instead of "update Citegeist" (CG-DB03).
+ */
+export const CACHE_SCHEMA_UNRECOGNISED_MAJOR = 100;
 
 // ── Timeouts ──
 /** Per-item saveTx timeout during migration. A single locked item must
@@ -120,6 +192,15 @@ export const PREF_AUTO_FETCH = "extensions.zotero.citegeist.autoFetch";
  * never logged (redacted via {@link redactApiKey}). Empty/unset → anonymous.
  */
 export const PREF_OPENALEX_API_KEY = "extensions.zotero.citegeist.openAlexApiKey";
+/**
+ * Hidden, test-only override of the OpenAlex base URL: no settings UI and no
+ * default in `addon/prefs.js`. Honoured only for a loopback http(s) URL (see
+ * {@link OPENALEX_BASE_URL_OVERRIDE_HOSTS} and `resolveOpenAlexBase`), so the
+ * real-Zotero suite can aim Citegeist at a local stub server; the `api_key` is
+ * never attached while it is in effect. Read it through `getPref` in
+ * `src/modules/prefs.ts`, like every Citegeist pref.
+ */
+export const PREF_OPENALEX_BASE_URL = "extensions.zotero.citegeist.openAlexBaseUrl";
 export const PREF_NETWORK_PAGE_SIZE = "extensions.zotero.citegeist.networkPageSize";
 
 /**
@@ -156,6 +237,10 @@ export const NO_MATCH_RETRY_DAYS = 30;
  * GitHub comment.
  */
 export const DIAGNOSTIC_RING_BUFFER_SIZE = 50;
+/** Delay before a startup notice opens, so the main window has finished drawing. */
+export const CODED_NOTICE_DELAY_MS = 2000;
+/** How long a coded notice (e.g. the read-only cache notice) stays up before it closes itself. */
+export const CODED_NOTICE_CLOSE_MS = 15_000;
 
 /** How long the diagnostic "Copy report" button shows "Copied" before reverting. */
 export const COPY_FEEDBACK_REVERT_MS = 2000;

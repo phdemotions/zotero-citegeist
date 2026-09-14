@@ -2,10 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildDialogHTML,
   buildAuthorDialogHTML,
+  defaultCollectionIdsFromPane,
   getItemSourceMetaLine,
+  showAuthorWorks,
   showCitationNetwork,
 } from "../src/modules/citationNetwork/dialog";
 import type { ProfileViewModel } from "../src/modules/authorProfile";
+import { clearRecordedFailures, selectionUnreadableReports } from "./_helpers/menuHarness";
 
 // The dialog resolves the work through citationService; mock that surface so the
 // identifier gate can be driven without standing up the OpenAlex/cache stack.
@@ -16,6 +19,52 @@ const serviceMocks = vi.hoisted(() => ({
 vi.mock("../src/modules/citationService", () => ({
   canResolveWork: serviceMocks.canResolveWork,
   resolveWorkForItem: serviceMocks.resolveWorkForItem,
+}));
+
+// Opening the dialog for real needs its network and library reads stubbed: the
+// results load, the library DOI search, the collection tree, and the author
+// lookup and cache writes. Everything else, including the default-collection
+// label, runs as shipped.
+const openMocks = vi.hoisted(() => ({
+  loadResults: vi.fn(async () => {}),
+  getExistingDOIs: vi.fn(async () => new Set<string>()),
+  buildCollectionTree: vi.fn(() => [
+    { id: 3, name: "Grant A", depth: 0, parentId: false, hasChildren: false },
+    { id: 4, name: "Grant B", depth: 0, parentId: false, hasChildren: false },
+  ]),
+  fetchAuthorProfile: vi.fn(async () => ({ id: "https://openalex.org/A5" })),
+}));
+vi.mock("../src/modules/citationNetwork/results", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadResults: openMocks.loadResults,
+}));
+vi.mock("../src/modules/citationNetwork/actions", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getExistingDOIs: openMocks.getExistingDOIs,
+}));
+vi.mock("../src/modules/citationNetwork/collectionPicker", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  buildCollectionTree: openMocks.buildCollectionTree,
+}));
+vi.mock("../src/modules/openalexAuthors", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  fetchAuthorProfile: openMocks.fetchAuthorProfile,
+}));
+vi.mock("../src/modules/authorProfile", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  buildProfileViewModel: vi.fn(() => ({
+    name: "Baumeister, R. F.",
+    orcid: null,
+    orcidUrl: null,
+    openAlexUrl: "https://openalex.org/A5",
+    hIndex: "164",
+    i10Index: "612",
+    worksCount: "731",
+    citedByCount: "214,853",
+    lowerBound: false,
+  })),
+  persistProfileMetrics: vi.fn(),
+  maybeReconcileMerge: vi.fn(),
 }));
 
 function makeItem(opts: {
@@ -200,6 +249,204 @@ describe("buildAuthorDialogHTML", () => {
     expect(html).toContain("A &lt;x&gt; &amp; B");
     expect(html).not.toContain("A <x>");
     expect(html).toContain("≥ 40");
+  });
+});
+
+describe("defaultCollectionIdsFromPane (default filing collection)", () => {
+  const col = (id: number) => ({ id }) as unknown as _ZoteroTypes.Collection;
+  const removed = () => {
+    throw new Error("getSelectedCollection() was removed -- use getSelectedCollections()");
+  };
+
+  /** The most recent window's pane, which a window without its own pane falls back to. */
+  function stubActivePane(pane: Record<string, unknown> | null) {
+    vi.stubGlobal("Zotero", { debug: vi.fn(), getActiveZoteroPane: () => pane });
+  }
+
+  beforeEach(async () => {
+    await clearRecordedFailures();
+  });
+
+  it("gives no default when two collections are selected", () => {
+    stubActivePane({
+      getSelectedCollections: () => [col(1), col(2)],
+      getSelectedCollection: removed,
+    });
+    expect([...defaultCollectionIdsFromPane()]).toEqual([]);
+  });
+
+  it("defaults to the one selected collection", () => {
+    stubActivePane({ getSelectedCollections: () => [col(3)], getSelectedCollection: removed });
+    expect([...defaultCollectionIdsFromPane()]).toEqual([3]);
+  });
+
+  it("reads the dialog window's own pane, not the most recent window's", () => {
+    stubActivePane({ getSelectedCollections: () => [col(3)], getSelectedCollection: removed });
+    const win = {
+      ZoteroPane: { getSelectedCollections: () => [col(9)], getSelectedCollection: removed },
+    } as unknown as Window;
+    expect([...defaultCollectionIdsFromPane(win)]).toEqual([9]);
+  });
+
+  it("falls back to getSelectedCollection on a pane without the plural getter", () => {
+    stubActivePane({ getSelectedCollection: () => col(5) });
+    expect([...defaultCollectionIdsFromPane()]).toEqual([5]);
+  });
+
+  it("gives no default for a library root on Zotero 7–9", () => {
+    stubActivePane({ getSelectedCollection: () => false });
+    expect([...defaultCollectionIdsFromPane()]).toEqual([]);
+  });
+
+  it("gives no default when no main window is open", () => {
+    stubActivePane(null);
+    expect([...defaultCollectionIdsFromPane()]).toEqual([]);
+  });
+
+  it("gives no default, without throwing, and records CG-UI02 when the selection read throws", async () => {
+    stubActivePane({
+      getSelectedCollections: () => {
+        throw new Error("host broke");
+      },
+      getSelectedCollection: removed,
+    });
+    expect([...defaultCollectionIdsFromPane()]).toEqual([]);
+    expect(await selectionUnreadableReports()).toHaveLength(1);
+  });
+});
+
+describe("opening the dialog picks the default filing collection from the selection", () => {
+  const collections = (...ids: number[]) => ({
+    getSelectedCollections: () => ids.map((id) => ({ id }) as _ZoteroTypes.Collection),
+    getSelectedCollection: () => {
+      throw new Error("getSelectedCollection() was removed -- use getSelectedCollections()");
+    },
+  });
+
+  /**
+   * A main window just real enough for the dialog to open in: every element
+   * accepts the calls the shell makes, and the default-collection label and its
+   * `+N` suffix are the only elements a query finds.
+   */
+  function dialogWindow(pane: unknown) {
+    const found = new Map<string, Record<string, unknown>>();
+    const element = (): Record<string, unknown> => ({
+      id: "",
+      textContent: "",
+      hidden: false,
+      firstChild: null,
+      style: { cssText: "" },
+      dataset: {},
+      setAttribute: vi.fn(),
+      appendChild: vi.fn(),
+      insertBefore: vi.fn(),
+      remove: vi.fn(),
+      focus: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => true),
+      querySelector: (selector: string) => found.get(selector) ?? null,
+      querySelectorAll: () => [],
+    });
+    const label = element();
+    found.set("#cg-default-label", label);
+    found.set("#cg-default-extra", element());
+    const body = element();
+    const document = { body, documentElement: element(), createElementNS: element };
+    return { win: { document, ZoteroPane: pane } as unknown as Window, label, body };
+  }
+
+  const item = {
+    id: 1,
+    getField: () => "Brand love",
+    getCreators: () => [],
+  } as unknown as _ZoteroTypes.Item;
+  const opens: Array<[string, (win?: Window) => Promise<void>]> = [
+    ["showCitationNetwork", (win) => showCitationNetwork(item, "citing", win)],
+    ["showAuthorWorks", (win) => showAuthorWorks("A5", win)],
+  ];
+
+  /** The dialog state handed to the first results load. */
+  function loadedState() {
+    const [state] = openMocks.loadResults.mock.calls.at(-1) as unknown as [
+      { win: Window; overlay: unknown; defaultCollectionIds: Set<number> },
+    ];
+    return state;
+  }
+
+  async function openWith(open: (win?: Window) => Promise<void>, pane: unknown) {
+    const { win, label } = dialogWindow(pane);
+    vi.stubGlobal("Zotero", {
+      debug: vi.fn(),
+      getMainWindow: () => win,
+      getActiveZoteroPane: () => null,
+    });
+    await open();
+    return { label: label.textContent, filing: [...loadedState().defaultCollectionIds] };
+  }
+
+  it.each(opens)(
+    "%s opens in the window it is given and files into that window's selection, not the main window's",
+    async (_name, open) => {
+      // The main window (the most recent) has Grant A selected; the window the
+      // menu opened in has Grant B.
+      const main = dialogWindow(collections(3));
+      const menu = dialogWindow(collections(4));
+      vi.stubGlobal("Zotero", {
+        debug: vi.fn(),
+        getMainWindow: () => main.win,
+        getActiveZoteroPane: () => collections(3),
+      });
+
+      await open(menu.win);
+
+      const state = loadedState();
+      expect(state.win).toBe(menu.win);
+      expect([...state.defaultCollectionIds]).toEqual([4]);
+      expect(menu.label.textContent).toBe("Grant B");
+      expect(menu.body.appendChild).toHaveBeenCalledWith(state.overlay);
+      expect(main.body.appendChild).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(opens)("%s opens in the main window when it is given none", async (_name, open) => {
+    const main = dialogWindow(collections(3));
+    vi.stubGlobal("Zotero", {
+      debug: vi.fn(),
+      getMainWindow: () => main.win,
+      getActiveZoteroPane: () => null,
+    });
+
+    await open();
+
+    expect(loadedState().win).toBe(main.win);
+    expect(main.body.appendChild).toHaveBeenCalledWith(loadedState().overlay);
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    serviceMocks.canResolveWork.mockReturnValue(true);
+    serviceMocks.resolveWorkForItem.mockResolvedValue({
+      id: "https://openalex.org/W1",
+      cited_by_count: 3,
+    });
+    vi.stubGlobal("Services", { prompt: { alert: vi.fn() } });
+    vi.stubGlobal(
+      "DOMParser",
+      class {
+        parseFromString() {
+          return { body: { childNodes: [] } };
+        }
+      },
+    );
+  });
+
+  it.each(opens)("%s files into, and labels, the one selected collection", async (_name, open) => {
+    expect(await openWith(open, collections(3))).toEqual({ label: "Grant A", filing: [3] });
+  });
+
+  it.each(opens)("%s gives no default when two collections are selected", async (_name, open) => {
+    expect(await openWith(open, collections(3, 4))).toEqual({ label: "My Library", filing: [] });
   });
 });
 

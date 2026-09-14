@@ -7,13 +7,23 @@ import globals from "globals";
 export default [
   // Global ignores
   {
-    ignores: ["build/**", "node_modules/**", "scripts/**", "addon/**", ".claude/**"],
+    ignores: ["build/**", "node_modules/**", "addon/**", ".claude/**"],
   },
 
   // Base JS recommendations (non-TS files only)
   {
     ...js.configs.recommended,
     files: ["**/*.js", "**/*.mjs"],
+  },
+
+  // Node scripts: the build, the release scripts the workflows run, and their test fixtures
+  {
+    files: ["scripts/**/*.mjs", "test/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
   },
 
   // TypeScript source + tests

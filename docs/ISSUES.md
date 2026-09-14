@@ -18,8 +18,8 @@ tags: [citegeist, issues]
 
 | Priority     | Open |
 | ------------ | ---- |
-| P0 (Blocker) | 0    |
-| P1 (High)    | 2    |
+| P0 (Blocker) | 1    |
+| P1 (High)    | 3    |
 | P2 (Medium)  | 2    |
 | P3 (Low)     | 7    |
 
@@ -29,11 +29,23 @@ Feature requests are not tracked here — they live in [`BACKLOG.md`](BACKLOG.md
 
 ## P0 — Blockers
 
-_None currently._
+### BUG-Z10-INSTALL: Citegeist cannot be installed on Zotero 10
+
+**Impact:** Every Zotero 10 user is locked out. v2.0.5's manifest and the live `update.json` both cap the plugin at `strict_max_version: "9.*"`, so Zotero 10.0.x refuses the install ("could not be installed. It may be incompatible with this version of Zotero") and disables an existing copy after upgrading. Zotero 10.0 shipped 2026-08-17; the first report arrived 2026-09-13 on the Zotero forums ([comment 518143](https://forums.zotero.org/discussion/comment/518143#Comment_518143), Zotero 10.0.2, Windows 11). No GitHub issue exists yet.
+**Status:** Planned in `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`: a same-day `update.json` cap raise for v2.0.5 once it passes a real Zotero 10 smoke run (U17), then a v2.0.6 hotfix from the v2.0.5 tag (U3). On `main`, the manifest now takes its range from `package.json` (capped `10.0.*`), and Zotero 10's throwing singular selection getters are replaced (U1, U2). Draft PR [#93](https://github.com/phdemotions/zotero-citegeist/pull/93).
+**Fix:** Ship U17 and U3; the scheduled Zotero watch (U10) catches the next cap lockout before users do.
+**Found:** 2026-09-13.
 
 ---
 
 ## P1 — High Priority
+
+### BUG-PREFS: Settings-pane choices are never read (doubled pref prefix)
+
+**Impact:** Changing auto-fetch, cache lifetime, or citation-network page size in Zotero → Settings → Citegeist has no effect, and on `main` the optional OpenAlex API key is never sent. Zotero's `Zotero.Prefs.get(pref, global)` and `set(pref, value, global)` prepend `extensions.zotero.` unless `global` is `true` (Zotero `chrome/content/zotero/xpcom/prefs.js` at tag 10.0.2). Citegeist's pref constants are already full names (`extensions.zotero.citegeist.*`) and every call omits `true`, so each read looks up `extensions.zotero.extensions.zotero.citegeist.*`, which is never set. Released v2.0.5 carries the same pattern. Internal flags (migration done, relation purge done, last orphan GC, last backup path) were written and read under the same doubled name, so a naive fix would re-run the one-shot migration and purge for every user.
+**Status:** Landed on `fix/zotero-10-compat` (draft PR [#93](https://github.com/phdemotions/zotero-citegeist/pull/93)) as plan unit U18: commit 6215ec0 and the review-round-1 fix commit after it. `src/modules/prefs.ts` is the only module that reads or writes a Citegeist pref, always under its real name, and `test/prefs-invariants.test.ts` bans direct `Zotero.Prefs` calls elsewhere. Three internal flags (migration done, relation purge done, last backup path) are read from the doubled name when the real name is unset and copied forward. The doubled keys are kept on purpose, for downgrade safety: v2.0.5 reads only that name, so Citegeist never removes one, and it writes `migrationV1Complete` there too, or a downgrade would migrate again and strip `Citegeist match ID:` lines. `lastOrphanGcAt` is excluded from the fallback: earlier builds wrote `Date.now()` into a 32-bit integer pref, so the doubled value is a wrapped number unrelated to the time, and copying it would make the real name an integer pref that wraps every later write. It is now stored as a decimal string. Because the settings are now read, auto-fetch runs for the first time; U18 limits it to free identifier lookups and stops it on a rejected key, a spent budget or a read-only cache. Found by the real-Zotero harness work (U4), confirmed against Zotero source.
+**Fix:** Ship in v3.0.0; not in the v2.0.6 hotfix, whose scope stays minimal.
+**Found:** 2026-09-13.
 
 ### BUG-MENU: Right-click menu stops responding after one use on Zotero 8/9 (#67, #72)
 
@@ -45,8 +57,8 @@ _None currently._
 ### BUG-QUIT: Zotero 9.0.6 hangs on quit → force-quit required (#78)
 
 **Impact:** With Citegeist enabled, quitting Zotero 9.0.6 shows a spinning loader and never exits; the user must force-quit. Reported on v2.0.5 / macOS. A hang on every quit is severe.
-**Status:** Not yet reproduced or root-caused. `main`/v3.0.0 reworked the shutdown path (bounded cache-drain capped at `CLOSE_CACHE_DRAIN_TIMEOUT_MS`, explicit `chromeHandle.destruct()` on shutdown), which **may** address it, but it is a distinct symptom that needs real-Z9 confirmation. Added to the release-checklist smoke as a "clean quit, no hang" check.
-**Fix:** Reproduce on real Z9.0.6; trace `onShutdown` (`hooks.ts`) — an unresolved await in menu/cache teardown, or the `registerChrome`/GC path — as the likely culprit.
+**Status:** Not yet reproduced or root-caused. The v3.0.0 shutdown rework on `main` (bounded cache drain, explicit `chromeHandle.destruct()`) does **not** run on quit: `addon/bootstrap.js` returns early on `APP_SHUTDOWN` in both v2.0.5 and `main`, so `onShutdown` and `closeCache()` never execute when the user quits, and the plugin's own `Zotero.DBConnection("citegeist")` is still open at exit. Treat #78 as open on `main`. Planned as U6 in `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`.
+**Fix:** Reproduce on real Z9.0.6 (macOS) with Debug Output and confirm the blocker in Zotero/Firefox source before changing code. Leads, none confirmed: the open SQLite connection at quit; `bootstrap.js` dropping the promise from `citegeist.shutdown()`; unbounded awaits in `closeCache()`; fetch batches that cannot be cancelled.
 **Found:** 2026-07-23.
 
 ---

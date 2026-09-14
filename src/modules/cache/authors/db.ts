@@ -1,13 +1,16 @@
 /**
  * Author-table schema + garbage collection.
  *
- * Additive-only: two `CREATE TABLE IF NOT EXISTS` statements run from the
- * cache's `doInit` (no schema-version gate, no ALTER TABLE — see the plan's
- * KTD4). There is no in-memory mirror for authors in v1: reads (`read.ts`)
- * query SQLite asynchronously, which the item pane can do in `onAsyncRender`.
+ * Additive-only: two `CREATE TABLE IF NOT EXISTS` statements, which the cache's
+ * schema setup runs in the same transaction as the `item_cache` DDL and the
+ * stamp (no ALTER TABLE — see the plan's KTD4). A read-only open runs none of
+ * them. Every function here writes, so each takes the caller's
+ * `WriteTransaction`. There is no in-memory mirror for authors in v1: reads
+ * (`read.ts`) query SQLite asynchronously, which the item pane can do in
+ * `onAsyncRender`.
  */
 
-import { ORPHAN_GC_CHUNK_SIZE } from "../../../constants";
+import { runWrite, type WriteTransaction } from "../db";
 import type { SqliteBindValue } from "../types";
 
 const AUTHORS_SCHEMA = `
@@ -34,43 +37,41 @@ CREATE TABLE IF NOT EXISTS item_authors (
 );
 `;
 
-/**
- * Create the author tables. Called from the cache's `doInit` after the
- * `item_cache` schema, on the same connection. Idempotent.
- */
-export async function createAuthorSchema(conn: _ZoteroTypes.DBConnection): Promise<void> {
-  await conn.queryAsync(AUTHORS_SCHEMA);
-  await conn.queryAsync(ITEM_AUTHORS_SCHEMA);
+/** Create the author tables on the schema setup's transaction. Idempotent. */
+export async function createAuthorSchema(tx: WriteTransaction): Promise<void> {
+  await runWrite(tx, AUTHORS_SCHEMA);
+  await runWrite(tx, ITEM_AUTHORS_SCHEMA);
 }
 
 /**
- * Two-level orphan sweep, invoked from `garbageCollectOrphans` with the same
- * orphan set it computed for `item_cache`:
- *   1. delete `item_authors` rows for items no longer in any library, and
- *   2. delete `authors` rows left with no referencing `item_authors`.
+ * Delete the `item_authors` rows of items no longer in any library. Orphan GC
+ * calls it for each chunk, on the transaction that deletes the same items'
+ * `item_cache` rows, so an item's rows go together or not at all.
  *
- * Note: curated `item_authors` rows for a genuinely-removed item are deleted
- * along with the item (the item is gone). This mirrors the item_cache GC's
- * treatment of non-confirmed rows; author identity re-resolves cheaply on a
- * later fetch if the item returns.
+ * Curated `item_authors` rows for a genuinely-removed item are deleted along
+ * with the item (the item is gone). This mirrors the item_cache GC's treatment
+ * of non-confirmed rows; author identity re-resolves cheaply on a later fetch if
+ * the item returns.
  */
-export async function garbageCollectOrphanAuthors(
-  conn: _ZoteroTypes.DBConnection,
+export async function deleteOrphanItemAuthors(
+  tx: WriteTransaction,
   orphans: ReadonlyArray<{ libraryID: number; itemKey: string }>,
 ): Promise<void> {
-  for (let i = 0; i < orphans.length; i += ORPHAN_GC_CHUNK_SIZE) {
-    const slice = orphans.slice(i, i + ORPHAN_GC_CHUNK_SIZE);
-    const tuplePlaceholders = slice.map(() => "(?, ?)").join(",");
-    const params: SqliteBindValue[] = [];
-    for (const o of slice) params.push(o.libraryID, o.itemKey);
-    await conn.queryAsync(
-      `DELETE FROM item_authors WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
-      params,
-    );
-  }
+  if (orphans.length === 0) return;
+  const tuplePlaceholders = orphans.map(() => "(?, ?)").join(",");
+  const params: SqliteBindValue[] = [];
+  for (const o of orphans) params.push(o.libraryID, o.itemKey);
+  await runWrite(
+    tx,
+    `DELETE FROM item_authors WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
+    params,
+  );
+}
 
-  // Sweep authors no longer referenced by any item_authors row.
-  await conn.queryAsync(
+/** Delete `authors` rows that no `item_authors` row references any more. */
+export async function deleteUnreferencedAuthors(tx: WriteTransaction): Promise<void> {
+  await runWrite(
+    tx,
     `DELETE FROM authors WHERE author_id NOT IN (SELECT DISTINCT author_id FROM item_authors)`,
   );
 }

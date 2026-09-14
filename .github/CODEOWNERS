@@ -1,0 +1,20 @@
+# The maintainer reviews every change that can reach installed copies through a
+# release: what CI and the release workflows run, the scripts they call, the
+# build inputs that shape the shipped XPI, and the tests that hold the release
+# gates in place. A published release reaches every installed copy through the
+# update channel on its next update check.
+#
+# GitHub enforces this only while branch protection on main has "Require review
+# from Code Owners" on (docs/RELEASE-CHECKLIST.md, section 0).
+/.github/ @phdemotions
+/scripts/ @phdemotions
+/tools/ @phdemotions
+/addon/manifest.json @phdemotions
+/package.json @phdemotions
+/package-lock.json @phdemotions
+/zotero-plugin.config.ts @phdemotions
+/test/workflow-invariants.test.ts @phdemotions
+/test/release-guard.test.ts @phdemotions
+/test/release-scripts.test.ts @phdemotions
+/test/release-fixtures/ @phdemotions
+/test/real-zotero/harness/ @phdemotions

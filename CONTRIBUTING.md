@@ -71,7 +71,9 @@ If a test fails, look for unhandled promise rejections and missing mock setup â€
 3. Add tests when you add or change logic (target: meaningful coverage, not a percentage)
 4. Update `CHANGELOG.md` under the **Unreleased** section
 5. Describe what your PR does and why, and link any related issues
-6. Fill out the PR template checklist
+6. Fill out the PR template checklist, including the Zotero version and OS you tested on
+
+Before merging, the maintainer runs a multi-lens review of every code change (see the "Review loop" section of [`docs/RELEASE-CHECKLIST.md`](docs/RELEASE-CHECKLIST.md)) and posts the round log on the PR. You don't need to run it yourself; tests and a note on how you verified the change are enough.
 
 ## Reporting Bugs
 

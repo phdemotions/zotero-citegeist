@@ -106,10 +106,13 @@ describe("diagnostic code registry", () => {
       "CG-API50",
       "CG-DB01",
       "CG-DB02",
+      "CG-DB03",
+      "CG-DB04",
       "CG-MATCH01",
       "CG-MATCH02",
       "CG-ID01",
       "CG-UI01",
+      "CG-UI02",
       "CG-BUG01",
     ];
     for (const code of published) {
@@ -353,7 +356,7 @@ describe("host entry points are guarded", () => {
   });
 
   it("menu handlers are guarded — MenuManager via guardMenus, DOM via bindGuarded", () => {
-    const menu = src("src/modules/menu.ts");
+    const menu = src("src/modules/menu/registration.ts");
     expect(menu).toContain("function guardMenus");
     // Both registered MenuManager trees pass through the wrapper.
     expect(menu.match(/menus: guardMenus\(\[/g) ?? []).toHaveLength(2);

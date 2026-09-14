@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import { makeFakeDb } from "./fakeDb";
+import { makeFakePrefs } from "./fakePrefs";
 
 export const items: Map<string, { extra: string }> = new Map();
 
@@ -48,15 +49,7 @@ export const mockZotero = {
       fileWrites.push({ path, contents });
     }),
   },
-  Prefs: {
-    get: vi.fn().mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return false;
-      return null;
-    }),
-    set: vi.fn(),
-    clearUserPref: vi.fn(),
-  },
+  Prefs: makeFakePrefs({ addonDefaults: true }),
   Libraries: {
     userLibraryID: 1,
     getAll: vi.fn(
@@ -89,11 +82,8 @@ export async function resetCacheHarness(
   mockZotero.DBConnection = vi.fn(function (this: unknown) {
     return fakeDb;
   }) as unknown as typeof mockZotero.DBConnection;
-  mockZotero.Prefs.get.mockImplementation((pref: string) => {
-    if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-    if (pref === "extensions.zotero.citegeist.migrationV1Complete") return false;
-    return null;
-  });
+  // A fresh profile: no user prefs, only the addon/prefs.js defaults.
+  mockZotero.Prefs = makeFakePrefs({ addonDefaults: true });
   mockZotero.Items.getAll.mockResolvedValue([]);
   // Reset Libraries.getAll to the default single editable user library —
   // prior tests may have overridden via mockImplementation.

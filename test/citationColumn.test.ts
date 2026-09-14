@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeFakePrefs } from "./_helpers/fakePrefs";
 
 vi.mock("../src/modules/cache", () => ({
+  cacheWriteRefusalCode: vi.fn(() => null),
   getCachedMetrics: vi.fn(),
   isNoMatchSuppressed: vi.fn(),
 }));
 
 vi.mock("../src/modules/citationService", () => ({
-  extractIdentifier: vi.fn(),
+  canResolveWork: vi.fn(),
   fetchAndCacheItem: vi.fn(),
+  fetchStopFor: vi.fn(() => null),
 }));
 
 vi.mock("../src/modules/openalex", () => ({
@@ -42,7 +45,7 @@ describe("citation columns", () => {
     vi.stubGlobal("CSS", { escape: (s: string) => s });
     vi.stubGlobal("Zotero", {
       debug: vi.fn(),
-      Prefs: { get: vi.fn(() => false) },
+      Prefs: makeFakePrefs(),
       ItemTreeManager: {
         registerColumn: vi.fn(async (options: { dataKey: string }) => {
           registeredKeys.push(options.dataKey);

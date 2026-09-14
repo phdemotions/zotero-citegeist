@@ -3,9 +3,15 @@
  */
 
 import { getSourceStats, type OpenAlexWork } from "../openalex";
-import { cacheItemAuthors, cacheWorkData } from "../cache";
+import { cacheItemAuthors, cacheWorkData, cacheWriteRefusalCode } from "../cache";
 import { invalidateColumnCache } from "../citationColumn";
-import { escapeHTML, logError, safeInnerHTML, saveItemGuarded } from "../utils";
+import {
+  CacheWriteRefusedError,
+  escapeHTML,
+  logError,
+  safeInnerHTML,
+  saveItemGuarded,
+} from "../utils";
 import { SURNAME_PREFIXES, UNDO_TIMEOUT_MS, type NetworkState } from "./types";
 
 // ────────────────────────────────────────────────────────
@@ -54,26 +60,42 @@ export async function addItemToLibrary(
   }
 
   try {
-    const item = await createZoteroItemFromWork(work, collectionIds);
+    let item: _ZoteroTypes.Item;
+    try {
+      item = await createZoteroItemFromWork(work, collectionIds);
+    } catch (e) {
+      logError("addItemToLibrary", e);
+      // Surface to the user so they don't assume the click missed and spam
+      // it. Without this banner the only signal was the button reverting,
+      // which looks identical to a no-op. The add always targets My Library
+      // (never a read-only group — the collection picker only offers the user
+      // library), and it's a local item write with no network step, so the one
+      // honest failure here is a save that didn't land.
+      showRowError(state, workId, "Add failed — please try again.");
+      // Restore button
+      if (mainBtn) {
+        mainBtn.disabled = false;
+        const name = getDefaultCollectionName(state);
+        mainBtn.textContent = name ? `+ Add to ${name}` : "+ Add to Library";
+      }
+      return;
+    }
 
-    // Write citation + journal metrics to Extra so columns populate immediately
-    const srcId = work.primary_location?.source?.id;
-    const srcStats = srcId ? await getSourceStats(srcId) : null;
-    await cacheWorkData(item, work, srcStats);
-    // Resolve author identity for the newly-added item (third piggyback
-    // callsite; failure-isolated so it can't break the add flow).
-    await cacheItemAuthors(item, work.authorships).catch((e) =>
-      logError("cacheItemAuthors(add)", e),
-    );
-    invalidateColumnCache(item.id);
-
+    // The item is in the library, so the add has happened. Record it before
+    // anything else can fail: a later click then finds it and creates nothing.
+    state.createdItemIds.set(workId, item.id);
     const doi = work.doi?.replace("https://doi.org/", "")?.toLowerCase();
     if (doi) state.existingDOIs.add(doi);
     // Key collection tracking by work id (always present), not DOI — so a
     // DOI-less item can still be filed after it's added.
     state.itemCollections.set(workId, new Set(collectionIds));
 
-    state.createdItemIds.set(workId, item.id);
+    await cacheAddedItem(item, work);
+    try {
+      invalidateColumnCache(item.id);
+    } catch (e) {
+      logError("addItemToLibrary column refresh", e);
+    }
 
     // Transition to "Added · Undo"
     state.undoTimers.set(
@@ -86,24 +108,47 @@ export async function addItemToLibrary(
     );
 
     updateRowButton(state, workId);
-  } catch (e) {
-    logError("addItemToLibrary", e);
-    // Surface to the user so they don't assume the click missed and spam
-    // it. Without this banner the only signal was the button reverting,
-    // which looks identical to a no-op. The add always targets My Library
-    // (never a read-only group — the collection picker only offers the user
-    // library), and it's a local item write with no network step, so the one
-    // honest failure here is a save that didn't land.
-    showRowError(state, workId, "Add failed — please try again.");
-    // Restore button
-    if (mainBtn) {
-      mainBtn.disabled = false;
-      const name = getDefaultCollectionName(state);
-      mainBtn.textContent = name ? `+ Add to ${name}` : "+ Add to Library";
-    }
   } finally {
     state.pendingAdds.delete(workId);
   }
+}
+
+/**
+ * Save a newly added item's metrics and authors so its columns fill at once.
+ * Never throws and never turns the add into a failure: the item is already in
+ * the library, and offering "try again" would create a second copy.
+ *
+ * A cache that refuses writes is checked first, so a read-only (CG-DB03,
+ * CG-DB04) or closed (CG-DB02) cache costs no source lookup and records
+ * nothing; the startup notice already covers a read-only cache. A refusal that
+ * lands mid-save was logged once by the cache's write gate, and any other
+ * failure is recorded here, once.
+ */
+async function cacheAddedItem(item: _ZoteroTypes.Item, work: OpenAlexWork): Promise<void> {
+  const refusal = cacheWriteRefusalCode();
+  if (refusal !== null) {
+    Zotero.debug(
+      `[Citegeist] added item ${item.id} without caching its metrics: the cache refuses writes (${refusal})`,
+    );
+    return;
+  }
+  try {
+    const srcId = work.primary_location?.source?.id;
+    const srcStats = srcId ? await getSourceStats(srcId) : null;
+    await cacheWorkData(item, work, srcStats);
+  } catch (e) {
+    logUnlessRefused("addItemToLibrary cache", e);
+    return;
+  }
+  // Resolve author identity for the newly-added item (third piggyback callsite).
+  await cacheItemAuthors(item, work.authorships).catch((e) =>
+    logUnlessRefused("cacheItemAuthors(add)", e),
+  );
+}
+
+/** Record a failed cache write, unless it was refused: the write gate logs a refusal once itself. */
+function logUnlessRefused(context: string, e: unknown): void {
+  if (!(e instanceof CacheWriteRefusedError)) logError(context, e);
 }
 
 /**
