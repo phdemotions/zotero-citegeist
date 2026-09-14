@@ -36,16 +36,18 @@ import {
 } from "../prefs";
 import { logError, normalizeError, safeParseFloat, safeParseIntOrNull } from "../utils";
 import {
-  cacheWriteRefused,
   deleteMirrorEntries,
   mirrorSnapshot,
+  requireDb,
   requireWritableDb,
-  runQuery,
+  runRead,
+  runWrite,
+  skipMaintenanceOnReadOnlyCache,
   upsertRow,
   type WritableDb,
 } from "./db";
 import { setExtraConfirmedMatch } from "./write";
-import { garbageCollectOrphanAuthors } from "./authors/db";
+import { deleteOrphanItemAuthors, deleteUnreferencedAuthors } from "./authors/db";
 import {
   CONFIRMED_MATCH_EXTRA_PREFIX,
   emptyRow,
@@ -456,7 +458,12 @@ export async function migrateFromExtraV1(): Promise<boolean> {
   // every row write would be refused before its Extra strip, so the loop could
   // only write a backup file and a refusal per candidate for an outcome the
   // startup notice already explains.
-  if (cacheWriteRefused("migrateFromExtraV1")) return false;
+  if (skipMaintenanceOnReadOnlyCache("migrateFromExtraV1")) return false;
+
+  // Any other refusal throws here, before the completion pref is read or reset,
+  // any backup file is written or any Extra field changes: a caller that didn't
+  // await initCache(), or a cache that closed under startup, gets CG-DB02.
+  requireWritableDb("migrateFromExtraV1");
 
   // REL-002 silent-data-loss guard: the pref says "we already migrated", but
   // if SQLite is empty AND any library still contains legacy Citegeist data
@@ -473,11 +480,6 @@ export async function migrateFromExtraV1(): Promise<boolean> {
       return false;
     }
   }
-
-  // Verify the cache is open and writable even though we don't keep the
-  // connection: a caller that forgot to await initCache() gets a coded refusal
-  // (CG-DB02) here, before any backup file or Extra change.
-  requireWritableDb("migrateFromExtraV1");
 
   // Version gate.
   const zVersion = Zotero.version ?? "0.0.0";
@@ -574,12 +576,16 @@ export async function migrateFromExtraV1(): Promise<boolean> {
       // per-item SELECTs with one SELECT — order-of-magnitude win on first
       // run of a 50k-item library where every candidate would otherwise pay
       // a SQLite round trip just to confirm "not yet migrated."
-      const conn0 = requireWritableDb("migration_progress read");
+      // The loop below writes, so a cache that stopped taking writes during the
+      // backup refuses here with its code rather than failing the read.
+      requireWritableDb("migration_progress read");
       const checkpointed = new Set<string>();
       {
-        const rows = await runQuery<{ library_id: number; item_key: string }>(
-          conn0,
+        const rows = await runRead<{ library_id: number; item_key: string }>(
+          requireDb(),
           `SELECT library_id, item_key FROM migration_progress`,
+          undefined,
+          ["library_id", "item_key"],
         );
         for (const r of rows) checkpointed.add(mirrorKey(r.library_id, r.item_key));
       }
@@ -594,7 +600,7 @@ export async function migrateFromExtraV1(): Promise<boolean> {
         if (done % progressTick === 0) ui?.update(done, total);
 
         try {
-          const conn = requireWritableDb("migration item");
+          const writable = requireWritableDb("migration item");
 
           if (checkpointed.has(mirrorKey(item.libraryID, item.key))) continue;
 
@@ -637,11 +643,11 @@ export async function migrateFromExtraV1(): Promise<boolean> {
                 // subsequent candidate (REL-M-001).
                 await saveTxWithDeadline(item);
               }
-              await checkpointItem(conn, item.libraryID, item.key);
+              await checkpointItem(writable, item.libraryID, item.key);
               checkpointed.add(mirrorKey(item.libraryID, item.key));
             } else if (!extra.includes(CONFIRMED_MATCH_EXTRA_PREFIX)) {
               // Genuinely clean — no legacy fields, no confirmed-match line.
-              await checkpointItem(conn, item.libraryID, item.key);
+              await checkpointItem(writable, item.libraryID, item.key);
               checkpointed.add(mirrorKey(item.libraryID, item.key));
             } else {
               // Has a confirmed-match line that didn't parse as a valid W-ID.
@@ -706,7 +712,7 @@ export async function migrateFromExtraV1(): Promise<boolean> {
           // `unresolvedSkips` state, blocking the completion pref forever.
           checkpointed.add(mirrorKey(item.libraryID, item.key));
           try {
-            await checkpointItem(conn, item.libraryID, item.key);
+            await checkpointItem(writable, item.libraryID, item.key);
           } catch (cpErr) {
             Zotero.debug(
               `[Citegeist] migration: checkpoint INSERT failed for ${item.libraryID}:${item.key} — ${normalizeError(cpErr)} (item is fully migrated; next launch will re-checkpoint)`,
@@ -748,8 +754,9 @@ export async function migrateFromExtraV1(): Promise<boolean> {
   // matters on 50k-item libraries with 1% transient errors.
   if (unresolvedSkips === 0) {
     try {
-      const conn = requireWritableDb("migration_progress cleanup");
-      await runQuery(conn, `DELETE FROM migration_progress`);
+      await requireWritableDb("migration_progress cleanup").transaction((tx) =>
+        runWrite(tx, `DELETE FROM migration_progress`),
+      );
     } catch (e) {
       logError("migration_progress cleanup (non-fatal)", e);
     }
@@ -914,11 +921,17 @@ function trySetTimestampPref(name: TimestampPref, ms: number): void {
   }
 }
 
-async function checkpointItem(conn: WritableDb, libraryID: number, itemKey: string): Promise<void> {
-  await runQuery(
-    conn,
-    `INSERT OR REPLACE INTO migration_progress (library_id, item_key, migrated_at) VALUES (?, ?, ?)`,
-    [libraryID, itemKey, new Date().toISOString()],
+async function checkpointItem(
+  writable: WritableDb,
+  libraryID: number,
+  itemKey: string,
+): Promise<void> {
+  await writable.transaction((tx) =>
+    runWrite(
+      tx,
+      `INSERT OR REPLACE INTO migration_progress (library_id, item_key, migrated_at) VALUES (?, ?, ?)`,
+      [libraryID, itemKey, new Date().toISOString()],
+    ),
   );
 }
 
@@ -933,11 +946,11 @@ async function checkpointItem(conn: WritableDb, libraryID: number, itemKey: stri
  * — group-library items get SQLite rows too, and we must not purge them.
  */
 export async function garbageCollectOrphans(options: { force?: boolean } = {}): Promise<void> {
-  if (cacheWriteRefused("garbageCollectOrphans")) return;
+  if (skipMaintenanceOnReadOnlyCache("garbageCollectOrphans")) return;
   const lastRun = getTimestampPref(PREF_LAST_ORPHAN_GC_AT);
   if (!options.force && Date.now() - lastRun < ORPHAN_GC_MIN_INTERVAL_MS) return;
 
-  const conn = requireWritableDb("garbageCollectOrphans");
+  const writable = requireWritableDb("garbageCollectOrphans");
 
   // Build the live key set as (libraryID, itemKey) tuples so we don't
   // mistake a same-named key in a different library for an orphan.
@@ -979,21 +992,25 @@ export async function garbageCollectOrphans(options: { force?: boolean } = {}): 
     for (const o of slice) {
       params.push(o.libraryID, o.itemKey);
     }
-    await runQuery(
-      conn,
-      `DELETE FROM item_cache WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
-      params,
-    );
-    await runQuery(
-      conn,
-      `DELETE FROM migration_progress WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
-      params,
-    );
+    // One transaction per chunk: the chunk's rows leave all three tables
+    // together, and the mirror follows only once they have committed.
+    await writable.transaction(async (tx) => {
+      await runWrite(
+        tx,
+        `DELETE FROM item_cache WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
+        params,
+      );
+      await runWrite(
+        tx,
+        `DELETE FROM migration_progress WHERE (library_id, item_key) IN (${tuplePlaceholders})`,
+        params,
+      );
+      await deleteOrphanItemAuthors(tx, slice);
+    });
     deleteMirrorEntries(slice.map((o) => o.composite));
   }
-  // Two-level author sweep on the same orphan set: drop their item_authors
-  // rows, then any authors left unreferenced.
-  await garbageCollectOrphanAuthors(conn, orphans);
+  // Then any author no item_authors row references any more.
+  await writable.transaction((tx) => deleteUnreferencedAuthors(tx));
   trySetTimestampPref(PREF_LAST_ORPHAN_GC_AT, Date.now());
   Zotero.debug(`[Citegeist] orphan GC removed ${orphans.length} rows`);
 }

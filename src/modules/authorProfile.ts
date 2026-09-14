@@ -23,7 +23,7 @@ import {
   type AuthorRow,
   type ItemAuthorRow,
 } from "./cache/authors";
-import { isCacheReadOnly } from "./cache";
+import { cacheWriteRefusalCode } from "./cache";
 import { logError } from "./utils";
 
 // ────────────────────────────────────────────────────────
@@ -150,10 +150,11 @@ export function buildAuthorRowViewModels(
  */
 export function persistProfileMetrics(p: OpenAlexAuthorProfile): void {
   if (p.metricsAreLowerBound) return;
-  // A read-only cache (CG-DB03, CG-DB04) said so once, at startup. Recording the
-  // refusal again for every author on every render would push real failures out
-  // of the diagnostic report.
-  if (isCacheReadOnly()) return;
+  // A cache that refuses writes has said why once: a read-only one (CG-DB03,
+  // CG-DB04) at startup, and a closed one is shutting down. Recording the refusal
+  // again for every author on every render would push real failures out of the
+  // diagnostic report.
+  if (cacheWriteRefusalCode() !== null) return;
   updateAuthorMetrics(p.id, {
     worksCount: p.worksCount,
     citedByCount: p.citedByCount,
@@ -172,7 +173,7 @@ export function persistProfileMetrics(p: OpenAlexAuthorProfile): void {
 export function maybeReconcileMerge(p: OpenAlexAuthorProfile): void {
   if (!p.redirectedFrom) return;
   // Same reasoning as persistProfileMetrics: the merge heals at a later fetch.
-  if (isCacheReadOnly()) return;
+  if (cacheWriteRefusalCode() !== null) return;
   Zotero.debug(`[Citegeist] author ${p.redirectedFrom} merged → ${p.id}; reconciling`);
   reconcileAuthorMerge(p.redirectedFrom, p.id).catch((e) => logError("reconcileAuthorMerge", e));
 }

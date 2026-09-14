@@ -127,7 +127,7 @@ const parsed = new Map<string, ts.SourceFile>();
  * tree dominates a scan, and repeating it per test pushed a scan past vitest's
  * per-test timeout under the parallel suite.
  */
-function parseSource(file: string, source: string): ts.SourceFile {
+export function parseSource(file: string, source: string): ts.SourceFile {
   const key = `${file}\0${source}`;
   let sf = parsed.get(key);
   if (!sf) {
@@ -488,7 +488,8 @@ function isTypeOnly(node: ts.Node): boolean {
   return ts.isTypeNode(node);
 }
 
-function unwrap(expr: ts.Expression): ts.Expression {
+/** `expr` without parentheses, `as`/`satisfies`/angle-bracket casts and non-null assertions. */
+export function unwrap(expr: ts.Expression): ts.Expression {
   let e = expr;
   while (
     ts.isParenthesizedExpression(e) ||
@@ -521,7 +522,10 @@ function isStringExpression(node: ts.Node): boolean {
  * literals, templates and `+` of those, through wrappers. With `consts`, an
  * identifier bound to such a string by a `const` folds too.
  */
-function foldString(node: ts.Node, consts?: ReadonlyMap<string, string>): string | undefined {
+export function foldString(
+  node: ts.Node,
+  consts?: ReadonlyMap<string, string>,
+): string | undefined {
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
   if (
     ts.isParenthesizedExpression(node) ||
@@ -614,7 +618,8 @@ function calleeName(expr: ts.Expression): string {
     : "";
 }
 
-function enclosingFunction(node: ts.Node): string {
+/** The name {@link SourceHit.fn} reports for the code `node` sits in. */
+export function enclosingFunction(node: ts.Node): string {
   for (let p: ts.Node | undefined = node.parent; p; p = p.parent) {
     if (ts.isFunctionDeclaration(p)) return p.name?.text ?? "default";
     if (ts.isConstructorDeclaration(p)) return "constructor";

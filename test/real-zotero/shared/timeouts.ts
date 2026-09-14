@@ -73,6 +73,12 @@ export const BUDGETS = {
   schemaStampEnable: sized(STARTUP_WAIT_TIMEOUT_MS),
   /** 91 after hook: disable if still running, restore the stamp, then startup. */
   schemaStampRestore: sized(SHUTDOWN_WAIT_TIMEOUT_MS, WAIT_TIMEOUT_MS, STARTUP_WAIT_TIMEOUT_MS),
+  /** 91: disable if still running, plant an unrecognised stamp, then startup on it. */
+  schemaStampUnrecognised: sized(
+    SHUTDOWN_WAIT_TIMEOUT_MS,
+    WAIT_TIMEOUT_MS,
+    STARTUP_WAIT_TIMEOUT_MS,
+  ),
   /** 92: row, item pane, section, Citing works button, then the citing-works request. */
   preferencePageSize: sized(
     WAIT_TIMEOUT_MS,

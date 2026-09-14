@@ -3,7 +3,8 @@
  *
  * Internal structure:
  *   types.ts       — public types + internal row shape + column list
- *   db.ts          — connection, in-memory mirror, lifecycle (init/close)
+ *   db.ts          — connection, write gate, transactions, mirror, lifecycle
+ *   schema.ts      — table DDL + schema stamp
  *   read.ts        — sync read API (hits the mirror only)
  *   write.ts       — async write API (SQLite first, then mirror)
  *   migration.ts   — one-shot Extra→SQLite migration + orphan GC
@@ -26,7 +27,7 @@ export type {
 // Note: `_resetForTesting` is intentionally NOT re-exported. Tests import
 // it from the deep `cache/db` path so production callers can't accidentally
 // nuke the cache layer via the public surface.
-export { cacheWriteRefusalCode, closeCache, initCache, isCacheReadOnly } from "./db";
+export { cacheWriteRefusalCode, closeCache, initCache } from "./db";
 
 // ── Read ──
 export {

@@ -263,11 +263,20 @@ declare namespace _ZoteroTypes {
    * Auto-creates `<profile>/<name>.sqlite` on first use.
    *
    * We deliberately expose only the surface Citegeist uses. Zotero's real
-   * `DBConnection` has more (transactions, table introspection); add them
-   * here when a caller actually needs them.
+   * `DBConnection` has more (table introspection); add them here when a caller
+   * actually needs them.
    */
   interface DBConnection {
     queryAsync<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+    /**
+     * Run `func` in a transaction: resolves with its result after COMMIT, and
+     * rejects with its error after ROLLBACK. A call made while another
+     * transaction is open on the connection waits for it, and rejects with a
+     * timeout error after `waitTimeout` ms (default 30000), so a transaction
+     * must never open another on the same connection. Zotero 10 counts each
+     * commit, and its idle vacuum keeps the live file when the count moved.
+     */
+    executeTransaction<T>(func: () => Promise<T>, options?: { waitTimeout?: number }): Promise<T>;
     closeDatabase(permanent?: boolean): Promise<void>;
     /**
      * Run `callback` each time Zotero (re)opens the underlying connection, after

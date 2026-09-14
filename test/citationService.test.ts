@@ -117,9 +117,11 @@ import {
   getWorkById,
 } from "../src/modules/openalex";
 import { _resetForTesting } from "../src/modules/cache/db";
+import { emptyRow } from "../src/modules/cache/types";
 import {
   initCache,
   cacheWorkData,
+  closeCache,
   writePendingSuggestion,
   confirmTitleMatch,
   getItemAuthors,
@@ -128,7 +130,11 @@ import { OpenAlexNetworkError, OpenAlexBudgetError, OpenAlexAuthError } from "..
 import { cacheItemAuthors } from "../src/modules/cache";
 import { searchByMetadata } from "../src/modules/titleSearch";
 import { clearDiagnostics, recentDiagnostics } from "../src/modules/diagnostics";
-import { CACHE_SCHEMA_MAJOR, CACHE_SCHEMA_STAMP_MULTIPLIER } from "../src/constants";
+import {
+  CACHE_SCHEMA_MAJOR,
+  CACHE_SCHEMA_STAMP_MULTIPLIER,
+  NO_MATCH_RETRY_DAYS,
+} from "../src/constants";
 
 const mockedGetWorkByDOI = vi.mocked(getWorkByDOI);
 const mockedGetWorkByPMID = vi.mocked(getWorkByPMID);
@@ -891,6 +897,7 @@ describe("fetching on a read-only cache", () => {
       budgetStopped: 0,
       authStopped: 0,
       unwritableStopped: 3,
+      code: "CG-DB03",
     });
     expect(onItemDone).toHaveBeenCalledTimes(1);
     expect(onItemDone).toHaveBeenCalledWith(1, "cache-unwritable");
@@ -903,6 +910,7 @@ describe("fetching on a read-only cache", () => {
     const result = await resolveAuthorsForItems(items);
 
     expect(result.unwritableStopped).toBe(2);
+    expect(result.code).toBe("CG-DB03");
     expect(result.errors + result.unresolved + result.resolved).toBe(0);
     expect(mockedGetWorkById).not.toHaveBeenCalled();
     expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
@@ -953,5 +961,107 @@ describe("recording a refused request", () => {
     await fetchAndCacheItem(mockItem({ doi: "10.1234/offline" }), { recordRefusals: false });
 
     expect(recentDiagnostics().map((d) => d.code)).toEqual(["CG-NET01"]);
+  });
+});
+
+// ── A refusal that meets a saved outcome, or lands mid-item (plan U16) ───────
+
+describe("a cache that refuses writes, meeting a saved outcome or a lookup in flight", () => {
+  const newerMajor = (CACHE_SCHEMA_MAJOR + 1) * CACHE_SCHEMA_STAMP_MULTIPLIER;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockZotero.Prefs = migratedPrefs();
+    clearDiagnostics();
+  });
+
+  async function openReadOnlyWithSavedNoMatch(savedAt: Date): Promise<void> {
+    fakeDb = makeFakeDb();
+    fakeDb.pragma.userVersion = newerMajor;
+    fakeDb.table.set("1:TEST", {
+      ...emptyRow(1, "TEST"),
+      no_match: 1,
+      no_match_timestamp: savedAt.toISOString(),
+    });
+    _resetForTesting();
+    await initCache();
+  }
+
+  async function openWritable(): Promise<void> {
+    fakeDb = makeFakeDb();
+    _resetForTesting();
+    await initCache();
+    clearDiagnostics();
+  }
+
+  it("shows a saved 'not on OpenAlex' on a read-only cache, from the mirror, with no request", async () => {
+    await openReadOnlyWithSavedNoMatch(new Date());
+
+    const result = await fetchAndCacheItem(mockItem({ doi: "10.1234/unknown" }));
+
+    expect(result).toEqual({ status: "error", error: "no-match" });
+    expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
+    expect(vi.mocked(searchByMetadata)).not.toHaveBeenCalled();
+  });
+
+  it("returns CG-DB03 once the saved 'not on OpenAlex' is past its retry window", async () => {
+    await openReadOnlyWithSavedNoMatch(new Date(Date.now() - (NO_MATCH_RETRY_DAYS + 1) * DAY_MS));
+
+    const result = await fetchAndCacheItem(mockItem({ doi: "10.1234/unknown" }));
+
+    expect(result).toEqual({ status: "error", error: "cache-unwritable", code: "CG-DB03" });
+    expect(mockedGetWorkByDOI).not.toHaveBeenCalled();
+  });
+
+  it("returns the refusal's code, recording nothing, for a fetch the cache closed under", async () => {
+    await openWritable();
+    mockedGetWorkByDOI.mockImplementation(async () => {
+      await closeCache();
+      return makeFakeWork();
+    });
+
+    const result = await fetchAndCacheItem(mockItem({ doi: "10.1234/a" }));
+
+    expect(result).toEqual({ status: "error", error: "cache-unwritable", code: "CG-DB02" });
+    expect(recentDiagnostics()).toEqual([]);
+  });
+
+  it("stops a batch as not saved, not failed, when the cache closes during a lookup", async () => {
+    await openWritable();
+    mockedGetWorkByDOI.mockImplementation(async () => {
+      await closeCache();
+      return makeFakeWork();
+    });
+
+    const result = await fetchAndCacheItems([
+      mockItem({ doi: "10.1234/a" }),
+      mockItem({ doi: "10.1234/b" }),
+      mockItem({ doi: "10.1234/c" }),
+    ]);
+
+    expect(result.errors).toBe(0);
+    expect(result.unwritableStopped).toBe(3);
+    expect(result.code).toBe("CG-DB02");
+    expect(mockedGetWorkByDOI).toHaveBeenCalledTimes(1);
+    expect(recentDiagnostics().map((d) => d.code)).not.toContain("CG-DB02");
+    expect(recentDiagnostics()).toEqual([]);
+  });
+
+  it("stops the author backfill as not saved when the cache closes during its lookup", async () => {
+    await openWritable();
+    const items = [mockItem({ doi: "10.1234/a" }), mockItem({ doi: "10.1234/b" })];
+    await cacheWorkData(items[0], makeFakeWork());
+    mockedGetWorkById.mockImplementation(async () => {
+      await closeCache();
+      return makeFakeWork();
+    });
+
+    const result = await resolveAuthorsForItems(items);
+
+    expect(result.unwritableStopped).toBe(2);
+    expect(result.code).toBe("CG-DB02");
+    expect(result.errors).toBe(0);
+    expect(recentDiagnostics()).toEqual([]);
   });
 });

@@ -1,6 +1,7 @@
 /**
- * An older Citegeist on a database a newer schema major wrote: it keeps reading,
- * refuses to write or fetch, and leaves a code to quote.
+ * An older Citegeist on a database a newer schema major wrote, or on one whose
+ * stamp no release writes: it keeps reading, refuses to write or fetch, and
+ * leaves a code to quote.
  *
  * RESTARTS THE PLUGIN: it disables and re-enables Citegeist, so it is numbered
  * in the 90s (00-root-hooks.spec.ts) and runs after 90-lifecycle. Its after hook
@@ -9,18 +10,27 @@
  *
  * Catches: a build that never stamps (PRAGMA user_version is not the current
  * schema on the profile it opened); a newer-major stamp that still lets a fetch
- * reach OpenAlex or write a row; a stamp overwritten on open; and a refusal that
- * leaves nothing to quote (the report's read-only line missing, or CG-DB03
- * recorded once per item instead of once at startup).
+ * reach OpenAlex or write a row; a negative stamp that opens writable or loses
+ * its CG-DB04; a stamp overwritten on open; and a refusal that leaves nothing to
+ * quote (the report's read-only line missing, or the code recorded once per item
+ * instead of once at startup).
+ *
+ * Not covered, because the harness can't make Zotero start either one: Zotero
+ * 9.0.6+ closing and reopening the connection around its idle backup (the
+ * onConnect callback that re-applies query_only), and Zotero 10's idle vacuum,
+ * which keeps the live file only when a commit landed during its copy. Unit
+ * tests model both over the fake database: test/cache.test.ts,
+ * test/cache-transactions.test.ts and test/cache-write-invariants.test.ts.
  *
  * While enabled, Citegeist holds citegeist.sqlite under an EXCLUSIVE lock, so
  * the spec reads and rewrites the stamp only while Citegeist is disabled, and
  * only after the "[Citegeist] Shutdown complete" line says its cache has closed.
  *
- * Expected error lines: startup on the newer major logs CG-DB03 once, as the
- * "cache schema check" line, and that one line is allowed. Refused writes and
- * fetches log Debug Output lines without the ERROR mark, so any ERROR line the
- * read-only session adds beyond that one still fails the test.
+ * Expected error lines: startup on the newer major logs CG-DB03 once, and
+ * startup on the unrecognised stamp logs CG-DB04 once, each as its "cache schema
+ * check" line, and each test allows only its own line. Refused writes and
+ * fetches log Debug Output lines without the ERROR mark, so any other ERROR line
+ * a read-only session adds still fails the test.
  */
 import {
   CACHE_SCHEMA_MAJOR,
@@ -44,6 +54,16 @@ import {
 const CURRENT_STAMP = CACHE_SCHEMA_MAJOR * CACHE_SCHEMA_STAMP_MULTIPLIER + CACHE_SCHEMA_MINOR;
 // One major ahead: READ_ONLY_STARTUP_ERROR is the line for exactly this stamp.
 const NEWER_MAJOR_STAMP = (CACHE_SCHEMA_MAJOR + 1) * CACHE_SCHEMA_STAMP_MULTIPLIER;
+/** A stamp no release writes, which opens read-only as CG-DB04. */
+const UNRECOGNISED_STAMP = -5;
+/**
+ * Exactly the line openReadOnly (src/modules/cache/db.ts) logs for that stamp;
+ * test/cache-transactions.test.ts checks the same text against what init logs.
+ */
+const UNRECOGNISED_STAMP_STARTUP_ERROR = new RegExp(
+  `\\[Citegeist\\] ERROR cache schema check: schema stamp ${UNRECOGNISED_STAMP} not recognised; ` +
+    `this build writes schema major ${CACHE_SCHEMA_MAJOR}; cache writes disabled`,
+);
 
 /** The part of Zotero's DBConnection this spec uses on citegeist.sqlite. */
 interface CacheFileConnection {
@@ -158,6 +178,37 @@ describe("cache schema stamp", function () {
       );
       expect(await readStamp(conn), "PRAGMA user_version after the read-only session").to.equal(
         NEWER_MAJOR_STAMP,
+      );
+    });
+  });
+
+  it("opens an unrecognised stamp read-only: a fetch makes no request and CG-DB04 is recorded once", async function () {
+    this.timeout(BUDGETS.schemaStampUnrecognised.timeoutMs);
+    allowCitegeistErrors(UNRECOGNISED_STAMP_STARTUP_ERROR);
+    await disableCitegeist();
+    await withCacheFile((conn) => conn.queryAsync(`PRAGMA user_version = ${UNRECOGNISED_STAMP}`));
+    await enableCitegeist("Citegeist to start on the unrecognised stamp");
+
+    const requestsBefore = await stubRequestLog();
+    const result = await Zotero.Citegeist.fetchItems([stub.item.id]);
+    const requests = await stubRequestsSince(requestsBefore);
+
+    expect(result, "bridge fetch resolved undefined (see Debug Output)").to.exist;
+    expect(result.unwritableStopped, JSON.stringify(result)).to.equal(1);
+    expect(result.fresh, JSON.stringify(result)).to.equal(0);
+    expect(requests, "stub requests from a read-only session").to.be.empty;
+
+    const report: string = Zotero.Citegeist.buildDiagnosticReport({});
+    expect(report).to.include("Cache: read-only, CG-DB04");
+    expect(recentProblemsWith(report, "CG-DB04"), report).to.have.length(1);
+  });
+
+  it("leaves the unrecognised stamp as it found it", async function () {
+    this.timeout(BUDGETS.schemaStampDisable.timeoutMs);
+    await disableCitegeist();
+    await withCacheFile(async (conn) => {
+      expect(await readStamp(conn), "PRAGMA user_version after the CG-DB04 session").to.equal(
+        UNRECOGNISED_STAMP,
       );
     });
   });

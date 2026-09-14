@@ -80,17 +80,13 @@ vi.stubGlobal("Zotero", mockZotero);
 
 import {
   _resetForTesting,
-  CURRENT_SCHEMA_STAMP,
   cacheWriteRefusalCode,
-  classifySchemaStamp,
   closeCache,
   deleteRow,
-  isCacheReadOnly,
   mutateRow,
   upsertRow,
-  type WritableDb,
 } from "../src/modules/cache/db";
-import { garbageCollectOrphanAuthors } from "../src/modules/cache/authors/db";
+import { CURRENT_SCHEMA_STAMP, classifySchemaStamp } from "../src/modules/cache/schema";
 import { reconcileAuthorMerge, setCuratedItemAuthor } from "../src/modules/cache/authors/write";
 import { emptyRow, type ItemCacheRow } from "../src/modules/cache/types";
 import {
@@ -1780,7 +1776,7 @@ describe("cache schema stamp", () => {
 
     // Every write entry point rejects with the refusal's code, so no caller can
     // take a refused write for one that landed, and none reaches SQLite.
-    expect(isCacheReadOnly()).toBe(true);
+    expect(cacheWriteRefusalCode()).toBe("CG-DB03");
     for (const [name, write] of everyWriter(keptItem, confItem)) {
       await expect(write(), name).rejects.toMatchObject({
         name: "CacheWriteRefusedError",
@@ -1821,14 +1817,12 @@ describe("cache schema stamp", () => {
     expect(fakeDb.pragma.queryOnly).toBe(true);
     // Reads still run under query_only.
     expect(await getItemAuthors(1, "K")).toHaveLength(1);
+    // A write issued on the connection itself, past every gate, is refused by SQLite.
     await expect(
-      garbageCollectOrphanAuthors(fakeDb as unknown as WritableDb, [
-        { libraryID: 1, itemKey: "K" },
-      ]),
-    ).rejects.toMatchObject({
-      code: "CG-DB01",
-      cause: expect.objectContaining({ message: expect.stringMatching(/readonly/) }),
-    });
+      fakeDb.executeTransaction(() =>
+        fakeDb.queryAsync("DELETE FROM item_authors WHERE author_id = ?", ["A1"]),
+      ),
+    ).rejects.toThrow(/readonly/);
     expect(fakeDb.itemAuthors.size).toBe(1);
   });
 
@@ -1842,7 +1836,7 @@ describe("cache schema stamp", () => {
     // Positive control: the SQLite backstop really is off, so only
     // requireWritableDb stands between each writer and the file.
     expect(fakeDb.pragma.queryOnly).toBe(false);
-    expect(isCacheReadOnly()).toBe(true);
+    expect(cacheWriteRefusalCode()).toBe("CG-DB03");
     for (const [name, write] of everyWriter(
       mockItem("KEPT"),
       mockItem("CONF", "Citegeist match ID: W100"),
@@ -1954,7 +1948,7 @@ describe("cache schema stamp", () => {
   it("keeps a read-only cache usable when a newer major's item_cache can't be read", async () => {
     await reopen((db) => {
       db.pragma.userVersion = newerMajor;
-      failOn(db, /^SELECT\s+\*\s+FROM\s+item_cache/i, "no such table: item_cache");
+      failOn(db, /^SELECT\b[\s\S]*\bFROM\s+item_cache\s*$/i, "no such table: item_cache");
     });
 
     expect(getCachedData(mockItem("ANY"))).toBeNull();

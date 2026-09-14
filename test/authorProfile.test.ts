@@ -27,6 +27,10 @@ const cacheMocks = vi.hoisted(() => ({
 }));
 vi.mock("../src/modules/cache/authors", () => cacheMocks);
 
+// The one question authorProfile asks the cache before a write; null takes writes.
+const refusal = vi.hoisted(() => ({ code: null as string | null }));
+vi.mock("../src/modules/cache", () => ({ cacheWriteRefusalCode: () => refusal.code }));
+
 vi.stubGlobal("Zotero", { debug: vi.fn() });
 
 import {
@@ -36,7 +40,9 @@ import {
   compactTrend,
   getAuthorCreators,
   maybeReconcileMerge,
+  persistProfileMetrics,
 } from "../src/modules/authorProfile";
+import { clearDiagnostics, recentDiagnostics } from "../src/modules/diagnostics";
 
 type AnyProfile = Parameters<typeof buildProfileViewModel>[0];
 
@@ -60,6 +66,7 @@ beforeEach(() => {
   oaMocks.fetchAuthorWorks.mockReset();
   cacheMocks.updateAuthorMetrics.mockClear();
   cacheMocks.reconcileAuthorMerge.mockClear();
+  refusal.code = null;
 });
 
 describe("formatMetric", () => {
@@ -140,6 +147,34 @@ describe("maybeReconcileMerge", () => {
     expect(cacheMocks.reconcileAuthorMerge).not.toHaveBeenCalled();
 
     maybeReconcileMerge(profile({ id: "A2", redirectedFrom: "A1" }));
+    expect(cacheMocks.reconcileAuthorMerge).toHaveBeenCalledWith("A1", "A2");
+  });
+});
+
+describe("author writes and a cache that refuses writes (plan U16, T3)", () => {
+  it.each(["CG-DB03", "CG-DB04", "CG-DB02"])(
+    "with %s, persists no metrics, reconciles no merge, and records nothing",
+    (code) => {
+      refusal.code = code;
+      clearDiagnostics();
+
+      persistProfileMetrics(profile());
+      maybeReconcileMerge(profile({ id: "A2", redirectedFrom: "A1" }));
+
+      expect(cacheMocks.updateAuthorMetrics).not.toHaveBeenCalled();
+      expect(cacheMocks.reconcileAuthorMerge).not.toHaveBeenCalled();
+      expect(recentDiagnostics()).toEqual([]);
+    },
+  );
+
+  it("persists metrics and reconciles a merge when the cache takes writes (positive control)", () => {
+    persistProfileMetrics(profile());
+    maybeReconcileMerge(profile({ id: "A2", redirectedFrom: "A1" }));
+
+    expect(cacheMocks.updateAuthorMetrics).toHaveBeenCalledWith(
+      "A1",
+      expect.objectContaining({ hIndex: 20 }),
+    );
     expect(cacheMocks.reconcileAuthorMerge).toHaveBeenCalledWith("A1", "A2");
   });
 });

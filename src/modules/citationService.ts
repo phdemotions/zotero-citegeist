@@ -39,6 +39,7 @@ import {
 } from "./cache";
 import { searchByMetadata, type TitleMatchResult } from "./titleSearch";
 import {
+  CacheWriteRefusedError,
   OpenAlexNetworkError,
   OpenAlexBudgetError,
   OpenAlexAuthError,
@@ -59,9 +60,10 @@ import { BULK_FETCH_DELAY_MS, NO_MATCH_RETRY_DAYS } from "../constants";
  * up forever with nothing for the user to report.
  *
  * `"cache-unwritable"` means the cache refuses writes (read-only CG-DB03 or
- * CG-DB04, closed CG-DB02), so nothing was requested: a lookup whose result
- * can't be kept still spends the user's OpenAlex budget. The result's `code`
- * says which.
+ * CG-DB04, closed CG-DB02). Found up front, nothing was requested: a lookup
+ * whose result can't be kept still spends the user's OpenAlex budget. Found
+ * mid-item, because the cache closed during a lookup, nothing was saved. The
+ * result's `code` says which refusal it was.
  */
 export type FetchError =
   | "no-identifier"
@@ -265,6 +267,12 @@ export async function fetchAndCacheItem(
   try {
     return await fetchAndCacheItemInner(item, options);
   } catch (e) {
+    // A write refused mid-item (the cache closed during the lookup) is the same
+    // stop as one found up front: a code a batch stops on, and no diagnostic,
+    // because the write gate already logged the refusal.
+    if (e instanceof CacheWriteRefusedError) {
+      return { status: "error", error: "cache-unwritable", code: e.code };
+    }
     const refusal = e instanceof OpenAlexAuthError || e instanceof OpenAlexBudgetError;
     if (!refusal || options.recordRefusals !== false) {
       logError(`fetchAndCacheItem(${item.id})`, e);
@@ -293,10 +301,21 @@ export function fetchStopFor(result: FetchResult): FetchStop | null {
  * The result for a fetch the cache can't keep, or null when it takes writes.
  * Checked before any OpenAlex request, because a batch would otherwise spend a
  * metered lookup per item on results that are thrown away.
+ *
+ * A saved "not on OpenAlex" still stands on a cache that refuses writes: it is
+ * read from the mirror with no request, and returned instead of the refusal, so
+ * the pane keeps saying what the cache already knows.
  */
-function unwritableResult(): FetchResult | null {
+function unwritableResult(item: _ZoteroTypes.Item): FetchResult | null {
   const code = cacheWriteRefusalCode();
-  return code === null ? null : { status: "error", error: "cache-unwritable", code };
+  if (code === null) return null;
+  if (isNoMatchSuppressed(item, NO_MATCH_RETRY_DAYS)) return { status: "error", error: "no-match" };
+  return { status: "error", error: "cache-unwritable", code };
+}
+
+/** Record a failed write, unless it was refused: the write gate logs a refusal once itself. */
+function logUnlessRefused(context: string, e: unknown): void {
+  if (!(e instanceof CacheWriteRefusedError)) logError(context, e);
 }
 
 async function fetchAndCacheItemInner(
@@ -307,7 +326,7 @@ async function fetchAndCacheItemInner(
     return { status: "error", error: "invalid-item" };
   }
 
-  const unwritable = unwritableResult();
+  const unwritable = unwritableResult(item);
   if (unwritable) return unwritable;
 
   // If researcher previously confirmed a title match, use the stored OpenAlex ID directly.
@@ -326,7 +345,7 @@ async function fetchAndCacheItemInner(
         // result that already persisted. No column repaint — authors have no
         // v1 column (KTD5); the pane reads them async.
         await cacheItemAuthors(item, work.authorships).catch((e) =>
-          logError("cacheItemAuthors(confirmed)", e),
+          logUnlessRefused("cacheItemAuthors(confirmed)", e),
         );
         return { status: "ok", work };
       }
@@ -376,7 +395,9 @@ async function fetchAndCacheItemInner(
   const sourceStats = sourceId ? await getSourceStats(sourceId) : null;
 
   await cacheWorkData(item, work, sourceStats);
-  await cacheItemAuthors(item, work.authorships).catch((e) => logError("cacheItemAuthors", e));
+  await cacheItemAuthors(item, work.authorships).catch((e) =>
+    logUnlessRefused("cacheItemAuthors", e),
+  );
   return { status: "ok", work };
 }
 
@@ -386,7 +407,7 @@ async function fetchAndCacheItemInner(
  */
 async function attemptTitleSearch(item: _ZoteroTypes.Item): Promise<FetchResult> {
   // Title search is the metered path, so it refuses on its own account too.
-  const unwritable = unwritableResult();
+  const unwritable = unwritableResult(item);
   if (unwritable) return unwritable;
 
   // Don't re-search if researcher dismissed or we already found no match recently
@@ -466,6 +487,12 @@ export interface FetchBatchResult {
    * rather than "N processed". Absent means none.
    */
   unwritableStopped?: number;
+  /**
+   * The refusal's code when the pass stopped because the cache refuses writes:
+   * CG-DB02 for a closed cache, CG-DB03 or CG-DB04 for a read-only one. The menu
+   * summary words the skip by it. Absent when the pass didn't stop that way.
+   */
+  code?: DiagnosticCode;
 }
 
 /**
@@ -510,7 +537,10 @@ export async function fetchAndCacheItems(
         const skipped = eligible.length - i;
         if (stop === "budget") out.budgetStopped = skipped;
         else if (stop === "auth") out.authStopped = skipped;
-        else out.unwritableStopped = skipped;
+        else {
+          out.unwritableStopped = skipped;
+          if (result.status === "error") out.code = result.code;
+        }
         onItemDone?.(eligible[i].id, stop);
         break;
       }
@@ -597,6 +627,9 @@ export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<Au
       // Key rejected — same reasoning as budget: stop the pass, don't miscount
       // an auth failure as a per-item no-match.
       if (r.status === "error" && r.code === "CG-API01") return "auth";
+      // The cache stopped taking writes during the fetch: stop the pass as the
+      // up-front check above would have.
+      if (r.status === "error" && r.error === "cache-unwritable") return "cache-unwritable";
       if (r.status === "cached") return "already";
       // A genuine failure (network, DB lock, auth, unexpected) is an ERROR, not
       // "no author match" — reporting infrastructure trouble as a clean
@@ -615,6 +648,7 @@ export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<Au
   } catch (e) {
     if (e instanceof OpenAlexBudgetError) return "budget";
     if (e instanceof OpenAlexAuthError) return "auth";
+    if (e instanceof CacheWriteRefusedError) return "cache-unwritable";
     logError(`resolveAuthorsForItem(${item.id})`, e);
     return "error";
   }
@@ -634,6 +668,8 @@ export interface AuthorBackfillResult {
   authStopped: number;
   /** Items skipped because the cache refuses writes — see FetchBatchResult.unwritableStopped. */
   unwritableStopped: number;
+  /** The refusal's code when the pass stopped because the cache refuses writes — see FetchBatchResult.code. */
+  code?: DiagnosticCode;
   errors: number;
   cancelled: boolean;
 }
@@ -679,6 +715,8 @@ export async function resolveAuthorsForItems(
     }
     if (status === "cache-unwritable") {
       out.unwritableStopped = eligible.length - i;
+      // The status carries no code; the refusal that stopped the item still holds.
+      out.code = cacheWriteRefusalCode() ?? "CG-DB02";
       break;
     }
 
