@@ -76,9 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Turning Citegeist off no longer breaks Zotero's right-click menu.** After
   Citegeist was disabled or uninstalled, right-clicking an item could fail to open
   Zotero's menu, and new text in the Zotero window could appear blank, until Zotero
-  restarted. On Zotero 8, Citegeist's entries also stayed in the menu while it was
-  off. Citegeist now takes its translations and its menu entries out of every
-  Zotero window as it shuts down.
+  restarted. Turning Citegeist back on did not repair it, and Citegeist's own
+  entries then showed no text. On Zotero 8, Citegeist's entries also stayed in the
+  menu while it was off. Citegeist now takes its translations and its menu entries
+  out of every Zotero window as it shuts down, and links its translations afresh
+  when it starts.
 - **Turning Citegeist off and on no longer adds a second set of right-click
   entries.** Citegeist tried to remove its menus under the wrong name, which
   removed nothing. If Citegeist was turned off while it was still starting up, its

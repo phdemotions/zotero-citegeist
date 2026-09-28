@@ -48,15 +48,25 @@ export class FakeMenuElement {
     child.parent = this;
     this.children.push(child);
     if (child.id) this.doc.elements.set(child.id, child);
+    if (child.isLocalizationLink()) this.doc.localizationChanges.push(`add ${child.href()}`);
   }
 
   /** Detach from the parent and the document, as the DOM does, so `children` shows what is left. */
   remove(): void {
     if (this.id && this.doc.elements.get(this.id) === this) this.doc.elements.delete(this.id);
     if (this.parent) {
+      if (this.isLocalizationLink()) this.doc.localizationChanges.push(`remove ${this.href()}`);
       this.parent.children.splice(this.parent.children.indexOf(this), 1);
       this.parent = null;
     }
+  }
+
+  private isLocalizationLink(): boolean {
+    return this.localName === "link" && this.getAttribute("rel") === "localization";
+  }
+
+  private href(): string {
+    return this.getAttribute("href") ?? "";
   }
 
   setAttribute(name: string, value: string): void {
@@ -124,6 +134,16 @@ function selectorMatcher(selector: string): (el: FakeMenuElement) => boolean {
 
 export class FakeMenuDocument {
   readonly elements = new Map<string, FakeMenuElement>();
+  /**
+   * Every change to this document's list of localization resources, oldest
+   * first: `add <href>` when a `<link rel="localization">` joins the document,
+   * `remove <href>` when one leaves it. Gecko reports exactly these to the
+   * document's localization (HTMLLinkElement.cpp@esr140 97-101 and 122-131), and
+   * each one clears the translations the window has cached (fluent-fallback
+   * localization.rs@esr140 64-78, 93-95); Zotero registering or removing a
+   * translation source does not (l10nregistry-ffi registry.rs@esr140 302-336).
+   */
+  readonly localizationChanges: string[] = [];
   /** Where `MozXULElement.insertFTLIfNeeded` puts localization links in a main window. */
   readonly head = new FakeMenuElement(this, "head");
   private readonly roots: FakeMenuElement[] = [this.head];

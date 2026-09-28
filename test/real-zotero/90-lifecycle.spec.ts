@@ -1,17 +1,23 @@
 /**
  * Disable, re-enable and in-place upgrade leave exactly one set of Citegeist UI,
- * and a disabled Citegeist leaves Zotero's own translations working.
+ * labelled, and never break Zotero's own translations.
  *
  * Catches: menus or pane sections that survive a disable; a main window left
  * holding Citegeist's localization link, or a rendered menu entry that uses
  * Citegeist's translations, once Zotero unregisters them at disable, which makes
- * every translation of the item popup reject so the right-click menu never
- * builds (BUG-DISABLE-L10N, which this spec first caught on 8.0.4, 9.0.6 and
- * 10.0.2); duplicate MenuManager registrations or sections after enable or
- * upgrade ("paneID must be unique"); a link that does not come back after enable
- * or upgrade, which leaves the menu and pane labels blank; and a copy that never
- * finishes startup after enable or upgrade (the ready flag never returns).
- * Numbered 90 because it restarts the plugin under test (00-root-hooks.spec.ts).
+ * every translation in the window reject so the right-click menu never builds
+ * (BUG-DISABLE-L10N, which this spec first caught on 8.0.4, 9.0.6 and 10.0.2); a
+ * re-enable or upgrade that leaves those translations broken and Citegeist's own
+ * entries unlabelled, which a link left in place causes, because the window
+ * keeps what it cached while the translations were gone (seen with v2.0.5 on
+ * Zotero 10.0.4); duplicate MenuManager registrations or sections after enable
+ * or upgrade ("paneID must be unique"); and a copy that never finishes startup
+ * after enable or upgrade (the ready flag never returns). Numbered 90 because it
+ * restarts the plugin under test (00-root-hooks.spec.ts).
+ *
+ * The first test also translates the whole window before anything is disabled,
+ * so a translation that fails for a reason of Zotero's own shows up there, not as
+ * a Citegeist failure later.
  *
  * It cannot catch an unregister by the wrong menu key (ADV-B1). Zotero's own
  * plugin-shutdown observer removes a plugin's menus on every disable and upgrade
@@ -34,6 +40,7 @@ import { ITEM_MENU_L10N_IDS, SHUTDOWN_COMPLETE_DEBUG_LINE } from "./support/cite
 import {
   citegeistItemMenuCounts,
   citegeistSections,
+  citegeistSidenavButtons,
   debugLinesContaining,
   ensureCitegeistReady,
   getCitegeistAddon,
@@ -53,6 +60,32 @@ function citegeistLocalizationLinks(): number {
     .length;
 }
 
+/**
+ * "resolved", or "rejected (reason)". A window that lists a localization resource
+ * no source serves rejects every translation with no reason, which Mocha would
+ * report only as "Promise rejected with no or falsy reason".
+ */
+function outcome(promise: Promise<unknown>): Promise<string> {
+  return promise.then(
+    () => "resolved",
+    (reason: unknown) => `rejected (${String(reason)})`,
+  );
+}
+
+/** Translate `element` and everything in it with the main window's localization. */
+async function expectTranslates(element: Element, what: string): Promise<void> {
+  const translated = await outcome(mainWindow().document.l10n.translateFragment(element));
+  expect(translated, `translating ${what}`).to.equal("resolved");
+}
+
+/** Citegeist's entries in the item context menu, overflow submenu included, as last built. */
+function citegeistItemMenuEntries(): Element[] {
+  const popup = mainWindow().document.getElementById("zotero-itemmenu");
+  return [...popup.querySelectorAll(".zotero-custom-menu-item")].filter((entry: Element) =>
+    (entry.getAttribute("data-l10n-id") ?? "").startsWith("citegeist-"),
+  );
+}
+
 async function expectOneSet(phase: string): Promise<void> {
   const sections = await waitFor(`${phase}: one Citegeist item-pane section`, () =>
     citegeistSections().length === 1 ? citegeistSections() : null,
@@ -63,6 +96,17 @@ async function expectOneSet(phase: string): Promise<void> {
   for (const l10nID of ITEM_MENU_L10N_IDS) {
     expect(counts.get(l10nID) ?? 0, `${phase}: item-menu entries for ${l10nID}`).to.equal(1);
   }
+
+  // The entries carry text: Citegeist's translations resolve in this window.
+  const doc = mainWindow().document;
+  await expectTranslates(doc.getElementById("zotero-itemmenu"), `the item context menu ${phase}`);
+  for (const entry of citegeistItemMenuEntries()) {
+    expect(
+      entry.getAttribute("label") ?? "",
+      `${phase}: the label of ${entry.getAttribute("data-l10n-id")}`,
+    ).to.not.equal("");
+  }
+  await expectTranslates(doc.documentElement, `the whole main window ${phase}`);
 }
 
 describe("plugin lifecycle", function () {
@@ -94,30 +138,28 @@ describe("plugin lifecycle", function () {
   });
 
   it("keeps Zotero's own translations working while disabled", async function () {
-    const win = mainWindow();
     expect(
       citegeistLocalizationLinks(),
       "Citegeist's localization links in the main window while disabled",
     ).to.equal(0);
-
-    // A window that still lists a resource no source serves gets no
-    // translations built, and translateFragment then rejects with no reason.
-    const translation = await win.document.l10n
-      .translateFragment(win.document.getElementById("zotero-itemmenu"))
-      .then(
-        () => "resolved",
-        (reason: unknown) => `rejected (${String(reason)})`,
-      );
-    expect(translation, "translating Zotero's item context menu while disabled").to.equal(
-      "resolved",
+    // Zotero removes the sidenav button with the section (itemDetails.js@10.0.2
+    // renderCustomSections 320-333); it carries a Citegeist l10nID too.
+    await waitFor(
+      "the Citegeist sidenav button to be removed",
+      () => citegeistSidenavButtons().length === 0,
     );
 
-    // The right-click menu builds: buildItemContextMenu awaits that translation.
-    const build = await win.ZoteroPane.buildItemContextMenu().then(
-      () => "resolved",
-      (reason: unknown) => `rejected (${String(reason)})`,
+    const win = mainWindow();
+    await expectTranslates(
+      win.document.getElementById("zotero-itemmenu"),
+      "Zotero's item context menu while disabled",
     );
-    expect(build, "building the item context menu while disabled").to.equal("resolved");
+    await expectTranslates(win.document.documentElement, "the whole main window while disabled");
+    // buildItemContextMenu awaits the item menu's translation before it reaches MenuManager.
+    expect(
+      await outcome(win.ZoteroPane.buildItemContextMenu()),
+      "building the item context menu while disabled",
+    ).to.equal("resolved");
   });
 
   it("restores exactly one set when re-enabled", async function () {

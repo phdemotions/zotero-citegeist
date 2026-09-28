@@ -417,15 +417,24 @@ export async function onShutdown(_data: PluginData): Promise<void> {
  * Attach Citegeist's FTL to a window so the item-pane section's l10nIDs
  * (citegeist-pane-*) and the MenuManager menu labels (citegeist-menu-*) resolve
  * to visible text. Uses the bare filename against Zotero's auto-registered
- * Fluent source (see FTL_FILE). `insertFTLIfNeeded` is idempotent — the "IfNeeded"
- * check skips a duplicate link — so calling it on both startup and every window
- * load is safe. Typings lack MozXULElement, hence the cast.
+ * Fluent source (see FTL_FILE). Typings lack MozXULElement, hence the cast.
+ *
+ * Always a new link: one already there is removed first. `insertFTLIfNeeded`
+ * adds nothing when the link exists, and only a new link makes the window drop
+ * the translations it cached (see `removeCitegeistFTL`). This copy's shutdown
+ * removes its link, but a copy of v2.0.5 or earlier leaves its own behind, so an
+ * in-place upgrade from one would otherwise run on whatever the window cached
+ * from the old copy, or while no source served Citegeist's translations: a
+ * broken right-click menu and unlabelled entries. Calling this on both startup
+ * and a window load is safe; the window keeps exactly one link.
  */
 function ensureCitegeistFTL(win: Window): void {
   try {
     const mozXUL = (win as unknown as { MozXULElement?: { insertFTLIfNeeded(f: string): void } })
       .MozXULElement;
-    mozXUL?.insertFTLIfNeeded(FTL_FILE);
+    if (!mozXUL) return;
+    bestEffort("ensureCitegeistFTL remove old link", () => removeCitegeistFTL(win));
+    mozXUL.insertFTLIfNeeded(FTL_FILE);
   } catch (e) {
     logError("ensureCitegeistFTL", e);
   }
@@ -446,6 +455,18 @@ function ensureCitegeistFTL(win: Window): void {
  * 122-131, Document.cpp@esr140 4601-4619). Zotero's sample plugin removes its link
  * the same way when it shuts down (zotero/make-it-red@70f709d, src-2.0
  * bootstrap.js 34-38 and make-it-red.js 63-78).
+ *
+ * Removing it is also what lets a re-enable repair the window. A window caches
+ * the translations it built, and only a change to its own resource list clears
+ * that cache (fluent-fallback localization.rs@esr140 64-78 and 93-95, through
+ * localization-ffi lib.rs@esr140 487-500): Zotero registering the source again
+ * tells no window (l10nregistry-ffi registry.rs@esr140 302-336). A link left in
+ * place keeps whatever the window cached while the source was gone, and the next
+ * startup's `insertFTLIfNeeded` finds the link and adds nothing, so the menu
+ * stayed broken and Citegeist's entries unlabelled after a re-enable (seen with
+ * v2.0.5 on Zotero 10.0.4). With the link removed here, the next startup inserts
+ * a new one, which clears the cache (HTMLLinkElement.cpp@esr140 97-101,
+ * Document.cpp@esr140 4565-4585).
  */
 function removeCitegeistFTL(win: Window): void {
   const links = win.document.querySelectorAll(`link[rel="localization"][href="${FTL_FILE}"]`);

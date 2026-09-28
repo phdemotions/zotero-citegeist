@@ -355,6 +355,28 @@ describe.each(MENU_RENDERING_HOSTS)("disabling Citegeist on $name", (host) => {
       ]);
     }
   });
+
+  // A window keeps the translations it built while Citegeist's source was gone,
+  // and Zotero registering the source again does not clear them; only a change
+  // to the window's own resource list does. A link left in place made
+  // insertFTLIfNeeded a no-op at re-enable, so the menu stayed broken and
+  // Citegeist's entries unlabelled (seen on v2.0.5 with Zotero 10.0.4).
+  it("re-enabling links the translations anew in every window, which clears what the window cached", async () => {
+    await startWithMenusOpened();
+    await hooks.onShutdown(STARTUP);
+    mm.shutdownPlugin(STARTUP.id, windows, host);
+
+    const second = await loadHooks();
+    await second.onStartup(STARTUP);
+
+    for (const win of windows) {
+      expect(win.document.localizationChanges.filter((change) => change.endsWith(FTL))).toEqual([
+        `add ${FTL}`,
+        `remove ${FTL}`,
+        `add ${FTL}`,
+      ]);
+    }
+  });
 });
 
 /**

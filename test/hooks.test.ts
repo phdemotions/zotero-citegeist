@@ -222,16 +222,51 @@ describe("hooks", () => {
   });
 
   it("wires the FTL and the menus in every main window open at startup, not only the most recent", async () => {
-    const insertFTLIfNeeded = vi.fn();
-    const windows = [1, 2].map(() => ({ MozXULElement: { insertFTLIfNeeded } }));
-    vi.mocked(Zotero.getMainWindows).mockReturnValue(windows as unknown as Window[]);
+    const windows = [fakeWindow(), fakeWindow()];
+    vi.mocked(Zotero.getMainWindows).mockReturnValue(windows);
 
     await hooks.onStartup(STARTUP);
 
     expect(menuMocks.registerMenus).toHaveBeenCalledTimes(2);
     expect(menuMocks.registerMenus.mock.calls[0][0]).toBe(windows[0]);
     expect(menuMocks.registerMenus.mock.calls[1][0]).toBe(windows[1]);
-    expect(insertFTLIfNeeded).toHaveBeenCalledTimes(2);
+    for (const win of windows) {
+      expect(win.MozXULElement.insertFTLIfNeeded).toHaveBeenCalledWith(FTL);
+      expect(win.document.localizationLinks(FTL)).toHaveLength(1);
+    }
+  });
+
+  // v2.0.5 and earlier never removed their link at shutdown. A link found at
+  // startup makes insertFTLIfNeeded add nothing, and the window then keeps the
+  // translations it cached from the old copy, or while no source served
+  // Citegeist's: the menu stayed broken and the entries unlabelled after an
+  // in-place upgrade or a re-enable (seen with v2.0.5 on Zotero 10.0.4).
+  it("replaces a translation link an earlier copy left in a window, so the window drops what it cached", async () => {
+    const win = fakeWindow();
+    win.MozXULElement.insertFTLIfNeeded(FTL);
+    win.MozXULElement.insertFTLIfNeeded("other-plugin.ftl");
+    vi.mocked(Zotero.getMainWindows).mockReturnValue([win]);
+
+    await hooks.onStartup(STARTUP);
+
+    expect(win.document.localizationChanges).toEqual([
+      `add ${FTL}`,
+      "add other-plugin.ftl",
+      `remove ${FTL}`,
+      `add ${FTL}`,
+    ]);
+    expect(win.document.localizationLinks(FTL)).toHaveLength(1);
+  });
+
+  it("gives a window opened after startup one translation link", async () => {
+    await hooks.onStartup(STARTUP);
+    const late = fakeWindow();
+
+    hooks.onMainWindowLoad(late);
+    hooks.onMainWindowLoad(late);
+
+    expect(late.document.localizationLinks(FTL)).toHaveLength(1);
+    expect(menuMocks.registerMenus).toHaveBeenCalledWith(late);
   });
 
   it("unregisters the menus in every main window at shutdown, carrying on past one that throws", async () => {
