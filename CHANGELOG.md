@@ -73,6 +73,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the old `Citegeist.` lines stay until a later version adds a command to remove
   them when you ask. Citation counts and the other numbers are fetched fresh from
   OpenAlex.
+- **Turning Citegeist off no longer breaks Zotero's right-click menu.** After
+  Citegeist was disabled or uninstalled, right-clicking an item could fail to open
+  Zotero's menu, and new text in the Zotero window could appear blank, until Zotero
+  restarted. On Zotero 8, Citegeist's entries also stayed in the menu while it was
+  off. Citegeist now takes its translations and its menu entries out of every
+  Zotero window as it shuts down.
+- **Turning Citegeist off and on no longer adds a second set of right-click
+  entries.** Citegeist tried to remove its menus under the wrong name, which
+  removed nothing. If Citegeist was turned off while it was still starting up, its
+  menus stayed registered, Zotero refused the next registration as a duplicate, and
+  a second set of entries appeared. Citegeist now removes its menus under the name
+  Zotero gave them, clears a leftover set before it registers, and stops starting
+  up as soon as it is turned off.
 
 ## [2.0.5] — 2026-07-09
 

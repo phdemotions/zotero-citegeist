@@ -5,6 +5,13 @@
  * from the injected FTL (`citegeist-menu-*`), `onShowing` decides visibility, and
  * Zotero removes the menus with the plugin through `pluginID`.
  *
+ * **Keys.** Zotero stores each menu under `CSS.escape(`${pluginID}-${menuID}`)`,
+ * returns that key from `registerMenu`, and `unregisterMenu` finds a menu by that
+ * key only (pluginAPIBase.mjs `_validate` 177-194, `_remove` 163-170 and
+ * `_namespacedMainKey` 312-320, identical at 8.0.4, 9.0.6 and 10.0.2; menuManager.js
+ * `registerMenu` returns it, @8.0.4 789, @10.0.2 825). Teardown and rollback
+ * therefore use the keys `registerMenu` returned, never the menu IDs.
+ *
  * **When the DOM fallback runs.** `registerMenus` uses the DOM fallback, entries
  * injected into each window's own popups, in two cases: `Zotero.MenuManager` does
  * not exist (Zotero 7), or it rejected or threw on the registration (any Zotero).
@@ -24,7 +31,7 @@ import {
   selectedItemsInWindow,
   type CollectionTarget,
 } from "../host/selection";
-import { logError } from "../utils";
+import { logError, normalizeError } from "../utils";
 import {
   FETCH_CITATIONS,
   RESOLVE_AUTHORS,
@@ -42,6 +49,12 @@ type NetworkMode = "citing" | "references";
 const ITEM_MENU_ID = "citegeist-item-menu";
 const COLLECTION_MENU_ID = "citegeist-collection-menu";
 
+/**
+ * The class MenuManager puts on every entry it renders into a popup
+ * (`CUSTOM_MENU_CLASS`, menuManager.js line 73 at 8.0.4, 9.0.6 and 10.0.2).
+ */
+const RENDERED_ENTRY_CLASS = "zotero-custom-menu-item";
+
 /** Plugin ID, needed to register through MenuManager. Set once at startup. */
 let menuPluginID: string | null = null;
 export function setMenuPluginID(id: string): void {
@@ -49,17 +62,18 @@ export function setMenuPluginID(id: string): void {
 }
 
 /**
- * True once the process-global MenuManager registration has fully succeeded.
+ * The keys Zotero stored this copy's menus under, as `registerMenu` returned
+ * them. Empty until the process-global MenuManager registration has fully
+ * succeeded, and emptied by `unregisterGlobalMenus()`.
  *
  * The MenuManager registry is per process, not per window, so a second
  * `registerMenus` call (File > New Window fires `onMainWindowLoad` again, and a
- * dev hot-reload can re-enter) must do nothing. Re-attempting is rejected as a
- * duplicate, a plain `false` that looks like a real failure, and reading it as
- * one put a second, uncoordinated menu on the popup MenuManager still owns: the
- * garbled, dead right-click menu of issue #67. Reset only by
- * `unregisterGlobalMenus()`.
+ * dev hot-reload can re-enter) must do nothing while these are held.
+ * Re-attempting is rejected as a duplicate, a plain `false` that looks like a
+ * real failure, and reading it as one put a second, uncoordinated menu on the
+ * popup MenuManager still owns: the garbled, dead right-click menu of issue #67.
  */
-let menuManagerRegistered = false;
+let menuManagerKeys: readonly string[] = [];
 
 /**
  * True once MenuManager was found missing or refused the menus, so later windows
@@ -71,14 +85,13 @@ let domFallbackChosen = false;
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export function registerMenus(win: Window): void {
-  if (menuManagerRegistered) {
+  if (menuManagerKeys.length > 0) {
     Zotero.debug("[Citegeist] Menus already registered (MenuManager) — skipping");
     return;
   }
   if (!domFallbackChosen) {
     const mm = getMenuManager();
     if (mm && menuPluginID && registerViaMenuManager(mm, menuPluginID)) {
-      menuManagerRegistered = true;
       Zotero.debug("[Citegeist] Menus registered (MenuManager)");
       return;
     }
@@ -109,17 +122,57 @@ export function unregisterMenus(win: Window): void {
 }
 
 /**
- * Process-global teardown: unregisters the MenuManager menus and forgets which
- * path registration took. Call once, when the plugin shuts down or fails to
- * start, never on a window unload. MenuManager removes a plugin's menus on its
- * own, but tearing them down explicitly keeps a hot-reload from leaving a stale
- * registration behind the flag.
+ * Process-global teardown: unregisters the MenuManager menus this copy
+ * registered, by the keys Zotero returned for them, and forgets which path
+ * registration took. Call once, when the plugin shuts down or fails to start,
+ * never on a window unload. Zotero's plugin-shutdown observer would remove the
+ * menus too (pluginAPIBase.mjs `_unregisterByPluginID` 345-356, added at 362-373),
+ * but it runs only on a plugin shutdown, after the bootstrap method returns
+ * (plugins.js `_callMethod`: the method at @8.0.4 250 and @10.0.2 258, the
+ * observers from 261 and 269), so a failed startup and a hot-reload need this.
+ *
+ * It removes only keys this copy registered: `unregisterMenu` on any other string
+ * logs "Can't remove unknown option" (pluginAPIBase.mjs 165), and Zotero 8 to 10
+ * file that warning as an error in Help → Report Errors.
+ *
+ * Rendered entries are not touched: see `removeRenderedMenus`.
  */
 export function unregisterGlobalMenus(): void {
   const mm = getMenuManager();
-  if (mm) unregisterEach(mm, [ITEM_MENU_ID, COLLECTION_MENU_ID], "menu MenuManager unregister");
-  menuManagerRegistered = false;
+  if (mm) unregisterEach(mm, menuManagerKeys, "menu MenuManager unregister");
+  menuManagerKeys = [];
   domFallbackChosen = false;
+}
+
+/**
+ * Remove the entries MenuManager rendered for Citegeist's menus from `win`.
+ *
+ * MenuManager renders a menu's entries when its popup opens and leaves them in
+ * the popup. `unregisterMenu` removes the registration only (pluginAPIBase.mjs
+ * `_remove` 163-170). The plugin-shutdown observer removes rendered entries on
+ * Zotero 9.0.6 and later, but only for the menus it unregisters itself
+ * (menuManager.js@10.0.2 304-323), which is none of Citegeist's once
+ * `unregisterGlobalMenus()` has run; Zotero 8.0.4's observer matches no rendered
+ * entry, because 8.0.4 stamps no menu key on them (menuManager.js@8.0.4 435).
+ *
+ * A stale entry is not harmless. It keeps its `data-l10n-id`, and once Zotero
+ * unregisters Citegeist's translations at disable, `translateFragment` over the
+ * item popup rejects (locateMenu.js 127 at 8.0.4, 9.0.6 and 10.0.2), so
+ * `buildItemContextMenu` stops before it reaches MenuManager (zoteroPane.js
+ * @8.0.4 4200, @9.0.6 4242, @10.0.2 4683) and the right-click menu never builds.
+ *
+ * Entries are matched by the class MenuManager puts on each one and the
+ * `data-l10n-id` it copies from the entry's `l10nID` (menuManager.js @8.0.4 440,
+ * @9.0.6 and @10.0.2 454), limited to Citegeist's own l10nIDs, so another
+ * plugin's entries stay. Entries MenuManager moved into its overflow submenu are
+ * found the same way.
+ */
+export function removeRenderedMenus(win: Window): void {
+  const l10nIDs = citegeistMenuL10nIDs();
+  for (const entry of Array.from(win.document.querySelectorAll(`.${RENDERED_ENTRY_CLASS}`))) {
+    const l10nID = entry.getAttribute("data-l10n-id");
+    if (l10nID !== null && l10nIDs.has(l10nID)) entry.remove();
+  }
 }
 
 // ── MenuManager ──────────────────────────────────────────────────────────────
@@ -130,37 +183,120 @@ function getMenuManager(): _ZoteroTypes.MenuManager | null {
 }
 
 /**
- * Register both menus. On a rejection (`registerMenu` returns `false`) or a
- * throw, unregister whatever already registered, so no half-registered set is
- * left beside the fallback, and return false.
+ * Register both menus and keep the keys Zotero returned. On a rejection
+ * (`registerMenu` returns `false`) or a throw, unregister whatever already
+ * registered, so no half-registered set is left beside the fallback, and return
+ * false.
  */
 function registerViaMenuManager(mm: _ZoteroTypes.MenuManager, pluginID: string): boolean {
-  const registered: string[] = [];
+  const menus = menuManagerMenus(pluginID);
+  for (const options of menus) {
+    clearStaleRegistration(mm, namespacedMenuKey(pluginID, options.menuID));
+  }
+  const keys: string[] = [];
   try {
-    for (const options of menuManagerMenus(pluginID)) {
-      if (mm.registerMenu(options) === false) {
+    for (const options of menus) {
+      const key = mm.registerMenu(options);
+      if (key === false) {
         Zotero.debug(`[Citegeist] MenuManager rejected ${options.menuID}`);
-        unregisterEach(mm, registered, "menu MenuManager rollback");
+        unregisterEach(mm, keys, "menu MenuManager rollback");
         return false;
       }
-      registered.push(options.menuID);
+      keys.push(key);
     }
+    menuManagerKeys = keys;
     return true;
   } catch (e) {
     logError("menu MenuManager register", e);
-    unregisterEach(mm, registered, "menu MenuManager rollback");
+    unregisterEach(mm, keys, "menu MenuManager rollback");
     return false;
   }
 }
 
-function unregisterEach(mm: _ZoteroTypes.MenuManager, menuIDs: string[], context: string): void {
-  for (const id of menuIDs) {
+function unregisterEach(
+  mm: _ZoteroTypes.MenuManager,
+  keys: readonly string[],
+  context: string,
+): void {
+  for (const key of keys) {
     try {
-      mm.unregisterMenu(id);
+      mm.unregisterMenu(key);
     } catch (e) {
       logError(context, e);
     }
   }
+}
+
+/**
+ * The key Zotero stores a menu under, built the way `namespacedColumnKey` in
+ * citationColumn.ts builds a column's: `CSS.escape(`${pluginID}-${menuID}`)`
+ * (pluginAPIBase.mjs `_namespacedMainKey` 312-320). Plugin code has `CSS` at every
+ * supported Zotero (plugins.js `_loadScope` sandbox globals, @8.0.4 138, @9.0.6
+ * and @10.0.2 146); without it, the two characters an add-on ID like Citegeist's
+ * carries are escaped by hand.
+ */
+function namespacedMenuKey(pluginID: string, menuID: string): string {
+  const raw = `${pluginID}-${menuID}`;
+  const css = (globalThis as { CSS?: { escape?: (value: string) => string } }).CSS;
+  return typeof css?.escape === "function" ? css.escape(raw) : raw.replace(/[@.]/g, "\\$&");
+}
+
+/**
+ * Whether Zotero holds a menu registration under `key`, or `undefined` when it
+ * can't be asked. MenuManager has no public query: it exposes `registerMenu`,
+ * `unregisterMenu` and `updateMenuPopup` only (menuManager.js @8.0.4 780-810,
+ * @9.0.6 808-838, @10.0.2 816-846, and the same on Zotero's `main`). So this reads
+ * the `options` of its internal registry (`_menuManager`, @8.0.4 781, @9.0.6 809,
+ * @10.0.2 817): every registration, with `menuID` set to its key
+ * (pluginAPIBase.mjs `options` 94-96, `_validate` 192). Never throws.
+ */
+function menuKeyRegistered(mm: _ZoteroTypes.MenuManager, key: string): boolean | undefined {
+  try {
+    const options = mm._menuManager?.options;
+    if (!Array.isArray(options)) return undefined;
+    return options.some((option) => option?.menuID === key);
+  } catch (e) {
+    Zotero.debug(`[Citegeist] MenuManager registry unreadable: ${normalizeError(e)}`);
+    return undefined;
+  }
+}
+
+/**
+ * Remove a registration an earlier copy of Citegeist left under `key`, so this
+ * copy's is not refused as a duplicate and replaced by the DOM fallback, which
+ * put a second set of entries beside the stale one (issue #67). Zotero's
+ * plugin-shutdown observer removes a plugin's menus on every disable, upgrade and
+ * uninstall, so a stale key survives only when a copy registered after that
+ * observer ran: a build without the startup check in hooks.ts, disabled while it
+ * started.
+ *
+ * Only when Zotero reports the key registered: unregistering an unknown key logs
+ * "Can't remove unknown option" (pluginAPIBase.mjs 165), which Zotero 8 to 10 file
+ * as an error in Help → Report Errors. When the registry can't be read, nothing is
+ * removed.
+ */
+function clearStaleRegistration(mm: _ZoteroTypes.MenuManager, key: string): void {
+  if (menuKeyRegistered(mm, key) !== true) return;
+  Zotero.debug(`[Citegeist] Removing the MenuManager menu an earlier copy left registered: ${key}`);
+  unregisterEach(mm, [key], "menu MenuManager stale unregister");
+}
+
+/** Every `l10nID` in Citegeist's MenuManager menus, submenus included. */
+function citegeistMenuL10nIDs(): Set<string> {
+  const l10nIDs = new Set<string>();
+  const collect = (menus: readonly MenuData[]): void => {
+    for (const menu of menus) {
+      if (menu.l10nID) l10nIDs.add(menu.l10nID);
+      if (menu.menus) collect(menu.menus);
+    }
+  };
+  for (const tree of menuTrees()) collect(tree.menus);
+  return l10nIDs;
+}
+
+/** The two menus, as `registerMenu` takes them. */
+function menuManagerMenus(pluginID: string): _ZoteroTypes.MenuManagerOptions[] {
+  return menuTrees().map((tree) => ({ ...tree, pluginID }));
 }
 
 /**
@@ -169,11 +305,10 @@ function unregisterEach(mm: _ZoteroTypes.MenuManager, menuIDs: string[], context
  * the entries blank. The FTL messages use `.label`/`.accesskey` attribute syntax
  * and are injected per window by `hooks.ensureCitegeistFTL`.
  */
-function menuManagerMenus(pluginID: string): _ZoteroTypes.MenuManagerOptions[] {
+function menuTrees(): Omit<_ZoteroTypes.MenuManagerOptions, "pluginID">[] {
   return [
     {
       menuID: ITEM_MENU_ID,
-      pluginID,
       target: "main/library/item",
       menus: guardMenus([
         {
@@ -209,7 +344,6 @@ function menuManagerMenus(pluginID: string): _ZoteroTypes.MenuManagerOptions[] {
     },
     {
       menuID: COLLECTION_MENU_ID,
-      pluginID,
       target: "main/library/collection",
       menus: guardMenus([
         {

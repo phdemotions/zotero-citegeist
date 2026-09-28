@@ -149,9 +149,29 @@ declare namespace _ZoteroTypes {
 
   /** `Zotero.MenuManager` (Zotero 8 and later), limited to what Citegeist calls. */
   interface MenuManager {
-    /** The menu ID, or `false` when Zotero rejects the registration (a duplicate ID included). */
+    /**
+     * The key Zotero stores the menu under, `CSS.escape(`${pluginID}-${menuID}`)`,
+     * not the menu ID; or `false` when Zotero refuses the registration: an
+     * invalid option, or a key already registered (pluginAPIBase.mjs `register`
+     * 118-126, `_validate` 177-194 and `_namespacedMainKey` 312-320, identical at
+     * 8.0.4, 9.0.6 and 10.0.2).
+     */
     registerMenu(options: MenuManagerOptions): string | false;
-    unregisterMenu(menuID: string): boolean;
+    /**
+     * Remove the menu stored under `key`, the value `registerMenu` returned. Any
+     * other string, the bare menu ID included, matches nothing: Zotero returns
+     * `false` and logs "Can't remove unknown option" (pluginAPIBase.mjs 163-170).
+     */
+    unregisterMenu(key: string): boolean;
+    /**
+     * Zotero's internal menu registry, a PluginAPIBase subclass. Not a public
+     * API: MenuManager offers no query, so Citegeist reads it only to ask whether
+     * a key is registered. `options` lists every registration, each with `menuID`
+     * set to its key (pluginAPIBase.mjs `options` 94-96, `_validate` 192).
+     */
+    readonly _menuManager?: {
+      readonly options?: readonly { readonly menuID?: unknown }[];
+    };
   }
 
   /**

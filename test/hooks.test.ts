@@ -1,13 +1,22 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   CACHE_READ_ONLY_HEADLINE,
   PREF_AUTHOR_RELATIONS_PURGED,
   PREF_LAST_BACKUP_PATH,
+  SETTINGS_PANE_ID,
 } from "../src/constants";
 import { ZOTERO_PREF_BRANCH, makeFakePrefs, type FakePrefs } from "./_helpers/fakePrefs";
-import { MODULE_LOAD_TIMEOUT_MS, backfillResult, batchResult } from "./_helpers/menuHarness";
+import {
+  MODULE_LOAD_TIMEOUT_MS,
+  backfillResult,
+  batchResult,
+  deferred,
+  fakeWindow,
+  flushAsync,
+  type FakeWindow,
+} from "./_helpers/menuHarness";
 
 const cacheMocks = vi.hoisted(() => ({
   initCache: vi.fn(async () => {}),
@@ -31,6 +40,7 @@ const paneMocks = vi.hoisted(() => ({
 
 const menuMocks = vi.hoisted(() => ({
   registerMenus: vi.fn((_win: Window) => {}),
+  removeRenderedMenus: vi.fn((_win: Window) => {}),
   unregisterMenus: vi.fn((_win: Window) => {}),
   unregisterGlobalMenus: vi.fn(),
   setMenuPluginID: vi.fn(),
@@ -79,8 +89,14 @@ import type * as HooksModule from "../src/hooks";
 type Hooks = typeof HooksModule;
 
 const STARTUP = { id: "citegeist@opusvita.org", version: "2.0.0", rootURI: "root/", reason: 1 };
+const FTL = "citegeist.ftl";
 
 let hooks: Hooks;
+
+/** A main window whose timers run at once, so a scheduled startup alert shows inside the test. */
+function mainWindowFake(): FakeWindow {
+  return Object.assign(fakeWindow(), { setTimeout: (fn: () => void) => fn() });
+}
 
 describe("hooks", () => {
   beforeEach(async () => {
@@ -89,18 +105,7 @@ describe("hooks", () => {
     vi.stubGlobal("Services", {
       prompt: { alert: vi.fn() },
     });
-    const mainWindow = {
-      setTimeout: (fn: () => void) => fn(),
-      document: {
-        getElementById: vi.fn(() => null),
-        createElement: vi.fn(() => ({
-          id: "",
-          rel: "",
-          href: "",
-        })),
-        documentElement: { appendChild: vi.fn() },
-      },
-    };
+    const mainWindow = mainWindowFake();
     vi.stubGlobal("Zotero", {
       debug: vi.fn(),
       Prefs: makeFakePrefs(),
@@ -230,19 +235,81 @@ describe("hooks", () => {
   });
 
   it("unregisters the menus in every main window at shutdown, carrying on past one that throws", async () => {
-    const windows = [{}, {}, {}] as unknown as Window[];
+    const windows = [fakeWindow(), fakeWindow(), fakeWindow()];
     vi.mocked(Zotero.getMainWindows).mockReturnValue(windows);
     menuMocks.unregisterMenus.mockImplementationOnce(() => {
+      throw new Error("window is closing");
+    });
+    menuMocks.removeRenderedMenus.mockImplementationOnce(() => {
       throw new Error("window is closing");
     });
 
     await hooks.onShutdown(STARTUP);
 
-    expect(menuMocks.unregisterMenus.mock.calls.map(([w]) => windows.indexOf(w))).toEqual([
-      0, 1, 2,
-    ]);
+    for (const mock of [menuMocks.unregisterMenus, menuMocks.removeRenderedMenus]) {
+      expect(mock.mock.calls.map(([w]) => windows.indexOf(w as FakeWindow))).toEqual([0, 1, 2]);
+    }
     expect(menuMocks.unregisterGlobalMenus).toHaveBeenCalledTimes(1);
     expect(cacheMocks.closeCache).toHaveBeenCalled();
+  });
+
+  it("takes Citegeist's translations and rendered menu entries out of every window before its first await (BUG-DISABLE-L10N)", async () => {
+    const windows = [fakeWindow(), fakeWindow()];
+    for (const win of windows) {
+      win.MozXULElement.insertFTLIfNeeded(FTL);
+      win.MozXULElement.insertFTLIfNeeded("other-plugin.ftl");
+    }
+    vi.mocked(Zotero.getMainWindows).mockReturnValue(windows);
+    const close = deferred();
+    cacheMocks.closeCache.mockImplementationOnce(() => close.promise);
+
+    // bootstrap.js does not wait for this promise, and Zotero unregisters
+    // Citegeist's translations as soon as the call returns (plugins.js
+    // onDisabled, @10.0.2 916-917): whatever is still here then stays.
+    const shutdown = hooks.onShutdown(STARTUP);
+
+    expect(cacheMocks.closeCache, "shutdown has reached its first await").toHaveBeenCalledTimes(1);
+    expect(windows.map((w) => w.document.localizationLinks(FTL).length)).toEqual([0, 0]);
+    expect(windows.map((w) => w.document.localizationLinks("other-plugin.ftl").length)).toEqual([
+      1, 1,
+    ]);
+    expect(
+      menuMocks.removeRenderedMenus.mock.calls.map(([w]) => windows.indexOf(w as FakeWindow)),
+    ).toEqual([0, 1]);
+    expect(menuMocks.unregisterGlobalMenus).toHaveBeenCalledTimes(1);
+
+    close.resolve();
+    await shutdown;
+    expect(Zotero.debug).toHaveBeenCalledWith("[Citegeist] Shutdown complete");
+  });
+
+  it("still takes the translations out of the other windows, and closes the cache, when one window's document throws", async () => {
+    const [broken, healthy] = [fakeWindow(), fakeWindow()];
+    healthy.MozXULElement.insertFTLIfNeeded(FTL);
+    Object.defineProperty(broken, "document", {
+      get() {
+        throw new Error("window is closing");
+      },
+    });
+    vi.mocked(Zotero.getMainWindows).mockReturnValue([broken, healthy]);
+
+    await hooks.onShutdown(STARTUP);
+
+    expect(healthy.document.localizationLinks(FTL)).toEqual([]);
+    expect(cacheMocks.closeCache).toHaveBeenCalledTimes(1);
+    expect(Zotero.debug).toHaveBeenCalledWith(
+      expect.stringContaining("[Citegeist] ERROR shutdown removeCitegeistFTL"),
+    );
+  });
+
+  it("removes a window's translation link when that window closes", () => {
+    const win = fakeWindow();
+    win.MozXULElement.insertFTLIfNeeded(FTL);
+
+    hooks.onMainWindowUnload(win);
+
+    expect(win.document.localizationLinks(FTL)).toEqual([]);
+    expect(menuMocks.unregisterMenus).toHaveBeenCalledWith(win);
   });
 
   it("still tears the menus down globally and closes the cache when the window list can't be read", async () => {
@@ -255,6 +322,193 @@ describe("hooks", () => {
     expect(menuMocks.unregisterMenus).not.toHaveBeenCalled();
     expect(menuMocks.unregisterGlobalMenus).toHaveBeenCalledTimes(1);
     expect(cacheMocks.closeCache).toHaveBeenCalled();
+  });
+});
+
+/**
+ * A disable that lands while `onStartup` is waiting. Zotero runs its
+ * plugin-shutdown observers, which remove whatever the plugin has registered,
+ * right after the synchronous part of `onShutdown` (plugins.js `_callMethod`,
+ * @10.0.2 258 and 269), so whatever startup registers after resuming stays
+ * registered for a disabled plugin: the trigger for the refused duplicate menu
+ * registration of ADV-B1.
+ */
+describe("a shutdown that lands while startup is waiting", () => {
+  let mainWindow: FakeWindow;
+  let unregisterPane: Mock;
+  const bridge = () => (Zotero as unknown as { Citegeist?: { ready: boolean } }).Citegeist;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.stubGlobal("Services", { prompt: { alert: vi.fn() } });
+    mainWindow = mainWindowFake();
+    unregisterPane = vi.fn();
+    vi.stubGlobal("Zotero", {
+      debug: vi.fn(),
+      // The relation purge has not run on this profile, so startup waits on it too.
+      Prefs: makeFakePrefs(),
+      PreferencePanes: { register: vi.fn(), unregister: unregisterPane },
+      getMainWindow: vi.fn(() => mainWindow),
+      getMainWindows: vi.fn(() => [mainWindow]),
+    });
+    hooks = await import("../src/hooks");
+  }, MODULE_LOAD_TIMEOUT_MS);
+
+  /** Nothing registered, nothing shown, and never ready: what a startup that stopped leaves. */
+  function expectStartupStopped(): void {
+    expect(columnMocks.registerCitationColumn).not.toHaveBeenCalled();
+    expect(paneMocks.registerCitationPane).not.toHaveBeenCalled();
+    expect(menuMocks.registerMenus).not.toHaveBeenCalled();
+    expect(mainWindow.MozXULElement.insertFTLIfNeeded).not.toHaveBeenCalled();
+    expect(Services.prompt.alert).not.toHaveBeenCalled();
+    expect(Zotero.debug).not.toHaveBeenCalledWith("[Citegeist] Startup complete");
+    expect(bridge()).toBeUndefined();
+  }
+
+  // Each await of the cache phase, what it resolves to, and the step after it.
+  const CACHE_STEPS: ReadonlyArray<readonly [string, Mock, unknown, Mock | null]> = [
+    ["opening the cache", cacheMocks.initCache, undefined, cacheMocks.migrateFromExtraV1],
+    [
+      "moving v1.x data out of Extra",
+      cacheMocks.migrateFromExtraV1,
+      false,
+      cacheMocks.garbageCollectOrphans,
+    ],
+    [
+      "collecting orphan rows",
+      cacheMocks.garbageCollectOrphans,
+      undefined,
+      cacheMocks.purgeAllAuthorRelations,
+    ],
+    [
+      "purging author relations",
+      cacheMocks.purgeAllAuthorRelations,
+      { cleaned: 0, failures: 0 },
+      null,
+    ],
+  ];
+
+  it.each(CACHE_STEPS)(
+    "while %s, startup stops there: no later step, no settings pane, no UI, no alert",
+    async (_label, step, result, next) => {
+      const hold = deferred<unknown>();
+      step.mockImplementationOnce(() => hold.promise);
+      const startup = hooks.onStartup(STARTUP);
+      await vi.waitFor(() => expect(step).toHaveBeenCalled());
+
+      await hooks.onShutdown(STARTUP);
+      hold.resolve(result);
+      await startup;
+
+      if (next) expect(next).not.toHaveBeenCalled();
+      expect(Zotero.PreferencePanes.register).not.toHaveBeenCalled();
+      expectStartupStopped();
+      expect(cacheMocks.closeCache).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("while the cache fails to open, startup stops without the cache-unavailable alert", async () => {
+    const hold = deferred();
+    cacheMocks.initCache.mockImplementationOnce(() => hold.promise);
+    const startup = hooks.onStartup(STARTUP);
+
+    await hooks.onShutdown(STARTUP);
+    hold.reject(new Error("locked"));
+    await startup;
+
+    expect(Zotero.PreferencePanes.register).not.toHaveBeenCalled();
+    expectStartupStopped();
+  });
+
+  it("while the columns register, shutdown leaves them to startup, which removes them and registers nothing more", async () => {
+    const hold = deferred();
+    columnMocks.registerCitationColumn.mockImplementationOnce(() => hold.promise);
+    const startup = hooks.onStartup(STARTUP);
+    await vi.waitFor(() => expect(columnMocks.registerCitationColumn).toHaveBeenCalled());
+
+    await hooks.onShutdown(STARTUP);
+    // Removing them now would leave the columns registerCitationColumn has yet to register.
+    expect(columnMocks.unregisterCitationColumn).not.toHaveBeenCalled();
+    expect(paneMocks.unregisterCitationPane).toHaveBeenCalledTimes(1);
+
+    hold.resolve();
+    await startup;
+
+    expect(columnMocks.unregisterCitationColumn).toHaveBeenCalledTimes(1);
+    expect(paneMocks.registerCitationPane).not.toHaveBeenCalled();
+    expect(menuMocks.registerMenus).not.toHaveBeenCalled();
+    expect(mainWindow.MozXULElement.insertFTLIfNeeded).not.toHaveBeenCalled();
+    expect(Zotero.debug).not.toHaveBeenCalledWith("[Citegeist] Startup complete");
+    expect(bridge()).toBeUndefined();
+  });
+
+  it("a shutdown after startup finished still removes the columns itself", async () => {
+    await hooks.onStartup(STARTUP);
+    await hooks.onShutdown(STARTUP);
+    expect(columnMocks.unregisterCitationColumn).toHaveBeenCalledTimes(1);
+  });
+
+  it("while a failed startup closes the cache, shutdown waits on that one close and no restart alert shows", async () => {
+    columnMocks.registerCitationColumn.mockRejectedValueOnce(new Error("column failed"));
+    const close = deferred();
+    cacheMocks.closeCache.mockImplementationOnce(() => close.promise);
+    const startup = hooks.onStartup(STARTUP);
+    await vi.waitFor(() => expect(cacheMocks.closeCache).toHaveBeenCalled());
+
+    const shutdown = hooks.onShutdown(STARTUP);
+    close.resolve();
+    await Promise.all([startup, shutdown]);
+
+    expect(cacheMocks.closeCache).toHaveBeenCalledTimes(1);
+    expect(Services.prompt.alert).not.toHaveBeenCalled();
+    expect(Zotero.debug).toHaveBeenCalledWith("[Citegeist] Shutdown complete");
+  });
+
+  describe("the settings pane, which Zotero adds only after resolving its URIs", () => {
+    it("comes back out when Zotero adds it after the shutdown began", async () => {
+      const added = deferred<string>();
+      vi.mocked(Zotero.PreferencePanes.register).mockReturnValueOnce(
+        added.promise as unknown as void,
+      );
+      await hooks.onStartup(STARTUP);
+
+      await hooks.onShutdown(STARTUP);
+      added.resolve(SETTINGS_PANE_ID);
+      await flushAsync();
+
+      expect(unregisterPane).toHaveBeenCalledWith(SETTINGS_PANE_ID);
+    });
+
+    it("stays when Zotero added it before any shutdown", async () => {
+      const added = deferred<string>();
+      vi.mocked(Zotero.PreferencePanes.register).mockReturnValueOnce(
+        added.promise as unknown as void,
+      );
+      await hooks.onStartup(STARTUP);
+      added.resolve(SETTINGS_PANE_ID);
+      await flushAsync();
+
+      await hooks.onShutdown(STARTUP);
+      await flushAsync();
+
+      expect(unregisterPane).not.toHaveBeenCalled();
+    });
+
+    it("a refusal is logged, not left as an unhandled rejection", async () => {
+      vi.mocked(Zotero.PreferencePanes.register).mockImplementationOnce(
+        () =>
+          Promise.reject(
+            new Error(`Pane with ID ${SETTINGS_PANE_ID} already registered`),
+          ) as unknown as void,
+      );
+      await hooks.onStartup(STARTUP);
+      await flushAsync();
+
+      expect(Zotero.debug).toHaveBeenCalledWith(
+        expect.stringContaining("[Citegeist] ERROR settings pane"),
+      );
+    });
   });
 });
 

@@ -17,15 +17,32 @@ export const MODULE_LOAD_TIMEOUT_MS = 30_000;
 
 // ─── Fake menu DOM ───────────────────────────────────────────────────────────
 
+/** An element's class list, as far as the code under test and the fakes use one. */
+class FakeClassList {
+  private readonly tokens = new Set<string>();
+
+  add(...tokens: string[]): void {
+    for (const token of tokens) this.tokens.add(token);
+  }
+
+  contains(token: string): boolean {
+    return this.tokens.has(token);
+  }
+}
+
 export class FakeMenuElement {
   id = "";
   hidden = false;
   parent: FakeMenuElement | null = null;
   readonly children: FakeMenuElement[] = [];
   readonly attrs = new Map<string, string>();
+  readonly classList = new FakeClassList();
   private readonly listeners = new Map<string, EventListener[]>();
 
-  constructor(private readonly doc: FakeMenuDocument) {}
+  constructor(
+    private readonly doc: FakeMenuDocument,
+    readonly localName = "",
+  ) {}
 
   appendChild(child: FakeMenuElement): void {
     child.parent = this;
@@ -44,6 +61,15 @@ export class FakeMenuElement {
 
   setAttribute(name: string, value: string): void {
     this.attrs.set(name, value);
+  }
+
+  getAttribute(name: string): string | null {
+    return this.attrs.get(name) ?? null;
+  }
+
+  /** This element's descendants, in document order. */
+  descendants(): FakeMenuElement[] {
+    return this.children.flatMap((child) => [child, ...child.descendants()]);
   }
 
   /** Honours `options.signal` as the DOM does: aborting it removes the listener. */
@@ -76,8 +102,31 @@ export class FakeMenuElement {
   }
 }
 
+/**
+ * The selectors the fake document answers, the only ones the code under test
+ * and these helpers use: a single class (`.name`), or a tag with exact
+ * attribute values (`link[rel="localization"][href="x.ftl"]`). Any other
+ * selector throws, so code that starts querying differently fails loudly here
+ * rather than matching nothing.
+ */
+function selectorMatcher(selector: string): (el: FakeMenuElement) => boolean {
+  const byClass = /^\.([\w-]+)$/.exec(selector);
+  if (byClass) return (el) => el.classList.contains(byClass[1]);
+  const byAttrs = /^([a-z]+)((?:\[[\w-]+="[^"]*"\])+)$/.exec(selector);
+  if (byAttrs) {
+    const attrs = [...byAttrs[2].matchAll(/\[([\w-]+)="([^"]*)"\]/g)];
+    return (el) =>
+      el.localName === byAttrs[1] &&
+      attrs.every(([, name, value]) => el.getAttribute(name) === value);
+  }
+  throw new Error(`FakeMenuDocument does not answer the selector ${selector}`);
+}
+
 export class FakeMenuDocument {
   readonly elements = new Map<string, FakeMenuElement>();
+  /** Where `MozXULElement.insertFTLIfNeeded` puts localization links in a main window. */
+  readonly head = new FakeMenuElement(this, "head");
+  private readonly roots: FakeMenuElement[] = [this.head];
 
   constructor() {
     this.addRoot("zotero-itemmenu");
@@ -85,9 +134,10 @@ export class FakeMenuDocument {
   }
 
   addRoot(id: string): FakeMenuElement {
-    const el = new FakeMenuElement(this);
+    const el = new FakeMenuElement(this, "menupopup");
     el.id = id;
     this.elements.set(id, el);
+    this.roots.push(el);
     return el;
   }
 
@@ -95,13 +145,26 @@ export class FakeMenuDocument {
     return this.elements.get(id) ?? null;
   }
 
-  /** Nothing matches: the only query the lifecycle hooks make is for their FTL link. */
-  querySelector(): null {
-    return null;
+  querySelectorAll(selector: string): FakeMenuElement[] {
+    const matches = selectorMatcher(selector);
+    return this.roots.flatMap((root) => [root, ...root.descendants()]).filter(matches);
   }
 
-  createXULElement(): FakeMenuElement {
-    return new FakeMenuElement(this);
+  querySelector(selector: string): FakeMenuElement | null {
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
+
+  createXULElement(localName = ""): FakeMenuElement {
+    return new FakeMenuElement(this, localName);
+  }
+
+  createElementNS(_namespace: string, localName: string): FakeMenuElement {
+    return new FakeMenuElement(this, localName);
+  }
+
+  /** The localization links whose `href` is `path`. */
+  localizationLinks(path: string): FakeMenuElement[] {
+    return this.querySelectorAll(`link[rel="localization"][href="${path}"]`);
   }
 }
 
@@ -109,6 +172,7 @@ export class FakeMenuDocument {
 export type FakeWindow = Window & {
   readonly document: FakeMenuDocument;
   AbortController: typeof AbortController;
+  MozXULElement: { insertFTLIfNeeded: Mock };
   ZoteroPane?: unknown;
   closed: boolean;
 };
@@ -119,11 +183,24 @@ export type FakeWindow = Window & {
  * `closed`, which a test sets to close it. The DOM menus build their listener
  * signal from the window's own constructor, so a fake without one would only
  * ever exercise the global fallback.
+ *
+ * `MozXULElement.insertFTLIfNeeded` does what Gecko's does: it appends an XHTML
+ * `<link rel="localization" href=path>` to the head unless one with that `href`
+ * is there (customElements.js@esr140 587-621).
  */
 export function fakeWindow(pane?: unknown): FakeWindow {
+  const document = new FakeMenuDocument();
+  const insertFTLIfNeeded = vi.fn((path: string) => {
+    if (document.head.children.some((el) => el.getAttribute("href") === path)) return;
+    const link = document.createElementNS("http://www.w3.org/1999/xhtml", "link");
+    link.setAttribute("rel", "localization");
+    link.setAttribute("href", path);
+    document.head.appendChild(link);
+  });
   return {
-    document: new FakeMenuDocument(),
+    document,
     AbortController,
+    MozXULElement: { insertFTLIfNeeded },
     ZoteroPane: pane,
     closed: false,
     // Timers never fire: the startup alerts scheduled on a window are not under test.
@@ -334,41 +411,218 @@ export interface CapturedMenu {
   readonly menus: readonly CapturedMenuEntry[];
 }
 
+/**
+ * `CSS.escape`, as the CSSOM specifies it ("serialize an identifier"). Node has
+ * no `CSS`, and the fake MenuManager needs the real escaping to build the keys
+ * Zotero builds.
+ */
+export function cssEscape(value: string): string {
+  let escaped = "";
+  const first = value.charCodeAt(0);
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    const char = value.charAt(i);
+    if (code === 0) {
+      escaped += "�";
+    } else if (
+      (code >= 0x01 && code <= 0x1f) ||
+      code === 0x7f ||
+      (i === 0 && code >= 0x30 && code <= 0x39) ||
+      (i === 1 && code >= 0x30 && code <= 0x39 && first === 0x2d)
+    ) {
+      escaped += `\\${code.toString(16)} `;
+    } else if (i === 0 && value.length === 1 && code === 0x2d) {
+      escaped += `\\${char}`;
+    } else if (code >= 0x80 || /[\w-]/.test(char)) {
+      escaped += char;
+    } else {
+      escaped += `\\${char}`;
+    }
+  }
+  return escaped;
+}
+
+/** The key Zotero stores a plugin's menu under: `CSS.escape(`${pluginID}-${menuID}`)`. */
+export function menuKey(pluginID: string, menuID: string): string {
+  return cssEscape(`${pluginID}-${menuID}`);
+}
+
+/**
+ * How a Zotero version renders MenuManager entries. Every version puts the
+ * `zotero-custom-menu-item` class and a per-entry key class on each entry and
+ * copies its `l10nID` into `data-l10n-id`. Zotero 9.0.6 and later also add the
+ * menu's key as a class and remove a plugin's rendered entries when its shutdown
+ * observer unregisters them; 8.0.4 does neither (menuManager.js @8.0.4 290-309
+ * and 435, @9.0.6 and @10.0.2 304-323 and 449).
+ */
+export interface MenuRenderingHost {
+  readonly name: string;
+  readonly stampsMenuKey: boolean;
+}
+
+export const MENU_RENDERING_HOSTS: readonly MenuRenderingHost[] = [
+  { name: "Zotero 8.0.4", stampsMenuKey: false },
+  { name: "Zotero 9.0.6 and 10.0.2", stampsMenuKey: true },
+];
+
+/** The popup MenuManager renders a target's entries into. */
+const TARGET_POPUPS: Record<string, string> = {
+  "main/library/item": "zotero-itemmenu",
+  "main/library/collection": "zotero-collectionmenu",
+};
+
+const RENDERED_ENTRY_CLASS = "zotero-custom-menu-item";
+
+const menuManagerWarnings: string[] = [];
+
+/** The warnings the fake MenuManager logged since the last call, which it forgets. */
+export function takeMenuManagerWarnings(): string[] {
+  return menuManagerWarnings.splice(0);
+}
+
+/** What the next `registerMenu` call does: register as Zotero would, refuse, or throw. */
+export type RegisterOutcome = "register" | false | Error;
+
 export interface FakeMenuManager {
   readonly registerMenu: Mock;
   readonly unregisterMenu: Mock;
+  /** Zotero's internal registry, as Citegeist reads it. Absent when made with `exposeRegistry: false`. */
+  readonly _menuManager?: { readonly options: readonly CapturedMenu[] };
   /** Every registration attempt, in order. */
   readonly captured: CapturedMenu[];
-  /**
-   * What the next `registerMenu` calls do, oldest first: return the value, or
-   * throw it when it is an Error. Calls past the list return the menu ID.
-   */
-  readonly outcomes: Array<string | false | Error>;
+  /** What the next `registerMenu` calls do, oldest first; calls past the list register. */
+  readonly outcomes: RegisterOutcome[];
+  /** The registrations Zotero holds, by key. */
+  readonly registered: ReadonlyMap<string, CapturedMenu>;
   /** The entry with `l10nID` on the most recent menu registered for `target`. */
   entry(target: "item" | "collection", l10nID: string): CapturedMenuEntry;
+  /**
+   * Render every registered menu into `win`'s popups, as `updateMenuPopup` does
+   * when a popup opens: entries no longer registered go, registered ones are
+   * (re)built.
+   */
+  render(win: FakeWindow, host: MenuRenderingHost): void;
+  /**
+   * What Zotero's plugin-shutdown observer does (pluginAPIBase.mjs
+   * `_unregisterByPluginID` 345-356, menuManager.js 304-323): remove every menu
+   * `pluginID` registered, silently, and on a host that stamps menu keys, their
+   * rendered entries in `windows`.
+   */
+  shutdownPlugin(pluginID: string, windows: readonly FakeWindow[], host: MenuRenderingHost): void;
 }
 
-export function fakeMenuManager(): FakeMenuManager {
+/**
+ * A `Zotero.MenuManager` that keeps its registry the way PluginAPIBase does
+ * (pluginAPIBase.mjs, identical at 8.0.4, 9.0.6 and 10.0.2): `registerMenu`
+ * stores a menu under `CSS.escape(`${pluginID}-${menuID}`)` and returns that
+ * key, and returns `false` with a warning for a key already registered
+ * (`_validate` 177-194); `unregisterMenu` removes a menu by that key only, and
+ * for any other string returns `false` and warns "Can't remove unknown option"
+ * (`_remove` 163-170). The warnings land where takeMenuManagerWarnings() finds
+ * them, and expectHostContractKept() fails a test that leaves one unread.
+ */
+export function fakeMenuManager(options: { exposeRegistry?: boolean } = {}): FakeMenuManager {
   const captured: CapturedMenu[] = [];
-  const outcomes: Array<string | false | Error> = [];
-  const registerMenu = vi.fn((options: CapturedMenu) => {
-    captured.push(options);
-    const outcome = outcomes.length > 0 ? outcomes.shift()! : options.menuID;
+  const outcomes: RegisterOutcome[] = [];
+  const registered = new Map<string, CapturedMenu>();
+  let renderedKeys = 0;
+
+  const registerMenu = vi.fn((menu: CapturedMenu) => {
+    captured.push(menu);
+    const outcome = outcomes.length > 0 ? outcomes.shift()! : "register";
     if (outcome instanceof Error) throw outcome;
-    return outcome;
+    if (outcome === false) return false;
+    const key = menuKey(menu.pluginID, menu.menuID);
+    if (registered.has(key)) {
+      menuManagerWarnings.push(`MenuAPI: 'menuID' must be unique, got ${key}`);
+      return false;
+    }
+    registered.set(key, { ...menu, menuID: key });
+    return key;
   });
-  return {
+
+  const unregisterMenu = vi.fn((key: string) => {
+    if (!registered.delete(key)) {
+      menuManagerWarnings.push(`MenuAPI: Can't remove unknown option '${key}'`);
+      return false;
+    }
+    return true;
+  });
+
+  function removeEntries(win: FakeWindow, keep: (entry: FakeMenuElement) => boolean): void {
+    for (const entry of win.document.querySelectorAll(`.${RENDERED_ENTRY_CLASS}`)) {
+      if (!keep(entry)) entry.remove();
+    }
+  }
+
+  const manager: FakeMenuManager = {
     registerMenu,
-    unregisterMenu: vi.fn(() => true),
+    unregisterMenu,
     captured,
     outcomes,
+    registered,
     entry(target, l10nID) {
       const menu = captured.findLast((c) => c.target === `main/library/${target}`);
       const found = menu?.menus.find((m) => m.l10nID === l10nID);
       if (!found) throw new Error(`no ${l10nID} entry registered on the ${target} menu`);
       return found;
     },
+    render(win, host) {
+      removeEntries(win, () => false);
+      for (const [key, menu] of [...registered].sort(([a], [b]) => a.localeCompare(b))) {
+        const popup = win.document.getElementById(TARGET_POPUPS[menu.target]);
+        if (!popup) continue;
+        for (const data of menu.menus) {
+          const entry = win.document.createXULElement("menuitem");
+          entry.classList.add(RENDERED_ENTRY_CLASS, `zotero-custom-menu-${++renderedKeys}`);
+          if (host.stampsMenuKey) entry.classList.add(key);
+          if (data.l10nID) entry.setAttribute("data-l10n-id", data.l10nID);
+          popup.appendChild(entry);
+        }
+      }
+    },
+    shutdownPlugin(pluginID, windows, host) {
+      const removed = [...registered].filter(([, menu]) => menu.pluginID === pluginID);
+      for (const [key] of removed) registered.delete(key);
+      if (!host.stampsMenuKey || removed.length === 0) return;
+      for (const win of windows) {
+        removeEntries(win, (entry) => !removed.some(([key]) => entry.classList.contains(key)));
+      }
+    },
   };
+  if (options.exposeRegistry === false) return manager;
+  return {
+    ...manager,
+    _menuManager: {
+      get options() {
+        return [...registered.values()].map((menu) => ({ ...menu }));
+      },
+    },
+  };
+}
+
+/**
+ * An entry another plugin's menu rendered into `popupID`, with the class
+ * MenuManager puts on every entry, so a test can check that Citegeist removes
+ * only its own.
+ */
+export function renderOtherPluginEntry(win: FakeWindow, popupID: string): FakeMenuElement {
+  const entry = win.document.createXULElement("menuitem");
+  entry.classList.add(
+    RENDERED_ENTRY_CLASS,
+    "zotero-custom-menu-other",
+    menuKey("other@example.org", "menu"),
+  );
+  entry.setAttribute("data-l10n-id", "other-plugin-menu-entry");
+  win.document.getElementById(popupID)!.appendChild(entry);
+  return entry;
+}
+
+/** The `data-l10n-id` of every rendered MenuManager entry in `win`, in document order. */
+export function renderedEntryL10nIDs(win: FakeWindow): string[] {
+  return win.document
+    .querySelectorAll(`.${RENDERED_ENTRY_CLASS}`)
+    .map((entry) => entry.getAttribute("data-l10n-id") ?? "");
 }
 
 // ─── Batch results ───────────────────────────────────────────────────────────
@@ -532,10 +786,13 @@ export async function clearRecordedFailures(): Promise<void> {
 
 /**
  * The check every menu test ends with, from `afterEach`: no fake Zotero 10
- * context logged a removed-API warning, and nothing was recorded unless the test
- * read the recorded failures itself. A handler that reads a context the way
- * Zotero 10 forbids either throws into guard(), which records, or logs the
- * warning, so neither can pass a test silently.
+ * context logged a removed-API warning, the fake MenuManager logged no warning
+ * the test did not take, and nothing was recorded unless the test read the
+ * recorded failures itself. A handler that reads a context the way Zotero 10
+ * forbids either throws into guard(), which records, or logs the warning, so
+ * neither can pass a test silently. MenuManager's warnings are how Zotero
+ * answers an unregister by the wrong key or a duplicate registration, and Zotero
+ * 8 to 10 file them as errors in Help → Report Errors.
  */
 export async function expectHostContractKept(): Promise<void> {
   const read = failuresRead;
@@ -543,6 +800,7 @@ export async function expectHostContractKept(): Promise<void> {
   expect(takeRemovedApiWarnings(), "a handler read Zotero 10's removed collectionTreeRow").toEqual(
     [],
   );
+  expect(takeMenuManagerWarnings(), "Zotero's MenuManager logged a warning").toEqual([]);
   if (!read) {
     const recorded = (await diagnostics()).recentDiagnostics();
     expect(
@@ -562,4 +820,21 @@ export async function flushAsync(): Promise<void> {
   for (let turn = 0; turn < 10; turn++) {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
+}
+
+/** A promise a test settles itself, to hold an await open while something else happens. */
+export interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+  reject(reason: unknown): void;
+}
+
+export function deferred<T = void>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }

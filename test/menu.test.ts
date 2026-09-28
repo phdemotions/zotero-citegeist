@@ -1,13 +1,15 @@
 /**
  * Tests for the MenuManager menus: registration, which item-menu entries show,
  * what the item and collection commands act on, the window they act in, batch
- * summaries, teardown, and the FTL the labels come from.
+ * summaries, teardown by the keys Zotero returns, removal of the entries
+ * MenuManager rendered, and the FTL the labels come from.
  *
  * Every handler runs against contexts shaped as Zotero 8 and 9, and Zotero 10,
  * build them (test/_helpers/menuHarness.ts), and every test ends by checking that
- * no handler read a context the way Zotero 10 forbids. The collection commands'
- * batch behaviour is in collection-menu.test.ts. The DOM fallback's tests sit at
- * the end, marked for deletion with it.
+ * no handler read a context the way Zotero 10 forbids and that the fake
+ * MenuManager, which keeps Zotero's registry rules, logged no warning. The
+ * collection commands' batch behaviour is in collection-menu.test.ts. The DOM
+ * fallback's tests sit at the end, marked for deletion with it.
  *
  * Registration holds process-global state, so every test loads a fresh module
  * graph in beforeEach.
@@ -19,12 +21,14 @@ import { CACHE_READ_ONLY_HEADLINE } from "../src/constants";
 import {
   COLLECTION_MENU_HOSTS,
   ITEM_MENU_HOSTS,
+  MENU_RENDERING_HOSTS,
   MODULE_LOAD_TIMEOUT_MS,
   UNSUPPORTED_ROW_TYPES,
   backfillResult,
   batchResult,
   clearRecordedFailures,
   collectionRow,
+  cssEscape,
   expectHostContractKept,
   fakeMenuManager,
   fakeProgressWindowClass,
@@ -36,10 +40,14 @@ import {
   makeCollection,
   makeItem,
   menuElementIn,
+  menuKey,
   otherRow,
   progressWindowParents,
   recordedFailures,
+  renderOtherPluginEntry,
+  renderedEntryL10nIDs,
   selectionUnreadableReports,
+  takeMenuManagerWarnings,
   zotero10CollectionContext,
   type FakeMenuManager,
   type FakeWindow,
@@ -72,6 +80,9 @@ type Registration = typeof RegistrationModule;
 type Visibility = typeof VisibilityModule;
 
 const PLUGIN_ID = "citegeist@opusvita.org";
+/** The keys Zotero stores Citegeist's two menus under, never their bare menu IDs. */
+const ITEM_MENU_KEY = menuKey(PLUGIN_ID, "citegeist-item-menu");
+const COLLECTION_MENU_KEY = menuKey(PLUGIN_ID, "citegeist-collection-menu");
 const FETCH = "citegeist-menu-fetch";
 const CITING = "citegeist-menu-citing";
 const REFS = "citegeist-menu-refs";
@@ -92,9 +103,11 @@ function resolvable(item: { isRegularItem?: () => boolean; hasIdentifier?: boole
   return item.isRegularItem?.() !== false && item.hasIdentifier !== false;
 }
 
-function installZotero(withMenuManager: boolean): void {
-  mm = fakeMenuManager();
+function installZotero(withMenuManager: boolean, exposeRegistry = true): void {
+  mm = fakeMenuManager({ exposeRegistry });
   alertSpy = vi.fn();
+  // The plugin sandbox has Gecko's CSS.escape at every supported Zotero.
+  vi.stubGlobal("CSS", { escape: cssEscape });
   vi.stubGlobal("Zotero", {
     debug: vi.fn(),
     getMainWindow: vi.fn(() => win),
@@ -193,16 +206,18 @@ describe("MenuManager registration", () => {
     expect(other.document.getElementById(FETCH)).toBeNull();
   });
 
-  it("a rejected collection menu rolls back the item menu", () => {
-    mm.outcomes.push("citegeist-item-menu", false);
+  it("a rejected collection menu rolls back the item menu by the key Zotero returned", () => {
+    mm.outcomes.push("register", false);
     register();
-    expect(mm.unregisterMenu.mock.calls.map(([id]) => id)).toEqual(["citegeist-item-menu"]);
+    expect(mm.unregisterMenu.mock.calls.map(([key]) => key)).toEqual([ITEM_MENU_KEY]);
+    expect([...mm.registered.keys()]).toEqual([]);
   });
 
-  it("a registration that throws rolls back what registered and records the failure", async () => {
-    mm.outcomes.push("citegeist-item-menu", new Error("registry is busy"));
+  it("a registration that throws rolls back what registered, by its key, and records the failure", async () => {
+    mm.outcomes.push("register", new Error("registry is busy"));
     register();
-    expect(mm.unregisterMenu.mock.calls.map(([id]) => id)).toEqual(["citegeist-item-menu"]);
+    expect(mm.unregisterMenu.mock.calls.map(([key]) => key)).toEqual([ITEM_MENU_KEY]);
+    expect([...mm.registered.keys()]).toEqual([]);
     expect((await recordedFailures()).map((d) => d.context)).toEqual(["menu MenuManager register"]);
   });
 
@@ -214,15 +229,164 @@ describe("MenuManager registration", () => {
     expect(mm.registerMenu).toHaveBeenCalledTimes(2);
   });
 
-  it("the global teardown unregisters both menus, and a later registration registers again", () => {
+  it("the global teardown unregisters both menus by the keys Zotero returned, never the bare menu IDs (ADV-B1)", () => {
     register();
     menu.unregisterGlobalMenus();
-    expect(mm.unregisterMenu.mock.calls.map(([id]) => id)).toEqual([
-      "citegeist-item-menu",
-      "citegeist-collection-menu",
+    // Zotero stores each menu under CSS.escape(pluginID-menuID) and finds it by
+    // that key only; the bare ID matches nothing and logs "Can't remove unknown
+    // option", which expectHostContractKept fails on.
+    expect(mm.unregisterMenu.mock.calls.map(([key]) => key)).toEqual([
+      ITEM_MENU_KEY,
+      COLLECTION_MENU_KEY,
     ]);
+    expect([...mm.registered.keys()]).toEqual([]);
+  });
+
+  it("a later registration registers again, not refused as a duplicate and replaced by the DOM fallback", () => {
+    register();
+    menu.unregisterGlobalMenus();
     register();
     expect(mm.registerMenu).toHaveBeenCalledTimes(4);
+    expect([...mm.registered.keys()].sort()).toEqual([COLLECTION_MENU_KEY, ITEM_MENU_KEY].sort());
+    expect(win.document.getElementById(FETCH), "a second, DOM set of entries").toBeNull();
+  });
+
+  it("a teardown with nothing registered unregisters nothing, so Zotero logs no unknown-option warning", () => {
+    menu.unregisterGlobalMenus();
+    expect(mm.unregisterMenu).not.toHaveBeenCalled();
+  });
+
+  it("a teardown after the DOM fallback took over unregisters nothing from MenuManager", () => {
+    mm.outcomes.push(false);
+    register();
+    menu.unregisterGlobalMenus();
+    expect(mm.unregisterMenu).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The fake stands in for Zotero's PluginAPIBase in every menu test, so its
+ * rules are pinned here: were it to accept any key, as it once did, an
+ * unregister by the bare menu ID would pass every test (ADV-B1).
+ */
+describe("the fake MenuManager keeps Zotero's registry rules", () => {
+  const options = {
+    menuID: "citegeist-item-menu",
+    pluginID: PLUGIN_ID,
+    target: "main/library/item",
+    menus: [{ menuType: "menuitem", l10nID: FETCH }],
+  };
+
+  it("stores a menu under CSS.escape(pluginID-menuID) and returns that key", () => {
+    expect(mm.registerMenu(options)).toBe("citegeist\\@opusvita\\.org-citegeist-item-menu");
+    expect(mm._menuManager?.options.map((o) => o.menuID)).toEqual([ITEM_MENU_KEY]);
+  });
+
+  it("refuses a second registration under the same key, with Zotero's warning", () => {
+    mm.registerMenu(options);
+    expect(mm.registerMenu(options)).toBe(false);
+    expect(takeMenuManagerWarnings()).toEqual([
+      `MenuAPI: 'menuID' must be unique, got ${ITEM_MENU_KEY}`,
+    ]);
+  });
+
+  it("finds a menu by its key only: the bare menu ID removes nothing and warns", () => {
+    mm.registerMenu(options);
+    expect(mm.unregisterMenu("citegeist-item-menu")).toBe(false);
+    expect(takeMenuManagerWarnings()).toEqual([
+      "MenuAPI: Can't remove unknown option 'citegeist-item-menu'",
+    ]);
+    expect(mm.unregisterMenu(ITEM_MENU_KEY)).toBe(true);
+    expect(mm.registered.size).toBe(0);
+  });
+});
+
+describe("a menu an earlier copy left registered", () => {
+  /** Register Citegeist's menu under its key, as a copy without the startup check could leave it. */
+  function leaveStaleItemMenu(target: FakeMenuManager): void {
+    target.registerMenu({
+      menuID: "citegeist-item-menu",
+      pluginID: PLUGIN_ID,
+      target: "main/library/item",
+      menus: [{ menuType: "menuitem", l10nID: FETCH }],
+    });
+    target.registerMenu.mockClear();
+  }
+
+  it("is removed by its key before Citegeist registers, so the registration is not refused", () => {
+    leaveStaleItemMenu(mm);
+    register();
+
+    expect(mm.unregisterMenu.mock.calls.map(([key]) => key)).toEqual([ITEM_MENU_KEY]);
+    expect(mm.unregisterMenu.mock.invocationCallOrder[0]).toBeLessThan(
+      mm.registerMenu.mock.invocationCallOrder[0],
+    );
+    expect(mm.registerMenu.mock.results.map((r) => r.value)).toEqual([
+      ITEM_MENU_KEY,
+      COLLECTION_MENU_KEY,
+    ]);
+    expect(win.document.getElementById(FETCH), "the DOM fallback's second set").toBeNull();
+  });
+
+  it("is looked up in Zotero's registry, and nothing is unregistered when Zotero holds none", () => {
+    register();
+    expect(mm.unregisterMenu).not.toHaveBeenCalled();
+  });
+
+  it("stays when Zotero's registry can't be read: Citegeist unregisters nothing it did not register", () => {
+    installZotero(true, false);
+    leaveStaleItemMenu(mm);
+    register();
+
+    expect(mm.unregisterMenu).not.toHaveBeenCalled();
+    // Zotero refuses the duplicate, and the DOM fallback takes over, as before.
+    expect(takeMenuManagerWarnings()).toEqual([
+      `MenuAPI: 'menuID' must be unique, got ${ITEM_MENU_KEY}`,
+    ]);
+    expect(win.document.getElementById(FETCH)).not.toBeNull();
+  });
+});
+
+describe.each(MENU_RENDERING_HOSTS)("removeRenderedMenus on $name", (host) => {
+  it("removes every entry MenuManager rendered for Citegeist, in both popups, and nothing else", () => {
+    register();
+    mm.render(win, host);
+    const otherEntry = renderOtherPluginEntry(win, "zotero-itemmenu");
+    expect(renderedEntryL10nIDs(win)).toEqual([
+      FETCH,
+      CITING,
+      REFS,
+      RESOLVE,
+      "other-plugin-menu-entry",
+      FETCH_ALL,
+      RESOLVE_ALL,
+    ]);
+
+    menu.removeRenderedMenus(win);
+
+    expect(renderedEntryL10nIDs(win)).toEqual(["other-plugin-menu-entry"]);
+    expect(otherEntry.parent).not.toBeNull();
+  });
+
+  it("removes an entry MenuManager moved into its overflow submenu", () => {
+    register();
+    mm.render(win, host);
+    // MenuManager moves entries that don't fit into a group submenu inside the popup.
+    const itemPopup = win.document.getElementById("zotero-itemmenu")!;
+    const group = win.document.createXULElement("menu");
+    group.classList.add("zotero-custom-menu-item", "zotero-custom-menu-group-submenu");
+    group.setAttribute("data-l10n-id", "menu-custom-group-submenu");
+    const groupPopup = win.document.createXULElement("menupopup");
+    group.appendChild(groupPopup);
+    itemPopup.appendChild(group);
+    const moved = itemPopup.children.find((el) => el.getAttribute("data-l10n-id") === RESOLVE)!;
+    moved.remove();
+    groupPopup.appendChild(moved);
+
+    menu.removeRenderedMenus(win);
+
+    expect(renderedEntryL10nIDs(win)).toEqual(["menu-custom-group-submenu"]);
+    expect(groupPopup.children).toEqual([]);
   });
 });
 
@@ -851,7 +1015,7 @@ describe("DOM fallback registration", () => {
   });
 
   it("registers the DOM entries after MenuManager rejects the collection menu", () => {
-    mm.outcomes.push("citegeist-item-menu", false);
+    mm.outcomes.push("register", false);
     register();
     expect(win.document.getElementById(FETCH)).not.toBeNull();
     expect(win.document.getElementById(FETCH_ALL)).not.toBeNull();

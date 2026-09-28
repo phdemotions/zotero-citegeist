@@ -8,6 +8,7 @@
 
 export {
   registerMenus,
+  removeRenderedMenus,
   setMenuPluginID,
   unregisterGlobalMenus,
   unregisterMenus,
