@@ -36,11 +36,13 @@ JOSS-exempt.
 
 ## Plans
 
-- [Citation-pane metric grid (feat)](plans/2026-04-19-001-feat-citation-pane-metric-grid-plan.md)
-- [SQLite cache migration (feat)](plans/2026-05-27-001-feat-sqlite-cache-migration-plan.md)
-- [MenuManager registration lifecycle (fix)](plans/2026-07-06-001-fix-menu-manager-registration-lifecycle-plan.md)
-- [Author identity layer (feat)](plans/2026-07-16-001-feat-author-identity-layer-plan.md)
-- [Zotero 10 compatibility, host bugs, Zotero-version gate (fix)](plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md)
+The live plan is the Zotero 10 plan. Every other plan is a record of shipped or replaced work.
+
+- [Zotero 10 compatibility, host bugs, Zotero-version gate (fix)](plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md) — **live**; carries the path to v3.0.0
+- [Author identity layer (feat)](plans/2026-07-16-001-feat-author-identity-layer-plan.md) — implemented on `main`, ships in v3.0.0
+- [MenuManager registration lifecycle (fix)](plans/2026-07-06-001-fix-menu-manager-registration-lifecycle-plan.md) — shipped in v2.0.5, did not fix #67/#72; superseded by the live plan's U7
+- [SQLite cache migration (feat)](plans/2026-05-27-001-feat-sqlite-cache-migration-plan.md) — shipped in v2.0.0
+- [Citation-pane metric grid (feat)](plans/2026-04-19-001-feat-citation-pane-metric-grid-plan.md) — shipped in v1.3.0, replaced by the v3.0.0 pane rebuild
 
 ## Brainstorms & ideation
 

@@ -6,9 +6,12 @@ timestamp: 2026-07-16
 tags: [citegeist, brainstorm, authors, openalex, disambiguation, cache, obsidian]
 date: 2026-07-16
 topic: author-identity-layer
+status: implemented
 ---
 
 # Author Identity Layer
+
+> **Implemented, not released (2026-09-28).** Built by `docs/plans/2026-07-16-001-feat-author-identity-layer-plan.md`, merged to `main` in #75, and ships in v3.0.0. The synced identity handoff described below is disabled (Zotero's sync server rejects the predicate); the handoff is a direct read of `citegeist.sqlite`.
 
 ## Summary
 

@@ -1,12 +1,14 @@
 ---
 title: "feat: Replace citation-pane headline row with equal-weight 3-tile metric grid"
 type: feat
-status: active
+status: superseded
 date: 2026-04-19
 origin: docs/brainstorms/2026-04-19-citation-pane-metric-grid-requirements.md
 ---
 
 # feat: Citation Pane — Equal-Weight Metric Grid
+
+> **Superseded (2026-09-28).** Shipped in v1.3.0 (2026-04-19). The v3.0.0 pane rebuild on `main` replaced the three-tile grid with one hero metric and a supporting metric line, per `docs/design-system/pane-composition-language.md`. Kept as a record; do not plan from it. The live plan is `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`.
 
 ## Overview
 

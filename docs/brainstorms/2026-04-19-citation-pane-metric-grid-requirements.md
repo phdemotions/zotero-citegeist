@@ -6,9 +6,12 @@ timestamp: 2026-04-19
 tags: [citegeist, brainstorm, citation-pane, ui]
 date: 2026-04-19
 topic: citation-pane-metric-grid
+status: superseded
 ---
 
 # Citation Pane: Equal-Weight Metric Grid
+
+> **Superseded (2026-09-28).** Shipped in v1.3.0; the v3.0.0 pane rebuild replaced the grid (`docs/design-system/pane-composition-language.md`). Kept as a record.
 
 ## Problem Frame
 
