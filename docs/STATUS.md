@@ -20,7 +20,7 @@ tags: [citegeist, status]
 | ---------------- | -------------------------------------------------------------------------------------------------------------------- |
 | **Version**      | 2.0.5 released (2026-07-09); `main` stages 3.0.0 untagged; draft PR #93 carries `3.0.0-alpha.0`                    |
 | **Build Status** | Branch: 1,574 tests and every local gate green; real-Zotero CI 23 of 27 on Zotero 8, 9 and 10 (Node ≥22)            |
-| **Open Issues**  | P0: 1, P1: 4, P2: 7, P3: 7 (see ISSUES.md; P0 = BUG-Z10-INSTALL; feature requests live in BACKLOG.md)                |
+| **Open Issues**  | P0: 3, P1: 3, P2: 8, P3: 7 (see ISSUES.md; P0 = BUG-Z10-INSTALL, BUG-PANE-XML, BUG-QUIT)                              |
 | **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, SQLite, Node 22; Zotero 7.0.10–9 released, 7.0.10–`10.0.*` on #93     |
 | **Data Source**  | OpenAlex (CC0; metered since July 2026: lookups by ID or DOI free, search metered; optional API key)               |
 | **Distribution** | GitHub Releases → auto-update via `release` Release (self-maintaining); Zenodo-archived                              |
@@ -165,7 +165,7 @@ Initial public release. See `CHANGELOG.md` for full feature list.
 
 ## Blockers
 
-- **Zotero 10 users are locked out** (BUG-Z10-INSTALL). The fix needs no code: the prepared `update.json` raises 2.0.5's cap to `10.0.*`. It waits on a Zotero 10 smoke run and Josh's approval to publish (plan U17).
+- **Zotero 10 users are locked out** (BUG-Z10-INSTALL), and released v2.0.5 is broken on the hosts it supports: on Zotero 9.0.6 and 10.0.4 it renders no pane and hides other plugins' panes (BUG-PANE-XML), shows blank menu labels, and crashes Zotero on quit after 61 s (BUG-QUIT). The no-code bridge was withdrawn after its smoke run on 2026-09-28; v2.0.6 is the fix (plan U3).
 - **SEC-001**, a security defect in the citation browser, reaches every released version. Its details are held in a private security advisory until v2.0.6 ships the fix (plan, next steps, step 3).
 
 ---
@@ -176,7 +176,7 @@ The order lives in the plan's "Next steps", and the detail of each item lives in
 
 | #   | Step                                                            | Detail lives in                             |
 | --- | --------------------------------------------------------------- | ------------------------------------------- |
-| 1   | Bridge Zotero 10 users (smoke run, Josh approves, publish)      | Plan U17                                    |
+| 1   | v2.0.6 for Zotero 7–10 (the bridge's smoke run failed)          | Plan U3, "U17 smoke run"; `ISSUES.md` P0     |
 | 2   | Tag ruleset blocking `v*` tags: done 2026-09-28 (24140405)      | Plan, next steps, step 2                    |
 | 3   | Fix SEC-001 privately; publish with v2.0.6                     | `ISSUES.md` SEC-001; plan step 3            |
 | 4   | Green real-Zotero CI; fix the open findings on #93; merge it    | Plan, "First real-Zotero run" and "Open findings" |

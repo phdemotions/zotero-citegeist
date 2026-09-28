@@ -19,9 +19,9 @@ tags: [citegeist, issues]
 
 | Priority     | Open |
 | ------------ | ---- |
-| P0 (Blocker) | 1    |
-| P1 (High)    | 4    |
-| P2 (Medium)  | 7    |
+| P0 (Blocker) | 3    |
+| P1 (High)    | 3    |
+| P2 (Medium)  | 8    |
 | P3 (Low)     | 7    |
 
 Feature requests are not tracked here — they live in [`BACKLOG.md`](BACKLOG.md) (curated detail) and GitHub `enhancement` issues (public intake).
@@ -33,9 +33,23 @@ Feature requests are not tracked here — they live in [`BACKLOG.md`](BACKLOG.md
 ### BUG-Z10-INSTALL: Citegeist cannot be installed on Zotero 10
 
 **Impact:** Every Zotero 10 user is locked out. v2.0.5's manifest and the live `update.json` both cap the plugin at `strict_max_version: "9.*"`, so Zotero 10.0.x refuses the install ("could not be installed. It may be incompatible with this version of Zotero") and disables an existing copy after upgrading. Zotero 10.0 shipped 2026-08-17; the first report arrived 2026-09-13 on the Zotero forums ([comment 518143](https://forums.zotero.org/discussion/comment/518143#Comment_518143), Zotero 10.0.2, Windows 11). No GitHub issue exists yet.
-**Status (2026-09-28):** Still live, 42 days after Zotero 10.0 shipped. The planned same-day bridge (U17) never ran, and the live `update.json` still caps 2.0.5 at `9.*`. The bridge file is prepared: the live `update.json` with 2.0.5's cap raised to `10.0.*`, same link and hash. It waits on a Zotero 10 smoke run and Josh's approval to publish. Firefox 140's installer applies the channel's compatibility override before refusing a local XPI (`XPIInstall.sys.mjs` at esr140, lines 2287–2313), so the bridge should also fix fresh installs from file. On draft PR [#93](https://github.com/phdemotions/zotero-citegeist/pull/93), the manifest takes its range from `package.json` (capped `10.0.*`) and Zotero 10's throwing selection getters are replaced (U1, U2). Zotero is now at 10.0.3 (Linux, Windows) and 10.0.4 (macOS), all inside `10.0.*`.
-**Fix:** U17 first; then U3 if the plan's decision criteria call for v2.0.6; the scheduled Zotero watch (U10) catches the next cap lockout before users do.
+**Status (2026-09-28):** Still live, 42 days after Zotero 10.0 shipped. The planned bridge (raising 2.0.5's cap in `update.json`) was withdrawn after its smoke run failed: on Zotero 10.0.4, and on Zotero 9.0.6 as a baseline, released v2.0.5 renders no pane (BUG-PANE-XML), shows blank menu labels (BUG-MENU) and crashes Zotero on quit (BUG-QUIT), so re-enabling it would harm Zotero 10 users. On draft PR [#93](https://github.com/phdemotions/zotero-citegeist/pull/93), the manifest takes its range from `package.json` (capped `10.0.*`) and Zotero 10's throwing selection getters are replaced (U1, U2). Zotero is at 10.0.3 (Linux, Windows) and 10.0.4 (macOS), all inside `10.0.*`.
+**Fix:** v2.0.6 (plan U3, Decisions item 2), proved with the local smoke run on Zotero 9 and 10 before release; the scheduled Zotero watch (U10) catches the next cap lockout before users do.
 **Found:** 2026-09-13.
+
+### BUG-PANE-XML: The item pane never renders in v2.0.4 and v2.0.5, and hides other plugins' panes
+
+**Impact:** Zotero parses an item-pane section's body as XML. Since v2.0.4 the pane's embedded `<style>` has held a `<strong>` inside two CSS comments, with no CDATA wrapper, so Zotero reports "not well-formed XML" and never initialises Citegeist's section: no pane, no sidenav button. Other plugins' item-pane sections stop rendering too: a control section rendered without Citegeist and did not render beside v2.0.5. Reproduced on 2026-09-28 in fresh profiles on Zotero 9.0.6 and 10.0.4 (`itemPaneSection.js` at 9.0.6, line 288; `itemPaneCustomSection.js` at 10.0.4, line 140). A June memory note said the CDATA fix shipped in v2.0.5; the v2.0.5 tag has no CDATA, and only `main` has the fix.
+**Fix:** v2.0.6 wraps the `<style>` in CDATA as `main` does, with the no-`<`/`&` guard test `main` already has.
+**Found:** 2026-06 (fix on `main` only); confirmed in released v2.0.5 on 2026-09-28.
+
+### BUG-QUIT: Zotero 9.0.6 hangs on quit → force-quit required (#78)
+
+**Impact:** With Citegeist enabled, quitting Zotero 9.0.6 shows a spinning loader and never exits; the user must force-quit. Reported on v2.0.5 / macOS. A hang on every quit is severe.
+**Status:** Not yet reproduced or root-caused. The v3.0.0 shutdown rework on `main` (bounded cache drain, explicit `chromeHandle.destruct()`) does **not** run on quit: `addon/bootstrap.js` returns early on `APP_SHUTDOWN` in both v2.0.5 and `main`, so `onShutdown` and `closeCache()` never execute when the user quits, and the plugin's own `Zotero.DBConnection("citegeist")` is still open at exit. Treat #78 as open on `main`. Planned as U6 in `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`.
+**Reproduced (2026-09-28):** in fresh isolated profiles on Zotero 9.0.6 and 10.0.4 on macOS, quitting with v2.0.5 took 61 s and ended in a crash (exit code 139), while quitting without Citegeist took 0.5 s with exit code 0. The 60 s matches Firefox's shutdown watchdog, which aborts when a database connection is still open: `addon/bootstrap.js` returns early on `APP_SHUTDOWN`, so `citegeist.sqlite` is never closed. Josh's own Mac runs the reporter's setup, Zotero 9.0.6 on macOS. A round-B reviewer expects every real-Zotero CI cell's closing quit to stall on the still-open `citegeist.sqlite`, which would reproduce the hang on Linux too. After the U17 bridge, Zotero 10 users meet it as well.
+**Fix:** Reproduce on real Z9.0.6 (macOS) with Debug Output and confirm the blocker in Zotero/Firefox source before changing code. Leads, none confirmed: the open SQLite connection at quit; `bootstrap.js` dropping the promise from `citegeist.shutdown()`; unbounded awaits in `closeCache()`; fetch batches that cannot be cancelled.
+**Found:** 2026-07-23.
 
 ---
 
@@ -59,18 +73,11 @@ Feature requests are not tracked here — they live in [`BACKLOG.md`](BACKLOG.md
 
 **Impact:** On Zotero 8/9, the Citegeist context-menu entries can render without labels, and after using one entry the right-click menu stops opening on **any** item until the plugin is toggled off/on or Zotero restarts. Breaks a core surface for Z8/9 users. **Confirmed STILL BROKEN on the released v2.0.5 by three users** (MattGiulP, bwegge, scolino — latest confirmation 2026-07-23), after two fix attempts (the v2.0.5 hotfix per [#67](https://github.com/phdemotions/zotero-citegeist/issues/67); registration-lifecycle plan `docs/plans/2026-07-06-001-fix-menu-manager-registration-lifecycle-plan.md`). The stray-empty-section half of #72 appears addressed; the "menu dies after use" half is not.
 **Status:** `main`/v3.0.0 carries further MenuManager registration + teardown work (the code cites #67/#72), but it is **unverified on a real Zotero 9** and unreleased — so from a user's view it is still open. This is the top item on the `docs/RELEASE-CHECKLIST.md` right-click-menu gate; do not claim fixed until confirmed on a real Z9 install.
+**Reproduced (2026-09-28):** in fresh profiles on Zotero 9.0.6 and 10.0.4, v2.0.5's three item entries appear with blank labels, five opens of five: v2.0.5 loads its strings only when a window opens, and the main window is already open when it starts (the Zotero 9 write-up's root cause 2).
 **Lead (2026-09-28, round-B review):** every released version unregisters its MenuManager menus with the raw id (`citegeist-item-menu`), but Zotero stores and removes them only under `CSS.escape(pluginID + "-" + menuID)`. Teardown and rollback therefore remove nothing, and a later registration refused as a duplicate falls back to DOM entries beside the stale MenuManager set: the dual-menu state the v2.0.5 plan suspected. Confirmed by running Zotero 9.0.6's own `pluginAPIBase.mjs`; v2.0.5 `menu.ts:377`, `main` `menu.ts:587` and `:801`. In normal use Zotero's own cleanup removes the menus on disable, so this alone may not explain the first-use death; it is where U7 starts.
 **Second lead (2026-09-28, first CI run):** a main window that keeps Citegeist's translation link after the plugin's translation source is unregistered makes every context-menu build reject until the source returns (BUG-DISABLE-L10N). Toggling the plugin off and on, the workaround reporters use, re-registers that source.
 **Fix:** Needs a real-Zotero-9 debug session to find why the popup stops responding after the first `onCommand`/`onShowing` (likely a MenuManager `onShowing`/DOM-fallback interaction that corrupts the native popup). Keep #67 and #72 open until users confirm.
 **Found:** #67 2026-06-25, #72 2026-07-14.
-
-### BUG-QUIT: Zotero 9.0.6 hangs on quit → force-quit required (#78)
-
-**Impact:** With Citegeist enabled, quitting Zotero 9.0.6 shows a spinning loader and never exits; the user must force-quit. Reported on v2.0.5 / macOS. A hang on every quit is severe.
-**Status:** Not yet reproduced or root-caused. The v3.0.0 shutdown rework on `main` (bounded cache drain, explicit `chromeHandle.destruct()`) does **not** run on quit: `addon/bootstrap.js` returns early on `APP_SHUTDOWN` in both v2.0.5 and `main`, so `onShutdown` and `closeCache()` never execute when the user quits, and the plugin's own `Zotero.DBConnection("citegeist")` is still open at exit. Treat #78 as open on `main`. Planned as U6 in `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`.
-**Also (2026-09-28):** Josh's own Mac runs the reporter's setup, Zotero 9.0.6 on macOS. A round-B reviewer expects every real-Zotero CI cell's closing quit to stall on the still-open `citegeist.sqlite`, which would reproduce the hang on Linux too. After the U17 bridge, Zotero 10 users meet it as well.
-**Fix:** Reproduce on real Z9.0.6 (macOS) with Debug Output and confirm the blocker in Zotero/Firefox source before changing code. Leads, none confirmed: the open SQLite connection at quit; `bootstrap.js` dropping the promise from `citegeist.shutdown()`; unbounded awaits in `closeCache()`; fetch batches that cannot be cancelled.
-**Found:** 2026-07-23.
 
 ---
 
@@ -111,6 +118,12 @@ Feature requests are not tracked here — they live in [`BACKLOG.md`](BACKLOG.md
 
 **Impact:** On Zotero 8, 9 and 10, `Zotero.warn` lands in Help → Report Errors as an error, because Zotero's logger passes Gecko 115's argument list to Gecko 140's `scriptError.init`. Citegeist unregisters each column and its pane section before registering them, which logs 10 "Can't remove unknown option" warnings per startup (in v2.0.5 too), and Zotero's own `defaultIn`/`disableIn` check adds 18 more for Citegeist's nine columns. The buffer holds 25 entries, so every startup pushes out the errors a user's report is meant to carry.
 **Fix:** Unregister only what exists (`Zotero.ItemTreeManager.isCustomColumn`, `Zotero.ItemPaneManager.customSectionData`, both available since Zotero 7.0.10). The other 18 entries and the logger fault need a Zotero fix; the plan's Decisions, item 7, lists the reports.
+**Found:** 2026-09-28.
+
+### BUG-STARTUP-TX: Startup column registration can make Zotero's own writes time out
+
+**Impact:** Each of Citegeist's nine `registerColumn` calls makes Zotero's plugin API open a main-database transaction to queue a tree refresh. In two of eight smoke startups on 2026-09-28, one of those transactions stayed open about 30 s and ten of Zotero's own transactions timed out waiting ("Timed out waiting for transaction", `TimeoutError` at `db.js` line 2638, Zotero 10.0.4). The branch registers columns the same way.
+**Fix:** Find why the refresh transaction runs long (read `pluginAPIBase.mjs` `_refresh` and the item tree's refresh at 9.0.6 and 10.0.4); if registering nine columns one by one is the cause, register them in one pass or defer registration until startup's database work settles. U8.
 **Found:** 2026-09-28.
 
 ### VERIFY-001: v3.0.0 pane needs a real-Zotero visual-verify before release
