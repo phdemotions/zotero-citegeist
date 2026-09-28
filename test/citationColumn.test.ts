@@ -8,12 +8,13 @@ vi.mock("../src/modules/cache", () => ({
 }));
 
 vi.mock("../src/modules/citationService", () => ({
+  backgroundStopFor: vi.fn(() => null),
   canResolveWork: vi.fn(),
   fetchAndCacheItem: vi.fn(),
-  fetchStopFor: vi.fn(() => null),
 }));
 
 vi.mock("../src/modules/openalex", () => ({
+  apiKeyForRequests: vi.fn(() => ""),
   getCachedSourceISSNs: vi.fn(() => []),
 }));
 
@@ -71,5 +72,16 @@ describe("citation columns", () => {
     );
     expect(unregisterColumn).toHaveBeenCalledWith("citegeist@opusvita.org-citegeist-fwci");
     expect(unregisterColumn).toHaveBeenCalledWith("citegeist@opusvita.org-citegeist-percentile");
+  });
+
+  it("ends a failed registration, so a retry registers from scratch", async () => {
+    const { registerCitationColumn, unregisterCitationColumn } = await loadCitationColumn();
+    await expect(registerCitationColumn("citegeist@opusvita.org")).rejects.toThrow();
+
+    // Nothing is left registered to take down, and a second attempt starts over.
+    await expect(unregisterCitationColumn()).resolves.toBeUndefined();
+    registeredKeys = [];
+    await expect(registerCitationColumn("citegeist@opusvita.org")).rejects.toThrow();
+    expect(registeredKeys, "the retry registered its columns again").toHaveLength(3);
   });
 });

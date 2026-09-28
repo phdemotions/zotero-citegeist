@@ -40,7 +40,28 @@ function setUserPref(name: string, value: string): void {
 }
 
 // Import after the global is stubbed so module-level code sees it.
-import { getWorkById, resolveCanonicalId, resolveOpenAlexBase } from "../src/modules/openalex";
+import {
+  OpenAlexUnavailableError,
+  apiKeyForRequests,
+  buildUrl,
+  clearSourceStatsCache,
+  getCitingWorks,
+  getReferencedWorks,
+  getSourceStats,
+  getWorkByArxivId,
+  getWorkByDOI,
+  getWorkById,
+  getWorkByISBN,
+  getWorkByPMID,
+  resolveCanonicalId,
+  resolveOpenAlexBase,
+  searchWorksByTitle,
+} from "../src/modules/openalex";
+import {
+  clearAuthorProfileCache,
+  fetchAuthorProfile,
+  fetchAuthorWorks,
+} from "../src/modules/openalexAuthors";
 
 function httpResponse(status: number, body: unknown = {}, headers: Record<string, string> = {}) {
   return {
@@ -310,6 +331,181 @@ describe("Zotero.HTTP contract", () => {
     const assertion = expect(p).rejects.toBeInstanceOf(OpenAlexNetworkError);
     await vi.runAllTimersAsync();
     await assertion;
+  });
+
+  /**
+   * With `successCodes: false`, Zotero resolves a request that got no HTTP
+   * status at all (refused connection, DNS failure) with status 0 instead of
+   * rejecting it: http.js@10.0.2 onloadend, lines 429-467, resolving at 534.
+   */
+  it("retries an answer with no HTTP status and then reports OpenAlex unreachable, not a bad response", async () => {
+    vi.useFakeTimers();
+    httpRequest.mockResolvedValue(httpResponse(0));
+    const p = getWorkById("W1");
+    const assertion = expect(p).rejects.toBeInstanceOf(OpenAlexNetworkError);
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(httpRequest).toHaveBeenCalledTimes(1 + OPENALEX_RETRY_DELAYS_MS.length);
+  });
+
+  it("returns the work when a retry after an answer with no HTTP status succeeds", async () => {
+    vi.useFakeTimers();
+    httpRequest
+      .mockResolvedValueOnce(httpResponse(0))
+      .mockResolvedValue(httpResponse(200, { id: "https://openalex.org/W1" }));
+    const p = getWorkById("W1");
+    await vi.runAllTimersAsync();
+    expect((await p)?.id).toBe("https://openalex.org/W1");
+    expect(httpRequest).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("an OpenAlex that stays overloaded", () => {
+  it("reports a 5xx that outlasts every retry as unavailable: CG-API50, with its status", async () => {
+    vi.useFakeTimers();
+    httpRequest.mockResolvedValue(httpResponse(503));
+    const p = getWorkById("W1");
+    const assertion = expect(p).rejects.toBeInstanceOf(OpenAlexUnavailableError);
+    await vi.runAllTimersAsync();
+    await assertion;
+    const error = await p.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OpenAlexResponseError);
+    expect(error).toMatchObject({ code: "CG-API50", status: 503 });
+  });
+
+  it("reports a 400 as a bad response about this request, not as OpenAlex unavailable, without a retry", async () => {
+    httpRequest.mockResolvedValue(httpResponse(400));
+    const error = await getWorkById("W1").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OpenAlexResponseError);
+    expect(error).not.toBeInstanceOf(OpenAlexUnavailableError);
+    expect(httpRequest).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("journal stats (getSourceStats)", () => {
+  beforeEach(() => {
+    clearSourceStatsCache();
+  });
+
+  it.each([
+    ["401", () => httpResponse(401), OpenAlexAuthError],
+    ["403", () => httpResponse(403), OpenAlexAuthError],
+    [
+      "a budget-exhausted 429",
+      () => httpResponse(429, {}, { "X-RateLimit-Remaining": "0" }),
+      OpenAlexBudgetError,
+    ],
+  ])(
+    "passes a refusal (%s) to the caller instead of answering null",
+    async (_label, response, errorClass) => {
+      httpRequest.mockResolvedValue(response());
+      await expect(getSourceStats("S1")).rejects.toBeInstanceOf(errorClass);
+    },
+  );
+
+  it("answers null after an outage, without remembering it, so the next call asks again", async () => {
+    vi.useFakeTimers();
+    httpRequest.mockResolvedValue(httpResponse(500));
+    const first = getSourceStats("S1");
+    await vi.runAllTimersAsync();
+    expect(await first).toBeNull();
+
+    httpRequest.mockReset().mockResolvedValue(
+      httpResponse(200, {
+        id: "https://openalex.org/S1",
+        issn_l: "1234-5678",
+        issn: ["1234-5678"],
+        summary_stats: { "2yr_mean_citedness": 2.5, h_index: 40, i10_index: 100 },
+      }),
+    );
+    const second = getSourceStats("S1");
+    await vi.runAllTimersAsync();
+    expect(await second).toMatchObject({ citedness2yr: 2.5, hIndex: 40 });
+  });
+});
+
+/**
+ * Zotero writes every request's URL to Debug Output after one replacement,
+ * `dispURL.replace(/key=[^&]+&?/, "").replace(/\?$/, "")` (http.js@8.0.4 line
+ * 250, @9.0.6 line 282, @10.0.2 line 245). It removes the first `key=` it finds,
+ * so the API key must be the first, and it is the last parameter buildUrl adds.
+ */
+describe("the API key in Zotero's request log", () => {
+  const KEY = "sk-live-SECRET-0123456789";
+
+  /** The URL as Zotero writes it to Debug Output. */
+  function asZoteroLogsIt(url: string): string {
+    return url.replace(/key=[^&]+&?/, "").replace(/\?$/, "");
+  }
+
+  /** One body every endpoint accepts: a work, a list page, a source and an author at once. */
+  const ANY_BODY = {
+    id: "https://openalex.org/W1",
+    display_name: "Anything",
+    meta: { count: 0, per_page: 25, next_cursor: null },
+    results: [],
+    summary_stats: null,
+    works_count: 1,
+    cited_by_count: 1,
+  };
+
+  const ENDPOINTS: ReadonlyArray<readonly [string, () => Promise<unknown>]> = [
+    ["work by DOI", () => getWorkByDOI("10.1234/abc")],
+    ["work by PMID", () => getWorkByPMID("12345678")],
+    ["work by arXiv ID", () => getWorkByArxivId("2205.01833")],
+    ["work by ISBN", () => getWorkByISBN("9780262033848")],
+    ["work by OpenAlex ID", () => getWorkById("W1")],
+    ["citing works", () => getCitingWorks("W1", "*", 25)],
+    ["references", () => getReferencedWorks("W1", "*", 25)],
+    ["journal stats", () => getSourceStats("S1")],
+    // A title holding `key=` must not lead the log filter to it instead of the key.
+    ["title search", () => searchWorksByTitle("Monkey=business & key=value", 2020)],
+    ["author profile", () => fetchAuthorProfile("A1")],
+    ["works by author", () => fetchAuthorWorks("A1")],
+  ];
+
+  beforeEach(() => {
+    clearSourceStatsCache();
+    clearAuthorProfileCache();
+  });
+
+  it.each(ENDPOINTS)(
+    "%s: the log filter removes the key, and api_key is the last parameter",
+    async (_name, call) => {
+      vi.useFakeTimers();
+      setUserPref(PREF_OPENALEX_API_KEY, KEY);
+      httpRequest.mockResolvedValue(httpResponse(200, ANY_BODY));
+
+      const pending = call().catch(() => undefined);
+      await vi.runAllTimersAsync();
+      await pending;
+
+      const urls = httpRequest.mock.calls.map(([, url]) => url as string);
+      expect(urls.length, "positive control: the endpoint made a request").toBeGreaterThan(0);
+      for (const url of urls) {
+        expect(url, "positive control: the key rides the request").toContain(`api_key=${KEY}`);
+        expect(asZoteroLogsIt(url)).not.toContain(KEY);
+        const names = [...new URL(url).searchParams.keys()];
+        expect(names.at(-1)).toBe("api_key");
+        expect(names.filter((name) => name === "api_key")).toHaveLength(1);
+      }
+    },
+  );
+
+  it("sends the stored key once, last, even when a caller passes its own api_key", () => {
+    setUserPref(PREF_OPENALEX_API_KEY, KEY);
+    const url = buildUrl("/works", { api_key: "from-the-caller", select: "id" });
+    expect([...new URL(url).searchParams.entries()]).toEqual([
+      ["select", "id"],
+      ["api_key", KEY],
+    ]);
+  });
+
+  it("names the key a request would carry: the stored key, and none for a loopback stub", () => {
+    setUserPref(PREF_OPENALEX_API_KEY, KEY);
+    expect(apiKeyForRequests()).toBe(KEY);
+    setUserPref(PREF_OPENALEX_BASE_URL, "http://127.0.0.1:43121");
+    expect(apiKeyForRequests()).toBe("");
   });
 });
 

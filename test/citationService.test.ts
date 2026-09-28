@@ -15,6 +15,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PREF_MIGRATION_COMPLETE } from "../src/constants";
+import type * as OpenAlexModule from "../src/modules/openalex";
 import { makeFakeDb } from "./_helpers/fakeDb";
 import { makeFakePrefs } from "./_helpers/fakePrefs";
 
@@ -66,46 +67,20 @@ vi.mock("../src/modules/titleSearch", () => ({
   searchByMetadata: vi.fn().mockResolvedValue(null),
 }));
 
-// Mock the openalex module so we don't make real HTTP requests
-vi.mock("../src/modules/openalex", () => ({
+// Mock the openalex module's lookups so we don't make real HTTP requests. The
+// rest (identifier normalizers, OpenAlexUnavailableError) is the real module.
+vi.mock("../src/modules/openalex", async (importOriginal) => ({
+  ...(await importOriginal<typeof OpenAlexModule>()),
   getWorkByDOI: vi.fn(),
   getWorkByPMID: vi.fn(),
   getWorkByArxivId: vi.fn(),
   getWorkByISBN: vi.fn(),
   getWorkById: vi.fn(),
   getSourceStats: vi.fn().mockResolvedValue(null),
-  normalizeDOI: (doi: string) =>
-    doi
-      .trim()
-      .replace(/^(?:https?:\/\/)?(?:dx\.)?doi\.org\//i, "")
-      .replace(/^doi:\s*/i, "")
-      .replace(/%2[Ff]/g, "/")
-      .replace(/\/+$/, ""),
-  normalizePMID: (id: string) =>
-    id
-      .trim()
-      .replace(/^pmid:\s*/i, "")
-      .replace(/\D/g, ""),
-  normalizeArxivId: (id: string) =>
-    id
-      .trim()
-      .replace(/^(?:https?:\/\/)?(?:www\.)?arxiv\.org\/(?:abs|pdf)\//i, "")
-      .replace(/^arxiv:\s*/i, "")
-      .replace(/\.pdf$/i, "")
-      .replace(/v\d+$/i, "")
-      .trim(),
-  normalizeISBN: (id: string) => {
-    const cleaned = id
-      .trim()
-      .replace(/^isbn:\s*/i, "")
-      .replace(/[\s-]/g, "")
-      .toUpperCase();
-    if (/^\d{9}[\dX]$/.test(cleaned) || /^\d{13}$/.test(cleaned)) return cleaned;
-    return "";
-  },
 }));
 
 import {
+  backgroundStopFor,
   fetchAndCacheItem,
   fetchAndCacheItems,
   extractIdentifier,
@@ -113,8 +88,11 @@ import {
   resolveWorkForItem,
   resolveAuthorsForItem,
   resolveAuthorsForItems,
+  type FetchResult,
 } from "../src/modules/citationService";
 import {
+  OpenAlexUnavailableError,
+  getSourceStats,
   getWorkByDOI,
   getWorkByPMID,
   getWorkByArxivId,
@@ -130,8 +108,15 @@ import {
   writePendingSuggestion,
   confirmTitleMatch,
   getItemAuthors,
+  getCachedData,
 } from "../src/modules/cache";
-import { OpenAlexNetworkError, OpenAlexBudgetError, OpenAlexAuthError } from "../src/modules/utils";
+import {
+  CacheWriteRefusedError,
+  OpenAlexNetworkError,
+  OpenAlexBudgetError,
+  OpenAlexAuthError,
+  OpenAlexResponseError,
+} from "../src/modules/utils";
 import { cacheItemAuthors } from "../src/modules/cache";
 import { searchByMetadata } from "../src/modules/titleSearch";
 import { clearDiagnostics, recentDiagnostics } from "../src/modules/diagnostics";
@@ -380,14 +365,41 @@ describe("fetchAndCacheItem", () => {
     const result = await fetchAndCacheItem(item);
     // CG-API42, not a generic failure: the pane can then say "today's OpenAlex
     // budget is spent, add a key" instead of "something went wrong".
-    expect(result).toEqual({ status: "error", error: "unexpected", code: "CG-API42" });
+    expect(result).toEqual({
+      status: "error",
+      error: "unexpected",
+      code: "CG-API42",
+      cause: expect.any(OpenAlexBudgetError),
+    });
   });
 
   it("carries CG-NET01 on a network error result so the UI need not re-derive it", async () => {
     const item = mockItem({ doi: "10.1234/test" });
     mockedGetWorkByDOI.mockRejectedValue(new OpenAlexNetworkError("offline"));
     const result = await fetchAndCacheItem(item);
-    expect(result).toEqual({ status: "error", error: "network", code: "CG-NET01" });
+    expect(result).toEqual({
+      status: "error",
+      error: "network",
+      code: "CG-NET01",
+      cause: expect.any(OpenAlexNetworkError),
+    });
+  });
+
+  it("stops on a journal-stats refusal after the work lookup, saving nothing (R2 item 10)", async () => {
+    // A refused source lookup used to come back as null journal stats, saved
+    // beside the work for the whole cache lifetime.
+    const item = mockItem({ doi: "10.1234/test" });
+    mockedGetWorkByDOI.mockResolvedValue(makeFakeWork());
+    vi.mocked(getSourceStats).mockRejectedValueOnce(new OpenAlexBudgetError());
+
+    const result = await fetchAndCacheItem(item, {
+      identifierLookupsOnly: true,
+      callerRecordsStops: true,
+    });
+
+    expect(result).toMatchObject({ status: "error", code: "CG-API42" });
+    expect(backgroundStopFor(result)).toBe("budget");
+    expect(getCachedData(item), "no row saved without its journal stats").toBeNull();
   });
 
   it("piggybacks author identity onto a successful fetch (U3)", async () => {
@@ -929,9 +941,9 @@ describe("fetching on a read-only cache", () => {
   });
 });
 
-// ── A refusal the caller records once for its whole pass (U18) ───────────────
+// ── Failures the background caller records once for its whole pass (U18) ────
 
-describe("recording a refused request", () => {
+describe("recording a failure that stops background lookups", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockZotero.Prefs = migratedPrefs();
@@ -942,17 +954,30 @@ describe("recording a refused request", () => {
   });
 
   it.each([
-    ["a rejected key", () => new OpenAlexAuthError(), "CG-API01"],
-    ["a spent budget", () => new OpenAlexBudgetError(), "CG-API42"],
+    [
+      "a rejected key",
+      () => new OpenAlexAuthError("OpenAlex rejected the request for work lookup (doi) (HTTP 403)"),
+      "unexpected",
+      "CG-API01",
+    ],
+    ["a spent budget", () => new OpenAlexBudgetError(), "unexpected", "CG-API42"],
+    ["no connection", () => new OpenAlexNetworkError("offline"), "network", "CG-NET01"],
+    [
+      "an OpenAlex overloaded through every retry",
+      () => new OpenAlexUnavailableError(503, "work lookup (doi)"),
+      "unexpected",
+      "CG-API50",
+    ],
   ])(
-    "records %s by default, and only returns its code to a caller that records the stop itself",
-    async (_label, refusal, code) => {
-      mockedGetWorkByDOI.mockRejectedValue(refusal());
+    "records %s by default, and only returns it, with its cause, to a caller that records it itself",
+    async (_label, failure, error, code) => {
+      const thrown = failure();
+      mockedGetWorkByDOI.mockRejectedValue(thrown);
 
       const quiet = await fetchAndCacheItem(mockItem({ doi: "10.1234/quiet" }), {
-        recordRefusals: false,
+        callerRecordsStops: true,
       });
-      expect(quiet).toEqual({ status: "error", error: "unexpected", code });
+      expect(quiet).toEqual({ status: "error", error, code, cause: thrown });
       expect(recentDiagnostics()).toEqual([]);
 
       await fetchAndCacheItem(mockItem({ doi: "10.1234/recorded" }));
@@ -960,12 +985,55 @@ describe("recording a refused request", () => {
     },
   );
 
-  it("still records any other failure when refusals are left to the caller", async () => {
+  it("still records a failure that does not stop background lookups when the caller records its stops", async () => {
+    // A 400 is OpenAlex answering about this one request: a retry would repeat it.
+    mockedGetWorkByDOI.mockRejectedValue(new OpenAlexResponseError("OpenAlex 400"));
+
+    await fetchAndCacheItem(mockItem({ doi: "10.1234/bad" }), { callerRecordsStops: true });
+
+    expect(recentDiagnostics().map((d) => d.code)).toEqual(["CG-API50"]);
+  });
+
+  it("records every failure when the option is left unset, the safe default", async () => {
     mockedGetWorkByDOI.mockRejectedValue(new OpenAlexNetworkError("offline"));
 
-    await fetchAndCacheItem(mockItem({ doi: "10.1234/offline" }), { recordRefusals: false });
+    await fetchAndCacheItem(mockItem({ doi: "10.1234/offline" }), { identifierLookupsOnly: true });
 
     expect(recentDiagnostics().map((d) => d.code)).toEqual(["CG-NET01"]);
+  });
+});
+
+describe("backgroundStopFor", () => {
+  const error = (overrides: Partial<Extract<FetchResult, { status: "error" }>>): FetchResult => ({
+    status: "error",
+    error: "unexpected",
+    ...overrides,
+  });
+
+  it.each<[string, FetchResult, string | null]>([
+    ["a rejected key", error({ code: "CG-API01" }), "auth"],
+    ["a spent budget", error({ code: "CG-API42" }), "budget"],
+    [
+      "a cache that refuses writes",
+      error({ error: "cache-unwritable", code: "CG-DB03" }),
+      "cache-unwritable",
+    ],
+    ["no connection", error({ error: "network", code: "CG-NET01" }), "transient"],
+    [
+      "an OpenAlex overloaded through every retry",
+      error({ code: "CG-API50", cause: new OpenAlexUnavailableError(502, "work lookup (doi)") }),
+      "transient",
+    ],
+    [
+      "a 400 about this request",
+      error({ code: "CG-API50", cause: new OpenAlexResponseError("400") }),
+      null,
+    ],
+    ["an unknown identifier", error({ error: "not-found" }), null],
+    ["an item trashed while queued", error({ error: "invalid-item" }), null],
+    ["data that landed", { status: "cached" }, null],
+  ])("classifies %s", (_label, result, stop) => {
+    expect(backgroundStopFor(result)).toBe(stop);
   });
 });
 
@@ -1028,7 +1096,12 @@ describe("a cache that refuses writes, meeting a saved outcome or a lookup in fl
 
     const result = await fetchAndCacheItem(mockItem({ doi: "10.1234/a" }));
 
-    expect(result).toEqual({ status: "error", error: "cache-unwritable", code: "CG-DB02" });
+    expect(result).toEqual({
+      status: "error",
+      error: "cache-unwritable",
+      code: "CG-DB02",
+      cause: expect.any(CacheWriteRefusedError),
+    });
     expect(recentDiagnostics()).toEqual([]);
   });
 

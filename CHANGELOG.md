@@ -51,14 +51,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OpenAlex returns at once, is read as 200.
 - **"Automatically fetch citation data when viewing items" now works.** The setting
   has always been ticked by default, but it never ran. Citegeist now fills in
-  missing or out-of-date citation data for the rows Zotero draws in your item list.
-  Sorting by a Citegeist column draws every row, so it covers the whole library,
-  and hiding the Citegeist columns does not stop it. These background lookups use
-  only OpenAlex's free lookups: by DOI, PMID, arXiv ID or ISBN, or by the OpenAlex
-  match you confirmed for an item. For an item without one of these, Citegeist
-  searches by title when you open the item or use Fetch Citation Counts. If OpenAlex
-  rejects your API key or your daily budget runs out, background lookups stop until
-  you change the key. To turn them off, open Settings → Citegeist and untick
+  missing or out-of-date citation data for the rows Zotero draws in your item list,
+  and redraws just the rows whose data arrived, a few at a time, without reloading
+  the list. Sorting by a Citegeist column draws every row, so it covers the whole
+  library, and hiding the Citegeist columns does not stop it. These background
+  lookups use only OpenAlex's free lookups: by DOI, PMID, arXiv ID or ISBN, or by
+  the OpenAlex match you confirmed for an item. A title search, which OpenAlex
+  charges for, happens only when you select an item and its pane shows it, or when
+  you use Fetch Citation Counts. Items in a feed are not looked up. If OpenAlex
+  rejects your API key or your daily budget runs out, background lookups pause until
+  you change the key or restart Zotero; a spent budget also lifts at midnight UTC,
+  when OpenAlex's daily allowance starts over. When OpenAlex can't be reached, they
+  pause and try again a minute later, then at longer intervals, up to 15 minutes,
+  while the trouble lasts. To turn them off, open Settings → Citegeist and untick
   "Automatically fetch citation data when viewing items".
 - **The clean-up of cached data for deleted items runs weekly, not on every
   launch.** It was meant to run at most once a week, but the time of its last run

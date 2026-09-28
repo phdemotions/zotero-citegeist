@@ -22,6 +22,7 @@ import {
   normalizePMID,
   normalizeArxivId,
   normalizeISBN,
+  OpenAlexUnavailableError,
   type OpenAlexWork,
 } from "./openalex";
 import {
@@ -94,6 +95,13 @@ export type FetchResult =
        * bug report something to quote.
        */
       code?: DiagnosticCode;
+      /**
+       * The error the fetch caught, when it caught one. A caller that records a
+       * failure itself ({@link FetchOptions.callerRecordsStops}) logs this, so
+       * the entry keeps what the error says: the HTTP status (401 or 403) and
+       * which lookup it was.
+       */
+      cause?: unknown;
     }
   | { status: "suggestion"; candidate: OpenAlexWork; tier: "high" | "medium"; confidence: number };
 
@@ -245,13 +253,16 @@ export interface FetchOptions {
    */
   identifierLookupsOnly?: boolean;
   /**
-   * False when the caller records a refused request itself: a rejected API key
-   * (CG-API01) or a spent budget (CG-API42) then comes back as its code with no
-   * diagnostic. The columns' background queue sets it, because its batch runs
-   * requests side by side and records one entry for the stop, not one for each
-   * request already in flight. Unset, this call records the refusal.
+   * True when the caller records, once for its whole pass, the failures that
+   * stop background lookups ({@link BackgroundStop}): a rejected API key
+   * (CG-API01), a spent budget (CG-API42), no connection (CG-NET01) and an
+   * OpenAlex that stayed overloaded through every retry (CG-API50). This call
+   * then records none of them and returns each with its code and `cause`. The
+   * columns' background fetcher sets it: its lookups run side by side, and one
+   * entry per row would fill the diagnostics buffer with a single outage. Any
+   * other failure is still recorded here. Unset, this call records everything.
    */
-  recordRefusals?: boolean;
+  callerRecordsStops?: boolean;
 }
 
 /**
@@ -271,14 +282,41 @@ export async function fetchAndCacheItem(
     // stop as one found up front: a code a batch stops on, and no diagnostic,
     // because the write gate already logged the refusal.
     if (e instanceof CacheWriteRefusedError) {
-      return { status: "error", error: "cache-unwritable", code: e.code };
+      return { status: "error", error: "cache-unwritable", code: e.code, cause: e };
     }
-    const refusal = e instanceof OpenAlexAuthError || e instanceof OpenAlexBudgetError;
-    if (!refusal || options.recordRefusals !== false) {
-      logError(`fetchAndCacheItem(${item.id})`, e);
-    }
-    return { status: "error", error: "unexpected", code: codeForError(e) };
+    logFailure(options, `fetchAndCacheItem(${item.id})`, e);
+    return { status: "error", error: "unexpected", code: codeForError(e), cause: e };
   }
+}
+
+/**
+ * Record a failed fetch, unless the caller records it itself: a failure that
+ * stops background lookups, from a caller that set
+ * {@link FetchOptions.callerRecordsStops}.
+ */
+function logFailure(options: FetchOptions, context: string, e: unknown): void {
+  if (options.callerRecordsStops === true && stopsBackgroundLookups(e)) return;
+  logError(context, e);
+}
+
+/** Whether a caught error is one that would fail every later request the same way for now. */
+function stopsBackgroundLookups(e: unknown): boolean {
+  return (
+    e instanceof OpenAlexAuthError ||
+    e instanceof OpenAlexBudgetError ||
+    e instanceof OpenAlexNetworkError ||
+    e instanceof OpenAlexUnavailableError
+  );
+}
+
+/** The result for a lookup that could not reach OpenAlex. */
+function networkResult(
+  options: FetchOptions,
+  context: string,
+  e: OpenAlexNetworkError,
+): FetchResult {
+  logFailure(options, context, e);
+  return { status: "error", error: "network", code: "CG-NET01", cause: e };
 }
 
 /**
@@ -294,6 +332,27 @@ export function fetchStopFor(result: FetchResult): FetchStop | null {
   if (result.code === "CG-API42") return "budget";
   if (result.code === "CG-API01") return "auth";
   if (result.error === "cache-unwritable") return "cache-unwritable";
+  return null;
+}
+
+/**
+ * Why a result stops the columns' background lookups: a {@link FetchStop}, or
+ * `"transient"` when OpenAlex could not be reached (no connection, DNS, a
+ * timeout) or stayed overloaded through every retry (a 5xx, a rate-limit 429).
+ * A transient failure says nothing about the item, and the next lookups would
+ * most likely fail the same way until it passes, so the background caller
+ * pauses and tries the item again later rather than remembering it as looked
+ * up. A fetch the user starts treats it as a failure of that one item.
+ */
+export type BackgroundStop = FetchStop | "transient";
+
+/** The {@link BackgroundStop} a result carries, or null when background lookups can go on. */
+export function backgroundStopFor(result: FetchResult): BackgroundStop | null {
+  const stop = fetchStopFor(result);
+  if (stop !== null || result.status !== "error") return stop;
+  if (result.error === "network" || result.cause instanceof OpenAlexUnavailableError) {
+    return "transient";
+  }
   return null;
 }
 
@@ -354,8 +413,7 @@ async function fetchAndCacheItemInner(
         // Log the local rowid, never the OpenAlex work id: the id is a
         // resolvable pointer to the paper, and this context is recorded into the
         // shareable diagnostic report.
-        logError(`fetchAndCacheItem(confirmed, item ${item.id})`, e);
-        return { status: "error", error: "network", code: "CG-NET01" };
+        return networkResult(options, `fetchAndCacheItem(confirmed, item ${item.id})`, e);
       }
       throw e;
     }
@@ -367,7 +425,7 @@ async function fetchAndCacheItemInner(
   if (!identifier) {
     // No identifier: search by title, unless this fetch uses identifier lookups only.
     if (options.identifierLookupsOnly) return { status: "error", error: "no-identifier" };
-    return attemptTitleSearch(item);
+    return attemptTitleSearch(item, options);
   }
 
   // Skip if cache is fresh
@@ -378,8 +436,7 @@ async function fetchAndCacheItemInner(
     work = await fetchWorkByIdentifier(identifier);
   } catch (e) {
     if (e instanceof OpenAlexNetworkError) {
-      logError(`fetchAndCacheItem(${item.id})`, e);
-      return { status: "error", error: "network", code: "CG-NET01" };
+      return networkResult(options, `fetchAndCacheItem(${item.id})`, e);
     }
     throw e;
   }
@@ -387,7 +444,7 @@ async function fetchAndCacheItemInner(
   if (!work) {
     // OpenAlex does not know the identifier: search by title, unless this fetch uses identifier lookups only.
     if (options.identifierLookupsOnly) return { status: "error", error: "not-found" };
-    return attemptTitleSearch(item);
+    return attemptTitleSearch(item, options);
   }
 
   // Fetch journal-level stats (best-effort — `null` on failure is fine).
@@ -405,7 +462,10 @@ async function fetchAndCacheItemInner(
  * Run the metered title search after a direct lookup found nothing.
  * Handles the no-match suppression window and writes the result to cache.
  */
-async function attemptTitleSearch(item: _ZoteroTypes.Item): Promise<FetchResult> {
+async function attemptTitleSearch(
+  item: _ZoteroTypes.Item,
+  options: FetchOptions,
+): Promise<FetchResult> {
   // Title search is the metered path, so it refuses on its own account too.
   const unwritable = unwritableResult(item);
   if (unwritable) return unwritable;
@@ -420,8 +480,7 @@ async function attemptTitleSearch(item: _ZoteroTypes.Item): Promise<FetchResult>
     match = await searchByMetadata(item);
   } catch (e) {
     if (e instanceof OpenAlexNetworkError) {
-      logError(`attemptTitleSearch(${item.id})`, e);
-      return { status: "error", error: "network", code: "CG-NET01" };
+      return networkResult(options, `attemptTitleSearch(${item.id})`, e);
     }
     throw e;
   }
@@ -566,15 +625,11 @@ export async function fetchAndCacheItems(
 
 // ── Author identity backfill (U4) ────────────────────────────────────────────
 
-/** Outcome of resolving one item's author identity in the backfill pass. */
-export type AuthorResolveStatus =
-  | "resolved"
-  | "already"
-  | "unresolved"
-  | "budget"
-  | "auth"
-  | "cache-unwritable"
-  | "error";
+/**
+ * Outcome of resolving one item's author identity in the backfill pass. A
+ * {@link FetchStop} stops the pass, by the same rule as a fetch pass.
+ */
+export type AuthorResolveStatus = FetchStop | "resolved" | "already" | "unresolved" | "error";
 
 /**
  * Ensure a single item's authors are resolved into the SQLite item_authors
@@ -618,18 +673,13 @@ export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<Au
         const after = await getItemAuthors(item.libraryID, item.key);
         return after.length > 0 ? "resolved" : "unresolved";
       }
-      // fetchAndCacheItem is total, so a budget-exhausted title search comes
-      // back as an error result carrying CG-API42 rather than throwing. Without
-      // this the outer `catch (OpenAlexBudgetError)` never fires on this path,
-      // the pass keeps issuing one metered call per remaining item, and the stop
-      // is miscounted as "unresolved" instead of "budget".
-      if (r.status === "error" && r.code === "CG-API42") return "budget";
-      // Key rejected — same reasoning as budget: stop the pass, don't miscount
-      // an auth failure as a per-item no-match.
-      if (r.status === "error" && r.code === "CG-API01") return "auth";
-      // The cache stopped taking writes during the fetch: stop the pass as the
-      // up-front check above would have.
-      if (r.status === "error" && r.error === "cache-unwritable") return "cache-unwritable";
+      // fetchAndCacheItem is total, so a spent budget, a rejected key or a cache
+      // that stopped taking writes comes back as an error result rather than a
+      // throw, and the outer catch never sees it. The shared classification
+      // stops the pass on each, as a fetch pass stops, instead of issuing one
+      // doomed call per remaining item and miscounting the stop as "unresolved".
+      const stop = fetchStopFor(r);
+      if (stop !== null) return stop;
       if (r.status === "cached") return "already";
       // A genuine failure (network, DB lock, auth, unexpected) is an ERROR, not
       // "no author match" — reporting infrastructure trouble as a clean

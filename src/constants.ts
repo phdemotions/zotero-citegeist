@@ -60,19 +60,40 @@ export const AUTO_FETCH_PREF_TTL_MS = 5000;
 
 // ── Column fetch queue ──
 /**
- * Items the column queue remembers as looked up this session before it forgets
- * any, oldest first; only those can be looked up again. It never forgets an item
- * the running pass looked up or a stale row drawn since the last pass ended, so
- * one pass over more rows than this grows the set to that many (see
- * rememberAttempt in citationColumn.ts).
+ * Items the background fetcher remembers as looked up without a result to show
+ * before it forgets any, oldest first; only those can be looked up again. It
+ * never forgets an item the running pass looked up or a stale row drawn since
+ * the last pass ended, so one pass over more rows than this grows the set to
+ * that many (see rememberAttempt in backgroundFetch.ts).
  */
 export const MAX_ATTEMPTED_FETCH_CACHE = 10_000;
+/**
+ * Rows drawn while background lookups were paused or switched off that the
+ * fetcher redraws when they resume, newest kept. The rows in view are the ones
+ * drawn last, so a library sorted by a Citegeist column needs no more than this.
+ */
+export const MAX_HELD_ROWS = 1_000;
 /** Debounce before a column fetch batch kicks off. */
 export const FETCH_QUEUE_DEBOUNCE_MS = 500;
 /** Column fetch batch size (parallel requests). */
 export const FETCH_BATCH_SIZE = 2;
 /** Delay between column fetch batches. */
 export const FETCH_BATCH_DELAY_MS = 500;
+/**
+ * First pause after background lookups meet network trouble or an overloaded
+ * OpenAlex (no connection, DNS, timeout, a 5xx or rate-limit 429 through every
+ * retry). Each consecutive pause doubles it, up to
+ * {@link BACKGROUND_RETRY_MAX_MS}; a lookup that gets an answer resets it.
+ */
+export const BACKGROUND_RETRY_MIN_MS = 60_000;
+/** Longest pause between background attempts during network trouble. */
+export const BACKGROUND_RETRY_MAX_MS = 15 * 60_000;
+/**
+ * How long background lookups pause when OpenAlex refuses a request that carried
+ * no API key (CG-API01 without a key: a CDN or firewall 403 on anonymous
+ * traffic). A refusal of a key lasts until the key changes instead.
+ */
+export const BACKGROUND_ANONYMOUS_REFUSAL_PAUSE_MS = 60 * 60_000;
 /** Delay between calls in a bulk batch fetch (menu-triggered). */
 export const BULK_FETCH_DELAY_MS = 100;
 /** How long the batch ProgressWindow lingers after a failure before auto-closing. */
@@ -86,12 +107,23 @@ export const PROGRESS_WINDOW_DONE_CLOSE_MS = 6000;
  */
 export const CACHE_READ_ONLY_HEADLINE = "Citegeist is showing saved data only";
 /**
- * Debounce for the coalesced column repaint. A burst of per-item cache
- * invalidations (a collection/library fetch resolving item by item) collapses
- * into ONE `refreshAndMaintainSelection()` shortly after the last one, so rows
- * fill in progressively without thrashing the item tree.
+ * Shortest gap between two redraws of Citegeist's rows. A redraw is one
+ * `Zotero.Notifier` "refresh" of the rows whose data changed, which clears just
+ * those rows in every window's item tree; the rows that land in between are
+ * redrawn together in the next one, and the end of a pass sends its last rows at
+ * once. Each redraw also wakes every open item pane, which renders again and can
+ * scroll back to a pinned section (itemDetails.js@8.0.4 lines 419-427, @10.0.2
+ * lines 381-389 and 269-289), so two seconds keeps a long pass from nudging the
+ * pane while rows still fill in visibly as they land.
  */
-export const COLUMN_REPAINT_DEBOUNCE_MS = 150;
+export const COLUMN_REFRESH_THROTTLE_MS = 2_000;
+/**
+ * Recently drawn rows the column remembers for one purpose: on Zotero 8 and 9 a
+ * redraw whose first row is the only selected item deselects and reselects it
+ * (itemTree.jsx@8.0.4 lines 545-553, @9.0.6 lines 552-560), so a redraw of that
+ * item alone leads with one of these instead.
+ */
+export const RECENTLY_DRAWN_ROWS = 64;
 
 // ── Citation network dialog ──
 /** Max results rendered in the dialog (soft cap for performance). */

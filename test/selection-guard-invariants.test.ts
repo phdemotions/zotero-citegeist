@@ -87,15 +87,13 @@ const SINGULAR_FALLBACKS: readonly Allowance[] = [
   },
 ];
 
-/** Outside the selection module: sites that use a guarded name but read no selection. */
-const OUTSIDE_ALLOWED: readonly Allowance[] = [
-  {
-    file: "src/modules/citationColumn.ts",
-    fn: "scheduleColumnRepaint",
-    member: "getActiveZoteroPane",
-    why: "repaints the most recent window's item tree and reads no selection",
-  },
-];
+/**
+ * Outside the selection module: sites that use a guarded name but read no
+ * selection. None today: the columns redraw changed rows through Zotero's item
+ * notifier, which reaches every window, and read a window's selection through
+ * the selection module.
+ */
+const OUTSIDE_ALLOWED: readonly Allowance[] = [];
 
 function split(sources: Readonly<Record<string, string>>): {
   inModule: Record<string, string>;
@@ -109,12 +107,15 @@ function split(sources: Readonly<Record<string, string>>): {
   return { inModule, outside };
 }
 
-/** Every selection read in `sources` that the rules above do not allow. */
-function selectionViolations(sources: Readonly<Record<string, string>>): SourceHit[] {
+/** Every selection read in `sources` that the rules above, or `outsideAllowed`, do not allow. */
+function selectionViolations(
+  sources: Readonly<Record<string, string>>,
+  outsideAllowed: readonly Allowance[] = OUTSIDE_ALLOWED,
+): SourceHit[] {
   const { inModule, outside } = split(sources);
   return [
     ...unallowedHits(scanSources(inModule, SINGULAR), SINGULAR_FALLBACKS),
-    ...unallowedHits(scanSources(outside, ANY_SELECTION_READ), OUTSIDE_ALLOWED),
+    ...unallowedHits(scanSources(outside, ANY_SELECTION_READ), outsideAllowed),
   ];
 }
 
@@ -211,20 +212,34 @@ describe("every single-selection read Zotero 10 retired is guarded as singular",
 
 describe("the allowances cover their sites and nothing else", () => {
   const FIXTURE_FILE = "src/modules/fixture.ts";
+  /** An outside site allowed one read, for the two cases below; OUTSIDE_ALLOWED lists none today. */
+  const FIXTURE_ALLOWED: readonly Allowance[] = [
+    {
+      file: FIXTURE_FILE,
+      fn: "repaintActiveTree",
+      member: "getActiveZoteroPane",
+      why: "fixture: repaints the most recent window's item tree and reads no selection",
+    },
+  ];
 
-  it.each<[string, string, string, string]>([
+  it.each<[string, string, string]>([
     [
       "a read on the same line as an allowed one",
-      "src/modules/citationColumn.ts",
-      "function scheduleColumnRepaint(): void {\n  const view = Zotero.getActiveZoteroPane()?.itemsView; const col = pane.getSelectedCollection();\n}",
+      "function repaintActiveTree(): void {\n  const view = Zotero.getActiveZoteroPane()?.itemsView; const col = pane.getSelectedCollection();\n}",
       "getSelectedCollection",
     ],
     [
       "a second read of the allowed member in the allowed function",
-      "src/modules/citationColumn.ts",
-      "function scheduleColumnRepaint(): void {\n  const view = Zotero.getActiveZoteroPane()?.itemsView;\n  const pane = Zotero.getActiveZoteroPane();\n}",
+      "function repaintActiveTree(): void {\n  const view = Zotero.getActiveZoteroPane()?.itemsView;\n  const pane = Zotero.getActiveZoteroPane();\n}",
       "getActiveZoteroPane",
     ],
+  ])("flags %s", (_name, source, member) => {
+    expect(
+      selectionViolations({ [FIXTURE_FILE]: source }, FIXTURE_ALLOWED).map((hit) => hit.member),
+    ).toEqual([member]);
+  });
+
+  it.each<[string, string, string, string]>([
     [
       "a singular read in the selection module outside its fallbacks",
       SELECTION_MODULE,

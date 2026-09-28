@@ -14,8 +14,9 @@
  * can respond appropriately: {@link OpenAlexBudgetError} (daily budget spent —
  * prompt for a key), {@link OpenAlexAuthError} (key rejected, 401/403),
  * {@link OpenAlexResponseError} (the service answered with an unusable status or
- * body — e.g. 400/422 or non-JSON), or {@link OpenAlexNetworkError}
- * (unreachable / request failed after retries).
+ * body — e.g. 400/422 or non-JSON; its subclass {@link OpenAlexUnavailableError}
+ * when a 429 or 5xx outlasted every retry), or {@link OpenAlexNetworkError}
+ * (unreachable, or no HTTP status at all, after retries).
  */
 
 import {
@@ -115,6 +116,16 @@ function getApiKey(): string {
   }
 }
 
+/**
+ * The API key {@link buildUrl} attaches to a request built now: the stored key,
+ * or "" when none is set or a loopback override is in effect. A caller that
+ * needs to know which key a refused request carried reads this before it sends
+ * the request.
+ */
+export function apiKeyForRequests(): string {
+  return getOpenAlexBase().overridden ? "" : getApiKey();
+}
+
 /** Where requests go: the production API, or a loopback stub the override pref names. */
 export interface OpenAlexBase {
   url: string;
@@ -160,20 +171,25 @@ function getOpenAlexBase(): OpenAlexBase {
  * Build an OpenAlex URL, attaching the opt-in `api_key` from prefs. Exported so
  * the sibling authors client (`openalexAuthors.ts`) shares the exact
  * key-attachment + centralized-redaction contract instead of re-implementing it.
+ *
+ * The key rides the query string (OpenAlex's documented mechanism as of July
+ * 2026 — a header form is an open question). Citegeist never logs it: the
+ * retry/error paths log `label`, not the URL, and normalizeError() redacts any
+ * URL that reaches it. Zotero logs every request's URL to Debug Output, after
+ * removing the first `key=` it finds with `dispURL.replace(/key=[^&]+&?/, "")`
+ * (http.js@8.0.4 line 250, @9.0.6 line 282, @10.0.2 line 245). So the key goes
+ * last, after every other parameter, where that one replacement removes it, and
+ * a parameter named `api_key` in `params` is dropped rather than sent twice.
+ * test/openalex.fetch.test.ts applies the host's expression to every URL this
+ * builds. It is only ever attached for the production host: a loopback override
+ * is a test stub, not OpenAlex, so it gets anonymous requests.
  */
-export function buildUrl(path: string, params: Record<string, string> = {}): string {
+export function buildUrl(path: string, params: Readonly<Record<string, string>> = {}): string {
   const base = getOpenAlexBase();
-  // The key rides the query string (OpenAlex's documented mechanism as of
-  // July 2026 — a header form is an open question). It is never logged: the
-  // retry/error paths log `label`, not the URL, and normalizeError() redacts
-  // any URL that reaches it. Prefer a header here if OpenAlex confirms one.
-  // It is only ever attached for the production host: a loopback override is a
-  // test stub, not OpenAlex, so it gets anonymous requests.
   const apiKey = base.overridden ? "" : getApiKey();
-  if (apiKey) {
-    params.api_key = apiKey;
-  }
-  const query = Object.entries(params)
+  const entries = Object.entries(params).filter(([name]) => name !== "api_key");
+  if (apiKey) entries.push(["api_key", apiKey]);
+  const query = entries
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join("&");
   return `${base.url}${path}${query ? "?" + query : ""}`;
@@ -255,16 +271,18 @@ async function fetchJson<T>(url: string, label: string, attempt: number): Promis
       successCodes: false,
     });
   } catch (e) {
-    // Network-level failure (timeout, DNS, offline) — retry then bubble up.
-    if (attempt < OPENALEX_RETRY_DELAYS_MS.length) {
-      const delay = OPENALEX_RETRY_DELAYS_MS[attempt];
-      Zotero.debug(
-        `[Citegeist] Network error on ${label} (${normalizeError(e)}), retrying in ${delay}ms`,
-      );
-      await new Promise((r) => setTimeout(r, delay));
-      return fetchJson<T>(url, label, attempt + 1);
-    }
-    throw new OpenAlexNetworkError(`OpenAlex unreachable while fetching ${label}`, e);
+    // Network-level failure (timeout, offline) — retry then bubble up.
+    return retryNetworkFailure<T>(url, label, attempt, normalizeError(e), e);
+  }
+
+  // No HTTP status at all: the connection was refused, the name did not
+  // resolve, or the request was cut off. With `successCodes: false` Zotero
+  // resolves such a request with status 0 instead of rejecting it
+  // (http.js@8.0.4 lines 461-502 and 570, @9.0.6 lines 507-548 and 616,
+  // @10.0.2 lines 429-467 and 534), so it is a network failure like the throw
+  // above, not a response from OpenAlex.
+  if (!response.status) {
+    return retryNetworkFailure<T>(url, label, attempt, "no HTTP status");
   }
 
   // Auth failure (bad/revoked key) — distinct so the UI can prompt re-entry.
@@ -286,15 +304,16 @@ async function fetchJson<T>(url: string, label: string, attempt: number): Promis
     }
   }
 
-  // Retry with backoff on transient rate limiting / 5xx.
-  if (
-    (response.status === 429 || response.status >= 500) &&
-    attempt < OPENALEX_RETRY_DELAYS_MS.length
-  ) {
-    const delay = OPENALEX_RETRY_DELAYS_MS[attempt];
-    Zotero.debug(`[Citegeist] ${response.status} on ${label}, retrying in ${delay}ms`);
-    await new Promise((r) => setTimeout(r, delay));
-    return fetchJson<T>(url, label, attempt + 1);
+  // Retry with backoff on transient rate limiting / 5xx, and past the last retry
+  // report OpenAlex as unavailable: overloaded or down, not wrong about this item.
+  if (response.status === 429 || response.status >= 500) {
+    if (attempt < OPENALEX_RETRY_DELAYS_MS.length) {
+      const delay = OPENALEX_RETRY_DELAYS_MS[attempt];
+      Zotero.debug(`[Citegeist] ${response.status} on ${label}, retrying in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+      return fetchJson<T>(url, label, attempt + 1);
+    }
+    throw new OpenAlexUnavailableError(response.status, label);
   }
 
   if (response.status === 404) {
@@ -315,12 +334,50 @@ async function fetchJson<T>(url: string, label: string, attempt: number): Promis
   }
 }
 
+/**
+ * Retry a request that got no response, after the delay for this attempt, or
+ * throw {@link OpenAlexNetworkError} once the retries are spent. `reason` goes to
+ * Debug Output only.
+ */
+async function retryNetworkFailure<T>(
+  url: string,
+  label: string,
+  attempt: number,
+  reason: string,
+  cause?: unknown,
+): Promise<T> {
+  if (attempt < OPENALEX_RETRY_DELAYS_MS.length) {
+    const delay = OPENALEX_RETRY_DELAYS_MS[attempt];
+    Zotero.debug(`[Citegeist] Network error on ${label} (${reason}), retrying in ${delay}ms`);
+    await new Promise((r) => setTimeout(r, delay));
+    return fetchJson<T>(url, label, attempt + 1);
+  }
+  throw new OpenAlexNetworkError(`OpenAlex unreachable while fetching ${label}`, cause);
+}
+
 /** Thrown when OpenAlex responds 404. Callers convert to `null`. Exported for
  *  the sibling authors client's 404→null handling. */
 export class OpenAlexNotFoundError extends Error {
   constructor(label: string) {
     super(`OpenAlex 404: ${label}`);
     this.name = "OpenAlexNotFoundError";
+  }
+}
+
+/**
+ * OpenAlex kept answering a rate-limit 429 or a 5xx through every retry: it is
+ * overloaded or down, and a later request may well succeed. Still CG-API50 for
+ * the user, like any unusable response, but its own class so a caller can tell
+ * it from an answer about this item (a 400, a body that isn't JSON), which a
+ * retry would only repeat. `status` is the last HTTP status seen.
+ */
+export class OpenAlexUnavailableError extends OpenAlexResponseError {
+  constructor(
+    readonly status: number,
+    label: string,
+  ) {
+    super(`OpenAlex ${status} while fetching ${label}`);
+    this.name = "OpenAlexUnavailableError";
   }
 }
 
@@ -670,7 +727,14 @@ const sourceStatsCache = new Map<string, OpenAlexSourceStats | null>();
 
 /**
  * Fetch summary stats for a source/journal by its OpenAlex source ID.
- * Returns null if the source doesn't exist or has no stats.
+ * Returns null if the source doesn't exist or has no stats, and null after any
+ * other failure, which a later call retries: the journal stats are
+ * best-effort beside the work they belong to.
+ *
+ * @throws {@link OpenAlexAuthError} or {@link OpenAlexBudgetError} when OpenAlex
+ *         refuses the request. Every later request would be refused the same
+ *         way, so the caller stops instead of saving the work without its
+ *         journal stats for the whole cache lifetime.
  */
 export async function getSourceStats(sourceId: string): Promise<OpenAlexSourceStats | null> {
   const shortId = sourceId.replace("https://openalex.org/", "");
@@ -713,6 +777,7 @@ export async function getSourceStats(sourceId: string): Promise<OpenAlexSourceSt
       sourceStatsCache.set(shortId, null);
       return null;
     }
+    if (e instanceof OpenAlexAuthError || e instanceof OpenAlexBudgetError) throw e;
     // For network issues, don't poison the cache — let the next call retry.
     logError("getSourceStats", e);
     return null;
