@@ -19,12 +19,11 @@ import { STUB_WORK_ID } from "./shared/fixture";
 import { BUDGETS, SHUTDOWN_WAIT_TIMEOUT_MS, STARTUP_WAIT_TIMEOUT_MS } from "./shared/timeouts";
 import { SHUTDOWN_COMPLETE_DEBUG_LINE } from "./support/citegeist";
 import {
-  citegeistSections,
-  citegeistSidenavButtons,
   debugLinesContaining,
   ensureCitegeistReady,
   getCitegeistAddon,
   mainWindow,
+  revealCitegeistSection,
   selectInLibrary,
   stubRequestLog,
   stubRequestsSince,
@@ -80,15 +79,12 @@ describe("preference names", function () {
       Services.prefs.setIntPref(PREF_NETWORK_PAGE_SIZE, CHOSEN_PAGE_SIZE);
       try {
         await selectInLibrary(item.id);
-        const section = await waitFor(
-          "the Citegeist item-pane section",
-          () => citegeistSections()[0],
-        );
-        citegeistSidenavButtons()[0]?.click();
-        const citingButton = await waitFor("the Citing works button", () =>
-          [...section.querySelectorAll("button")].find((b) =>
-            (b.textContent ?? "").startsWith("Citing works"),
-          ),
+        const { found: citingButton } = await revealCitegeistSection(
+          "the Citing works button",
+          (section) =>
+            [...section.querySelectorAll("button")].find((b) =>
+              (b.textContent ?? "").startsWith("Citing works"),
+            ),
         );
 
         const requestsBefore = await stubRequestLog();

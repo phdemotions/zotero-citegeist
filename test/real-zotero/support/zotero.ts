@@ -225,6 +225,102 @@ export function citegeistSidenavButtons() {
   ].filter((el) => el.dataset.pane === key);
 }
 
+/** The part of Zotero's `<item-details id="zotero-item-details">` revealCitegeistSection calls. */
+interface ItemDetails {
+  /**
+   * Resolves null for a hidden pane or a collapsed item pane, and otherwise true
+   * once the scroll has settled and any async render it started has finished.
+   */
+  scrollToPane(paneID: string, behavior: "smooth" | "instant"): Promise<boolean | null>;
+}
+
+function itemDetails(): ItemDetails {
+  const details = mainWindow().document.getElementById("zotero-item-details");
+  if (typeof details?.scrollToPane !== "function") {
+    throw new Error(`#zotero-item-details has no scrollToPane on Zotero ${Zotero.version}`);
+  }
+  return details;
+}
+
+/** Scroll `details` to Citegeist's section, and say how the call ended within `withinMs`. */
+function scrollToCitegeist(details: ItemDetails, withinMs: number): Promise<string> {
+  const scroll = new Promise<boolean | null>((resolve) =>
+    resolve(details.scrollToPane(namespacedKey(PANE_ID), "instant")),
+  );
+  return Promise.race([
+    scroll.then(
+      (result) =>
+        result === null
+          ? "scrollToPane returned null: the section is disabled for this item, or the item pane is collapsed"
+          : "scrollToPane reported the section in view",
+      (e: unknown) => `scrollToPane threw: ${String(e)}`,
+    ),
+    Zotero.Promise.delay(withinMs).then(
+      () => "scrollToPane had not returned: the section's async render never settled",
+    ),
+  ]);
+}
+
+/**
+ * Bring Citegeist's item-pane section into view the way a user's click on its
+ * sidenav button does, then wait until `probe` finds what the caller needs in
+ * the rendered section. Returns the section and what `probe` found. Waits up to
+ * `timeoutMs` for the section to exist, then up to `timeoutMs` for `probe`.
+ *
+ * Zotero runs a section's async render (Citegeist's onAsyncRender, the only
+ * code that fetches) only while the section is on screen, and Citegeist's
+ * section sits below the built-in ones. A single click on the sidenav button
+ * scrolls to it, but a scripted `click()` on that XUL button carries `detail`
+ * 0, and the sidenav scrolls only for a `detail` of 1. So this calls what the
+ * click calls, the item details' `scrollToPane`, with the key the button
+ * carries: the section's `data-pane`, `CSS.escape(pluginID-paneID)`. Unlike a
+ * dispatched click, it can be awaited: it resolves once the scroll has settled
+ * and the section it landed on has finished its async render. "instant" only
+ * skips the smooth scroll's animation.
+ *
+ * Zotero source, the same at 8.0.4 and 9.0.6, and at 10.0.2 and 10.0.3:
+ * - async render only on screen: itemDetails.js `render`, lines 329-343 at
+ *   8.0.4, 291-305 at 10.0.2;
+ * - the click: itemPaneSidenav.js `handleButtonClick` `case 1`, lines 794-801 at
+ *   8.0.4, 811-818 at 10.0.2;
+ * - the scroll and its render: itemDetails.js `scrollToPane`, lines 546-603 at
+ *   8.0.4; itemPaneContainerBase.mjs `scrollToPane`, lines 210-252, calling
+ *   itemDetails.js `_afterScrollToPane`, lines 499-515, at 10.0.2.
+ *
+ * Until `probe` succeeds this scrolls again and checks again: a render of the
+ * item pane that lands between a scroll and the section's render leaves the
+ * section off screen, and when Zotero had already started the section's render,
+ * scrollToPane returns before that render finishes.
+ */
+export async function revealCitegeistSection<T>(
+  what: string,
+  probe: (section: Element) => T | null | undefined,
+  timeoutMs: number = WAIT_TIMEOUT_MS,
+): Promise<{ section: Element; found: T }> {
+  const section: Element = await waitFor(
+    "the Citegeist item-pane section",
+    () => citegeistSections()[0],
+    timeoutMs,
+  );
+  const details = itemDetails();
+  const deadline = Date.now() + timeoutMs;
+  let lastScroll = "scrollToPane was never called";
+  for (;;) {
+    const found = probe(section);
+    if (found) return { section, found };
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      const shown = (section.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
+      throw new Error(
+        `Timed out after ${timeoutMs} ms waiting for ${what} in the Citegeist section after ` +
+          `bringing it into view (${lastScroll}); the section shows ${JSON.stringify(shown)}`,
+      );
+    }
+    lastScroll = await scrollToCitegeist(details, remaining);
+    await Zotero.Promise.delay(POLL_INTERVAL_MS);
+  }
+}
+
 /**
  * Rebuild the item context menu the way a right-click does and count Citegeist
  * entries by l10nID, including any MenuManager moved into its overflow submenu.

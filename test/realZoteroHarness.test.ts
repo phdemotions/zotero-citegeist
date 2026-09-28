@@ -11,10 +11,13 @@
  * - every spec file bundles the way scaffold bundles it and counts outside Zotero;
  * - the run-log guard fails a run that proved nothing;
  * - the root hooks' line and console comparisons behave;
+ * - the root hooks, run under the pinned Mocha, judge every `[Citegeist] ERROR`
+ *   line once, failing the test it was logged in or, outside every test, the run;
  * - every composed wait fits the Mocha timeout that governs it;
  * - the spec constants still match src/, scaffold 0.9.2 and the workflow.
  */
-import { build } from "esbuild";
+import { type BuildOptions, build } from "esbuild";
+import Mocha from "mocha";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -30,6 +33,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createContext, runInContext } from "node:vm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { Config } from "zotero-plugin-scaffold";
 import { PREF_AUTO_FETCH, PREF_OPENALEX_BASE_URL } from "../src/constants";
@@ -66,6 +70,14 @@ import {
   unexpectedLines,
 } from "./real-zotero/shared/debugLines";
 import { EXPECTED_ZOTERO_VERSION_ENV, LOG_DIR_ENV } from "./real-zotero/shared/env";
+import {
+  type LedgerTest,
+  allowInSuiteHooks,
+  closeGap,
+  closeTestWindow,
+  createErrorLedger,
+  formatStrayLines,
+} from "./real-zotero/shared/errorLedger";
 import {
   STUB_CITED_BY_COUNT,
   STUB_DOI,
@@ -139,15 +151,16 @@ function specEntryPoints(): string[] {
     .sort();
 }
 
+/** The esbuild options scaffold 0.9.2 bundles each spec file with. */
+const SCAFFOLD_BUNDLE_OPTIONS = { bundle: true, target: "firefox115", logLevel: "silent" } as const;
+
 /** Bundle the specs with scaffold 0.9.2's esbuild options and write the page it would generate. */
 async function bundleSpecsLikeScaffold(root: string): Promise<string> {
   const contentDir = join(root, SCAFFOLD_TESTER_DIR, "content");
   await build({
+    ...SCAFFOLD_BUNDLE_OPTIONS,
     entryPoints: specEntryPoints(),
     outdir: join(contentDir, "units"),
-    bundle: true,
-    target: "firefox115",
-    logLevel: "silent",
   });
   const scripts = (readdirSync(contentDir, { recursive: true }) as string[])
     .filter((path) => /\.(?:spec|test)\.js$/.test(path))
@@ -588,6 +601,231 @@ describe("root-hook comparisons (shared/debugLines.ts)", () => {
     expect(
       flagged({ message: "cannot open /home/runner/work/zotero-citegeist/.scaffold/test/profile" }),
     ).toBe(false);
+  });
+});
+
+describe("error-line ledger (shared/errorLedger.ts)", () => {
+  const line = (detail: string) => `(3)(+0000001): ${ERROR_DEBUG_MARK} ${detail}`;
+  const test = (title: string, ...suites: object[]): LedgerTest => ({ title, suites });
+
+  it("judges a gap line against the suites around the gap, and no others", () => {
+    const [outer, first, second, elsewhere] = [{}, {}, {}, {}];
+    const ledger = createErrorLedger();
+    allowInSuiteHooks(ledger, first, [/first's hooks/]);
+    const [a, b, c] = [test("A", first, outer), test("B", second, outer), test("C", elsewhere)];
+    const log: string[] = [];
+    closeGap(ledger, log, a);
+    closeTestWindow(ledger, log, a, []);
+    log.push(line("from first's hooks"), line("boom"));
+    closeGap(ledger, log, b);
+    expect(ledger.strays).toEqual([{ line: line("boom"), where: 'between "A" and "B"' }]);
+
+    closeTestWindow(ledger, log, b, []);
+    log.push(line("from first's hooks, after it ended"));
+    closeGap(ledger, log, c);
+    expect(ledger.strays.map((stray) => stray.line)).toEqual([
+      line("boom"),
+      line("from first's hooks, after it ended"),
+    ]);
+  });
+
+  it("judges a test's lines by the test's own allowances alone, and only once", () => {
+    const suite = {};
+    const ledger = createErrorLedger();
+    allowInSuiteHooks(ledger, suite, [/provoked/]);
+    const only = test("T", suite);
+    const log = [line("provoked in the test"), line("allowed by the test")];
+    closeGap(ledger, [], only);
+    expect(closeTestWindow(ledger, log, only, [/allowed by the test/])).toEqual([
+      line("provoked in the test"),
+    ]);
+    closeGap(ledger, log, null);
+    expect(ledger.strays).toEqual([]);
+  });
+
+  it("names the gap each stray fell in: startup, after the last test, or a run no test reached", () => {
+    const ledger = createErrorLedger();
+    const only = test("T");
+    closeGap(ledger, [line("startup")], only);
+    closeTestWindow(ledger, [line("startup")], only, []);
+    closeGap(ledger, [line("startup"), line("teardown")], null);
+    expect(formatStrayLines(ledger.strays)).toBe(
+      `at startup or before the first test, "T": ${line("startup")}\n` +
+        `after the last test, "T": ${line("teardown")}`,
+    );
+
+    const unreached = createErrorLedger();
+    closeGap(unreached, [line("no test ran")], null);
+    expect(unreached.strays).toEqual([{ line: line("no test ran"), where: "before any test ran" }]);
+  });
+
+  it("counts a repeated line once per repeat, across a test and the gap after it", () => {
+    const ledger = createErrorLedger();
+    const only = test("T");
+    closeGap(ledger, [], only);
+    expect(closeTestWindow(ledger, [line("same")], only, [])).toEqual([line("same")]);
+    closeGap(ledger, [line("same"), line("same")], null);
+    expect(ledger.strays.map((stray) => stray.line)).toEqual([line("same")]);
+  });
+});
+
+describe("root hooks under the pinned Mocha (00-root-hooks.spec.ts)", () => {
+  interface Outcome {
+    passed: string[];
+    failed: { title: string; message: string }[];
+  }
+  /** A message as Debug Output stores it. */
+  const asStored = (message: string) => `(3)(+0000000): ${message}`;
+  /** What `logError` in src/modules/utils.ts hands `Zotero.debug`. */
+  const citegeistError = (detail: string) => `${ERROR_DEBUG_MARK} ${detail}`;
+  const stored = (detail: string) => asStored(citegeistError(detail));
+  let rootHooks: string;
+
+  async function bundleScript(options: BuildOptions): Promise<string> {
+    const result = await build({ ...options, ...SCAFFOLD_BUNDLE_OPTIONS, write: false });
+    return result.outputFiles[0].text;
+  }
+
+  beforeAll(async () => {
+    rootHooks = await bundleScript({ entryPoints: [join(SPEC_DIR, "00-root-hooks.spec.ts")] });
+  }, 60_000);
+
+  /**
+   * Run the root hooks, then `fixture`, a spec file's source, as scaffold's page
+   * does: each bundled into a script, both in one shared global, under the
+   * pinned Mocha. `Zotero.debug` appends to Debug Output, which holds the
+   * `startup` messages before the first hook runs. The other host objects are
+   * the least the root hooks call.
+   */
+  async function runSpec(fixture: string, startup: readonly string[] = []): Promise<Outcome> {
+    const spec = await bundleScript({
+      stdin: {
+        contents: fixture,
+        resolveDir: SPEC_DIR,
+        sourcefile: "fixture.spec.ts",
+        loader: "ts",
+      },
+    });
+    const debugOutput = startup.map(asStored);
+    const window: Record<string, unknown> = {
+      setTimeout,
+      clearTimeout,
+      Zotero: {
+        version: "harness",
+        Citegeist: { ready: true },
+        debug: (message: string) => debugOutput.push(asStored(message)),
+        Debug: { getConsoleViewerOutput: () => [...debugOutput] },
+        Promise: { delay: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)) },
+      },
+      Services: {
+        console: { getMessageArray: () => [], registerListener() {}, unregisterListener() {} },
+        env: { get: () => "" },
+      },
+      ChromeUtils: {
+        generateQI: () => () => undefined,
+        importESModule: () => ({ AddonManager: { getAddonByID: async () => null } }),
+      },
+    };
+    const mocha = new Mocha({ reporter: class {}, timeout: 10_000 });
+    mocha.suite.emit("pre-require", window, "fixture.spec.js", mocha);
+    const context = createContext(window);
+    runInContext(rootHooks, context, { filename: "00-root-hooks.spec.js" });
+    runInContext(spec, context, { filename: "fixture.spec.js" });
+    const outcome: Outcome = { passed: [], failed: [] };
+    await new Promise<void>((resolve) => {
+      const runner = mocha.run(() => resolve());
+      runner.on("pass", (test: { fullTitle(): string }) => outcome.passed.push(test.fullTitle()));
+      runner.on("fail", (runnable: { fullTitle(): string }, err: Error) => {
+        outcome.failed.push({ title: runnable.fullTitle(), message: err.message });
+      });
+    });
+    return outcome;
+  }
+
+  it("fails the run on lines logged at startup, in suite hooks and between tests", async () => {
+    const outcome = await runSpec(
+      `
+      describe("spec", function () {
+        before(function () { Zotero.debug("${citegeistError("selecting the item")}"); });
+        it("first", function () {});
+        describe("nested", function () {
+          before(function () { Zotero.debug("${citegeistError("upgrading")}"); });
+          it("second", function () {});
+        });
+        after(function () { Zotero.debug("${citegeistError("restarting")}"); });
+      });
+      `,
+      [citegeistError("starting up")],
+    );
+    expect(outcome.passed).toEqual(["spec first", "spec nested second"]);
+    expect(outcome.failed).toHaveLength(1);
+    expect(outcome.failed[0].title).toMatch(/"after all" hook/);
+    expect(outcome.failed[0].message).toContain(
+      "Citegeist logged 4 error line(s) outside every test, at startup, in a suite's before " +
+        "or after hook, or between tests (a suite that expects one calls " +
+        "allowCitegeistErrorsInSuiteHooks):\n" +
+        `at startup or before the first test, "spec first": ${stored("starting up")}\n` +
+        `at startup or before the first test, "spec first": ${stored("selecting the item")}\n` +
+        `between "spec first" and "spec nested second": ${stored("upgrading")}\n` +
+        `after the last test, "spec nested second": ${stored("restarting")}`,
+    );
+  });
+
+  it("fails only the test that logged a line it did not allow, and reports it once", async () => {
+    const outcome = await runSpec(`
+      import { allowCitegeistErrors } from "./support/harnessState";
+      describe("spec", function () {
+        it("allows its line", function () {
+          allowCitegeistErrors(/expected/);
+          Zotero.debug("${citegeistError("expected")}");
+        });
+        it("logs a line it did not allow", function () {
+          Zotero.debug("${citegeistError("unexpected")}");
+        });
+        it("logs nothing", function () {});
+      });
+    `);
+    expect(outcome.passed).toEqual(
+      expect.arrayContaining(["spec allows its line", "spec logs nothing"]),
+    );
+    expect(outcome.failed).toEqual([
+      {
+        title: "spec logs a line it did not allow",
+        message: `Citegeist logged 1 error line(s) during this test (a spec that expects one calls allowCitegeistErrors):\n${stored("unexpected")}`,
+      },
+    ]);
+  });
+
+  it("lets a suite allow lines in its hooks and gaps, but not in its tests or anywhere else", async () => {
+    const outcome = await runSpec(`
+      import { allowCitegeistErrorsInSuiteHooks } from "./support/harnessState";
+      describe("provoker", function () {
+        allowCitegeistErrorsInSuiteHooks(/provoked/);
+        before(function () { Zotero.debug("${citegeistError("provoked while starting")}"); });
+        it("logs the same line itself", function () {
+          Zotero.debug("${citegeistError("provoked in the test")}");
+        });
+        after(function () { Zotero.debug("${citegeistError("provoked while stopping")}"); });
+      });
+      describe("bystander", function () {
+        it("logs nothing", function () {});
+      });
+      describe("later", function () {
+        before(function () { Zotero.debug("${citegeistError("provoked elsewhere")}"); });
+        it("logs nothing", function () {});
+      });
+    `);
+    expect(outcome.failed.map((failure) => failure.title)).toEqual([
+      "provoker logs the same line itself",
+      expect.stringMatching(/"after all" hook/),
+    ]);
+    expect(outcome.failed[0].message).toContain(stored("provoked in the test"));
+    const run = outcome.failed[1].message;
+    expect(run).toContain(
+      `between "bystander logs nothing" and "later logs nothing": ${stored("provoked elsewhere")}`,
+    );
+    expect(run).not.toContain("while starting");
+    expect(run).not.toContain("while stopping");
   });
 });
 

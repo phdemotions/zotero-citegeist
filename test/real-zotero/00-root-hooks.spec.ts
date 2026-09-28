@@ -11,16 +11,30 @@
  * object until a test or hook runs: the scaffold config evaluates every bundle
  * outside Zotero to count the tests CI requires to pass.
  *
+ * Every `[Citegeist] ERROR` line from launch to the end of the run is judged
+ * once, by the test window or the gap it was logged in (shared/errorLedger.ts):
+ *
  * - before: record console messages for the whole run, then wait for
  *   Citegeist's first startup. scaffold's own wait gives up after 10 s and still
  *   exits 0, so the config switches it off and a slow start fails here instead,
  *   as a Mocha failure scaffold reports, with the logs still written.
- * - beforeEach and afterEach: fail any test during which Citegeist logged an
- *   `[Citegeist] ERROR` line its spec did not allow (allowCitegeistErrors).
- * - after: write Debug Output, Zotero's errors and Citegeist's console problems
- *   to CITEGEIST_REAL_ZOTERO_LOG_DIR, then fail if there were console problems.
+ * - beforeEach: close the gap before this test (startup, suite hooks, the time
+ *   since the last test) and open the test's window.
+ * - afterEach: fail the test if Citegeist logged an error line in its window that
+ *   the test did not allow (allowCitegeistErrors).
+ * - after: close the last gap, write Debug Output, Zotero's errors and
+ *   Citegeist's console problems to CITEGEIST_REAL_ZOTERO_LOG_DIR, then fail if
+ *   a gap held an error line no suite around it allowed
+ *   (allowCitegeistErrorsInSuiteHooks), or if there were console problems.
  */
-import { type ConsoleRecord, formatConsoleRecord, unexpectedLines } from "./shared/debugLines";
+import { type ConsoleRecord, formatConsoleRecord } from "./shared/debugLines";
+import {
+  type LedgerTest,
+  type StrayLine,
+  closeGap,
+  closeTestWindow,
+  formatStrayLines,
+} from "./shared/errorLedger";
 import { LOG_DIR_ENV } from "./shared/env";
 import { BUDGETS, READY_WAIT_TIMEOUT_MS } from "./shared/timeouts";
 import { harnessState } from "./support/harnessState";
@@ -31,6 +45,22 @@ import {
   waitForCitegeistReady,
 } from "./support/zotero";
 
+/** The parts of a Mocha test and its suites the ledger reads. */
+interface MochaTest {
+  fullTitle(): string;
+  parent?: MochaSuite;
+}
+interface MochaSuite {
+  parent?: MochaSuite;
+}
+
+/** A Mocha test as the error ledger sees it: its full title and every suite it sits in. */
+function ledgerTest(test: MochaTest): LedgerTest {
+  const suites: MochaSuite[] = [];
+  for (let suite = test.parent; suite; suite = suite.parent) suites.push(suite);
+  return { title: test.fullTitle(), suites };
+}
+
 before(async function () {
   this.timeout(BUDGETS.rootReady.timeoutMs);
   startConsoleRecorder();
@@ -39,15 +69,18 @@ before(async function () {
 
 beforeEach(function () {
   const state = harnessState();
-  state.errorLinesBefore = citegeistErrorLines();
+  // Only records what the gap held; the after hook fails on it. A failure raised
+  // here, in a root beforeEach, would skip every remaining test.
+  closeGap(state.errorLedger, citegeistErrorLines(), ledgerTest(this.currentTest));
   state.allowedForTest = [];
 });
 
 afterEach(function () {
   const state = harnessState();
-  const unexpected = unexpectedLines(
-    state.errorLinesBefore,
+  const unexpected = closeTestWindow(
+    state.errorLedger,
     citegeistErrorLines(),
+    ledgerTest(this.currentTest),
     state.allowedForTest,
   );
   if (unexpected.length === 0) return;
@@ -62,12 +95,20 @@ afterEach(function () {
 });
 
 after(async function () {
+  const state = harnessState();
+  let strays: readonly StrayLine[] = [];
   let problems: ConsoleRecord[] = [];
   let failure: unknown = null;
   try {
-    problems = await stopConsoleRecorder();
+    closeGap(state.errorLedger, citegeistErrorLines(), null);
+    strays = state.errorLedger.strays;
   } catch (e) {
     failure = e;
+  }
+  try {
+    problems = await stopConsoleRecorder();
+  } catch (e) {
+    failure ??= e;
   }
   try {
     await writeRunLogs(problems);
@@ -76,12 +117,21 @@ after(async function () {
   }
   // An after-all hook has no current test to hand an error to, so once the logs
   // are on disk it fails itself, which scaffold counts as a failure.
+  const reports: string[] = [];
+  if (strays.length > 0) {
+    reports.push(
+      `Citegeist logged ${strays.length} error line(s) outside every test, at startup, in a ` +
+        `suite's before or after hook, or between tests (a suite that expects one calls ` +
+        `allowCitegeistErrorsInSuiteHooks):\n${formatStrayLines(strays)}`,
+    );
+  }
   if (problems.length > 0) {
-    throw new Error(
+    reports.push(
       `Citegeist caused ${problems.length} console problem(s) during the run:\n` +
         problems.map(formatConsoleRecord).join("\n"),
     );
   }
+  if (reports.length > 0) throw new Error(reports.join("\n\n"));
   if (failure) throw failure;
 });
 

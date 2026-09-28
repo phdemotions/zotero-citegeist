@@ -94,7 +94,7 @@ for `main`:
   be up to date before merging** on.
 - **Required check: `CI gate`** (from `ci.yml`). It passes only when `test (22)`
   and every real-Zotero cell (`Real Zotero / Zotero 8.0.4`,
-  `Real Zotero / Zotero 9.0.6`, `Real Zotero / Zotero 10.0.2`) succeeded, so
+  `Real Zotero / Zotero 9.0.6`, `Real Zotero / Zotero 10.0.3`) succeeded, so
   adding or bumping a Zotero cell needs no settings change. Do not require the
   cells individually: a renamed cell would leave a required check that never
   reports, and every merge would block on it. `test/workflow-invariants.test.ts`
