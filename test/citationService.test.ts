@@ -50,8 +50,13 @@ const mockZotero = {
       () => [{ libraryID: 1, libraryType: "user", editable: true }] as _ZoteroTypes.Library[],
     ),
   },
+  // Shaped like Zotero's syncRunner.js: delaySync(ms) never calls a function it
+  // is given; delayIndefinite() holds syncs until its returned function is called.
   Sync: {
-    Runner: { delaySync: vi.fn(async (fn: () => Promise<unknown>) => await fn()) },
+    Runner: {
+      delaySync: vi.fn<(ms: number) => void>(),
+      delayIndefinite: vi.fn<() => () => void>(() => vi.fn()),
+    },
   },
 };
 vi.stubGlobal("Zotero", mockZotero);

@@ -834,8 +834,19 @@ const row = (key: string) => ({ ...emptyRow(1, key), open_alex_id: "W1", cited_b
 
 const migration: WriterCase = {
   seed: async () => {
+    // The import writes only a confirmed match, so the item carries one, in a
+    // library whose items it can load.
+    mockZotero.Libraries.getAll.mockImplementation(
+      () =>
+        [
+          { libraryID: 1, libraryType: "user", editable: true, waitForDataLoad: async () => {} },
+        ] as _ZoteroTypes.Library[],
+    );
     mockZotero.Items.getAll.mockResolvedValue([
-      mockItem("MIG", "Citegeist.openAlexId: W12\nCitegeist.citedByCount: 3"),
+      mockItem(
+        "MIG",
+        "Citegeist.openAlexId: W12\nCitegeist.citedByCount: 3\nCitegeist.confirmedOpenAlexId: W12",
+      ),
     ]);
   },
   run: () => migrateFromExtraV1(),
@@ -874,7 +885,6 @@ const WRITER_CASES: Readonly<Record<string, WriterCase>> = {
     run: () => garbageCollectOrphans({ force: true }),
   },
   "src/modules/cache/migration.ts:migrateFromExtraV1": migration,
-  "src/modules/cache/migration.ts:runMigrationLoop": migration,
 };
 
 const WRITE_STATEMENT =
@@ -918,8 +928,6 @@ describe("cache write invariants", () => {
       "authors/write.ts setCuratedItemAuthor runWrite",
       "authors/write.ts updateAuthorMetrics runWrite",
       "authors/write.ts reconcileAuthorMerge runWrite",
-      "migration.ts checkpointItem runWrite",
-      "migration.ts migrateFromExtraV1 runWrite",
       "migration.ts garbageCollectOrphans runWrite",
     ]) {
       expect(found, `${expected} was not detected`).toContain(expected);

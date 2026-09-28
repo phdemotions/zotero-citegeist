@@ -23,7 +23,6 @@ import {
 } from "./types";
 import { saveItemGuarded } from "../utils";
 import { deleteRow, mutateRow } from "./db";
-import { isMigrationInProgress } from "./migration";
 
 /** Pending-suggestion fields cleared together on confirm/dismiss. */
 const PENDING_CLEARED = {
@@ -290,8 +289,8 @@ export async function clearPendingSuggestion(item: CacheItemKey): Promise<void> 
  * Returns a copy of `lines` with any existing `Citegeist match ID:` line
  * removed and `openAlexId` (if non-null) appended as a fresh entry.
  *
- * Pure — no side effects. Shared by the runtime confirm-match path and the
- * one-shot legacy migration, both of which need the same line-rewrite rule.
+ * Pure — no side effects. Shared by the confirm-match path and `clearCache`,
+ * which need the same line-rewrite rule.
  */
 export function setExtraConfirmedMatch(lines: string[], openAlexId: string | null): string[] {
   const prefix = `${CONFIRMED_MATCH_EXTRA_PREFIX}:`;
@@ -313,22 +312,8 @@ async function writeConfirmedMatchToExtra(
   item: _ZoteroTypes.Item,
   openAlexId: string,
 ): Promise<void> {
-  // Defer Extra writes while migration is mid-loop. Without this, the
-  // runtime saveTx could race with migration's Step 2 strip and either
-  // (a) resurrect legacy `Citegeist.*` lines that migration was about
-  // to remove, or (b) clobber a stripped Extra with the pre-strip
-  // contents. SQLite still got updated by the caller's `mutateRow`, so
-  // the user's confirmation is persisted; the Extra mirror just waits
-  // for the next confirmTitleMatch (or skips this round entirely —
-  // acceptable, the mirror is only used for downgrade/cross-device).
-  if (isMigrationInProgress()) {
-    Zotero.debug(
-      `[Citegeist] writeConfirmedMatchToExtra deferred while migration is running (item ${item.key})`,
-    );
-    return;
-  }
-  // openAlexId is already validated by cacheWorkData / writePendingSuggestion /
-  // buildRowFromLegacy at the row's write boundary — no re-check here.
+  // openAlexId is already validated at the row's write boundary, by
+  // cacheWorkData and writePendingSuggestion — no re-check here.
   const extra = item.getField("extra") ?? "";
   const newLines = setExtraConfirmedMatch(extra.split("\n"), openAlexId);
   const cleaned = newLines.join("\n").replace(/\n+$/, "");

@@ -118,15 +118,9 @@ export const MAX_ABSTRACT_POSITION = 10_000;
 /** Max reconstructed abstract length (characters). */
 export const MAX_ABSTRACT_LENGTH = 100_000;
 
-// ── SQLite cache + migration ──
-/** Library size threshold above which migration shows progress UI. */
-export const SHOW_PROGRESS_UI_THRESHOLD = 500;
-/** Update progress UI every N items during migration. */
-export const MIGRATION_PROGRESS_TICK = 50;
+// ── SQLite cache + orphan GC ──
 /** Max item_keys per `DELETE … WHERE item_key IN (…)` chunk during orphan GC. */
 export const ORPHAN_GC_CHUNK_SIZE = 200;
-/** Max migration-backup JSON files to keep in the data dir. Older files removed. */
-export const MAX_BACKUP_FILES = 5;
 /** Minimum interval between orphan-GC sweeps at startup. */
 export const ORPHAN_GC_MIN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -168,9 +162,6 @@ export const CACHE_SCHEMA_STAMP_MULTIPLIER = 1000;
 export const CACHE_SCHEMA_UNRECOGNISED_MAJOR = 100;
 
 // ── Timeouts ──
-/** Per-item saveTx timeout during migration. A single locked item must
- *  not stall the entire migration loop. */
-export const MIGRATION_ITEM_TIMEOUT_MS = 30_000;
 /** Max wait for pending writes to drain during cache shutdown. Beyond
  *  this we abandon stragglers rather than block Zotero shutdown. */
 export const CLOSE_CACHE_DRAIN_TIMEOUT_MS = 5_000;
@@ -178,7 +169,14 @@ export const CLOSE_CACHE_DRAIN_TIMEOUT_MS = 5_000;
 // ── Preference keys ──
 // Centralized to prevent typos: a misspelled pref name silently fails
 // (Zotero.Prefs.get returns `undefined`) and corrupts state lookups.
+// v2.0.x set this after a migration that never ran (BUG-MIGRATION), so it says
+// nothing about what was imported. It is still written, under both names, for a
+// copy downgraded to v2.0.x; see DOWNGRADE_COPY_PREFS in src/modules/prefs.ts.
 export const PREF_MIGRATION_COMPLETE = "extensions.zotero.citegeist.migrationV1Complete";
+// Set true once a pass of the one-time import of confirmed title matches from
+// Extra has read every library. See migrateFromExtraV1 in cache/migration.ts.
+export const PREF_EXTRA_MATCH_IMPORT_COMPLETE =
+  "extensions.zotero.citegeist.extraMatchImportComplete";
 export const PREF_LAST_BACKUP_PATH = "extensions.zotero.citegeist.lastBackupPath";
 export const PREF_LAST_ORPHAN_GC_AT = "extensions.zotero.citegeist.lastOrphanGcAt";
 // Set true once the one-time purge of sync-breaking `openalex:author` item

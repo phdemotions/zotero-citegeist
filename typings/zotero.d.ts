@@ -329,7 +329,22 @@ declare const Zotero: {
   };
   Sync: {
     Runner: {
-      delaySync<T>(fn: () => Promise<T>): Promise<T>;
+      /**
+       * Push syncs back until `ms` milliseconds from now. Returns nothing and
+       * never calls a function: passed one, it sets an invalid date that holds
+       * nothing (syncRunner.js 8.0.4 lines 1037-1039, 9.0.6 lines 1066-1068,
+       * 10.0.2 lines 1081-1083). To hold sync around a batch, use
+       * {@link delayIndefinite}.
+       */
+      delaySync(ms: number): void;
+      /**
+       * Hold every sync that starts from now on until the returned function is
+       * called; call it in a `finally`. A held sync waits before it contacts the
+       * server, and a sync already past that point runs on (syncRunner.js
+       * 7.0.10 lines 1045-1052, 8.0.4 lines 1047-1052, 9.0.6 lines 1076-1081,
+       * 10.0.2 lines 1091-1096; the wait, 10.0.2 lines 167-171).
+       */
+      delayIndefinite(): () => void;
     };
   };
   Collections: {

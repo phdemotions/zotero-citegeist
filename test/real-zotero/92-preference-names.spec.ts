@@ -13,7 +13,11 @@
  * before looking at the new copy, for the reason 90-lifecycle.spec.ts gives: the
  * new copy can start before the old one has closed citegeist.sqlite.
  */
-import { PREF_MIGRATION_COMPLETE, PREF_NETWORK_PAGE_SIZE } from "../../src/constants";
+import {
+  PREF_EXTRA_MATCH_IMPORT_COMPLETE,
+  PREF_MIGRATION_COMPLETE,
+  PREF_NETWORK_PAGE_SIZE,
+} from "../../src/constants";
 import { linesAdded } from "./shared/debugLines";
 import { STUB_WORK_ID } from "./shared/fixture";
 import { BUDGETS, SHUTDOWN_WAIT_TIMEOUT_MS, STARTUP_WAIT_TIMEOUT_MS } from "./shared/timeouts";
@@ -115,38 +119,64 @@ describe("preference names", function () {
   });
 
   describe("a migration flag an earlier build stored under the doubled name", function () {
+    // Every v2.0.x profile holds migrationV1Complete under the doubled name, set by
+    // a migration that never ran (BUG-MIGRATION), so the flag no longer decides
+    // whether startup imports; extraMatchImportComplete does. A finished import
+    // still writes the old flag under both names, for a copy downgraded to v2.0.x.
+    const legacyFlag = DOUBLED_PREFIX + PREF_MIGRATION_COMPLETE;
+
+    /** The flags a finished import leaves, which every later spec starts from. */
+    function restoreFlags(): void {
+      Services.prefs.setBoolPref(PREF_EXTRA_MATCH_IMPORT_COMPLETE, true);
+      Services.prefs.setBoolPref(PREF_MIGRATION_COMPLETE, true);
+      Services.prefs.setBoolPref(legacyFlag, true);
+    }
+
     before(async function () {
       this.timeout(BUDGETS.preferenceEnsureReady.timeoutMs);
       // Start from a running copy even when an earlier spec failed partway.
       await ensureCitegeistReady();
     });
 
-    it("stops startup migrating again, and is copied to its real name", async function () {
+    it("no longer stops the import, which runs once and then never again", async function () {
       this.timeout(BUDGETS.preferenceLegacyFlag.timeoutMs);
-      const legacyFlag = DOUBLED_PREFIX + PREF_MIGRATION_COMPLETE;
       try {
+        Services.prefs.clearUserPref(PREF_EXTRA_MATCH_IMPORT_COMPLETE);
         Services.prefs.clearUserPref(PREF_MIGRATION_COMPLETE);
         Services.prefs.setBoolPref(legacyFlag, true);
         expect(
           await migrationRunsDuringRestart(),
-          "startup migrated despite the flag under the doubled name",
-        ).to.be.empty;
+          "the first restart of a v2.0.x profile, whose only flag is the doubled one",
+        ).to.have.length(1);
         expect(
-          Services.prefs.getBoolPref(PREF_MIGRATION_COMPLETE, false),
-          "the flag under its real name after startup",
+          Services.prefs.getBoolPref(PREF_EXTRA_MATCH_IMPORT_COMPLETE, false),
+          "the import's flag after the pass",
         ).to.equal(true);
 
-        // With the flag under neither name the same restart migrates, so the
-        // empty result above cannot come from a probe that never sees a migration.
+        expect(await migrationRunsDuringRestart(), "a restart after the import ran it again").to.be
+          .empty;
+      } finally {
+        restoreFlags();
+      }
+    });
+
+    it("positive control: with no flag under any name, a restart imports and sets the old flag where v2.0.5 reads it", async function () {
+      this.timeout(BUDGETS.preferenceLegacyFlag.timeoutMs);
+      try {
+        Services.prefs.clearUserPref(PREF_EXTRA_MATCH_IMPORT_COMPLETE);
         Services.prefs.clearUserPref(PREF_MIGRATION_COMPLETE);
         Services.prefs.clearUserPref(legacyFlag);
+        expect(await migrationRunsDuringRestart(), "a restart with no flag").to.have.length(1);
         expect(
-          await migrationRunsDuringRestart(),
-          "positive control: a restart with no flag migrates",
-        ).to.have.length(1);
+          Services.prefs.getBoolPref(PREF_MIGRATION_COMPLETE, false),
+          "the old flag under its real name",
+        ).to.equal(true);
+        expect(
+          Services.prefs.getBoolPref(legacyFlag, false),
+          "the old flag under the doubled name, which v2.0.5 reads",
+        ).to.equal(true);
       } finally {
-        Services.prefs.clearUserPref(legacyFlag);
-        Services.prefs.setBoolPref(PREF_MIGRATION_COMPLETE, true);
+        restoreFlags();
       }
     });
   });

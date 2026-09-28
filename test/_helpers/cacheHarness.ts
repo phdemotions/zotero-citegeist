@@ -59,9 +59,14 @@ export const mockZotero = {
   Items: {
     getAll: vi.fn(async () => [] as _ZoteroTypes.Item[]),
   },
+  // Shaped like Zotero's syncRunner.js: delaySync(ms) returns nothing and never
+  // calls a function it is given, and delayIndefinite() holds syncs until the
+  // function it returns is called. A mock that ran delaySync's argument hid the
+  // v2.0.0 migration that never ran (BUG-MIGRATION).
   Sync: {
     Runner: {
-      delaySync: vi.fn(async (fn: () => Promise<unknown>) => await fn()),
+      delaySync: vi.fn<(ms: number) => void>(),
+      delayIndefinite: vi.fn<() => () => void>(() => vi.fn()),
     },
   },
   ProgressWindow: vi.fn(),

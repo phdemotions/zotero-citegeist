@@ -48,8 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the wrong name, so changes made in Citegeist's settings were ignored: citation
   data went stale after 7 days and the citation browser loaded 25 results per page,
   whatever you chose. Your choices now apply. A page size above 200, the most
-  OpenAlex returns at once, is read as 200. Upgrading does not repeat the one-time
-  move of cached data out of the Extra field.
+  OpenAlex returns at once, is read as 200.
 - **"Automatically fetch citation data when viewing items" now works.** The setting
   has always been ticked by default, but it never ran. Citegeist now fills in
   missing or out-of-date citation data for the rows Zotero draws in your item list.
@@ -64,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The clean-up of cached data for deleted items runs weekly, not on every
   launch.** It was meant to run at most once a week, but the time of its last run
   was never stored correctly.
+- **Title matches you confirmed in Citegeist 1.x carry over.** Version 2.0 was
+  meant to move what 1.x kept in each item's Extra field into Citegeist's own
+  database, but that one-time move never ran, so the matches you had confirmed by
+  hand were not used. Citegeist now copies each confirmed match into its database
+  once, the first time it starts, along with any match confirmed under 2.x on
+  another computer that reached this one through Zotero sync. A match you have
+  confirmed or dismissed since is kept as it is. Your Extra field is not changed:
+  the old `Citegeist.` lines stay until a later version adds a command to remove
+  them when you ask. Citation counts and the other numbers are fetched fresh from
+  OpenAlex.
 
 ## [2.0.5] — 2026-07-09
 

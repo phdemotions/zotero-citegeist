@@ -96,4 +96,12 @@ export const BUDGETS = {
     SHUTDOWN_WAIT_TIMEOUT_MS,
     STARTUP_WAIT_TIMEOUT_MS,
   ),
+  /** 93 before and after hooks: startup, when an earlier spec left Citegeist disabled. */
+  legacyImportSetup: sized(STARTUP_WAIT_TIMEOUT_MS),
+  /** 93: shutdown complete, the add-on inactive, then the startup that runs the import. */
+  legacyImportRun: sized(SHUTDOWN_WAIT_TIMEOUT_MS, WAIT_TIMEOUT_MS, STARTUP_WAIT_TIMEOUT_MS),
+  /** 93: shutdown complete, then the add-on inactive, before the spec reads the database. */
+  legacyImportRead: sized(SHUTDOWN_WAIT_TIMEOUT_MS, WAIT_TIMEOUT_MS),
+  /** 93: the startup after the import, which must not scan again. */
+  legacyImportRescan: sized(STARTUP_WAIT_TIMEOUT_MS),
 } as const satisfies Record<string, WaitBudget>;
