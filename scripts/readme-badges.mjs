@@ -7,10 +7,10 @@
  * version. The downloads badge sums every release's .xpi downloads; update.json is left out,
  * because Zotero's auto-updater polls it on a schedule.
  *
- * release.yml's badges job runs readme-badges-cli.mjs on `gh api --paginate --slurp` output, one
- * JSON array per page, so no release past the first 100 is lost.
+ * The Publish release workflow's badges job runs readme-badges-cli.mjs on `gh api --paginate
+ * --slurp` output, one JSON array per page, so no release past the first 100 is lost.
  */
-import { isReleaseTag, newestFinalVersion } from "./release-tag.mjs";
+import { newestVersion, releaseTagVersion } from "./version.mjs";
 
 /**
  * @param {unknown} pages the releases API's pages, each an array of releases
@@ -22,8 +22,9 @@ export function badgeValues(pages) {
   }
   const releases = pages.flat();
   const published = releases
-    .filter((release) => release?.draft === false && isReleaseTag(release?.tag_name))
-    .map((release) => release.tag_name.slice(1));
+    .filter((release) => release?.draft === false)
+    .map((release) => releaseTagVersion(release?.tag_name))
+    .filter((version) => version !== null);
   if (published.length === 0) {
     throw new Error("There is no published vMAJOR.MINOR.PATCH release to show");
   }
@@ -39,7 +40,7 @@ export function badgeValues(pages) {
     release: {
       schemaVersion: 1,
       label: "release",
-      message: `v${newestFinalVersion(published)}`,
+      message: `v${newestVersion(published)}`,
       color: "5a9cff",
     },
     downloads: {

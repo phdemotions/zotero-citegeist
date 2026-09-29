@@ -1,47 +1,62 @@
 /**
- * Publish's check of the live update channel, before it creates a release or moves the channel.
- * Every installed copy reads releases/download/release/update.json, so the channel must never
- * move backwards, and a re-run of a publish must be safe.
+ * Publish's check of the live update channel, before it creates a tag or a release or moves the
+ * channel. Every installed copy reads releases/download/release/update.json, so the channel must
+ * never move backwards, and a re-run of a publish must be safe.
  *
  * It reports one state, which Publish's later steps act on:
  *
  *   advance  The channel's newest version is older than this one. Publish.
  *   current  The channel's newest version is this one, and its update.json is byte for byte the
  *            one this run verified: an earlier attempt finished. Nothing to upload.
- *   first    No channel Release exists yet. This is the first release.
+ *   first    No channel Release exists, and no release but this version's own was ever published.
+ *            This is the first release.
  *   repair   The channel Release exists but its update.json is gone, as an interrupted
- *            `gh release upload --clobber` leaves it, and this run may restore it: this tag's
- *            versioned release is published with the verified assets, and no published release
- *            is newer.
+ *            `gh release upload --clobber` leaves it, and this run may restore it: this version's
+ *            release is published with the verified assets, and no published release is newer.
  *
- * It refuses an older version, this version with other bytes, a channel that is not JSON, and a
- * missing update.json this run may not restore. check-channel-version-cli.mjs runs it.
+ * It refuses an older version, this version with other bytes, a channel that is not JSON, a
+ * missing update.json this run may not restore, and a missing channel Release once other releases
+ * have shipped. Whether a release exists is read from GitHub's HTTP status, a 404 and nothing
+ * else (release-github.mjs). check-channel-version-cli.mjs runs it.
  *
  * Publish runs the runner image's own Node and installs nothing, so this file uses no dependency.
  */
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { bash, failureText, getOrNull, gh, listAll } from "./release-github.mjs";
 import {
-  compareFinalVersions,
-  finalVersionParts,
-  isReleaseTag,
-  newestFinalVersion,
-} from "./release-tag.mjs";
+  assertReleaseVersion,
+  compareVersions,
+  newestVersion,
+  releaseTag,
+  releaseTagVersion,
+} from "./version.mjs";
 
-const PROCEDURE = "docs/RELEASE-CHECKLIST.md, section 5";
-const FETCH_ATTEMPTS = 3;
-const FETCH_TIMEOUT_MS = 60_000;
-const RETRY_DELAY_MS = 5_000;
+const RUNBOOK = "docs/RELEASE-RUNBOOK.md";
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SUM_LINE = /^([0-9a-f]{64}) {2}([A-Za-z0-9._-]+)$/;
 const VERIFY_ASSETS = fileURLToPath(new URL("./verify-release-assets.sh", import.meta.url));
 
+/** How the channel is fetched. Tests shorten the waits. */
+export const FETCH_DEFAULTS = Object.freeze({
+  /** Tries per fetch; a 5xx, a 429 or a network error is retried until they run out. */
+  attempts: 3,
+  /** The deadline for each try. */
+  timeoutMs: 60_000,
+  /** The wait before retrying a 5xx or a network error, and a 429 without a usable Retry-After. */
+  retryDelayMs: 5_000,
+  /** The longest a 429's Retry-After is honoured. */
+  maxRetryAfterMs: 60_000,
+  /** The wait before the one re-read of a 404 while this version's release exists. */
+  clobberRetryDelayMs: 10_000,
+});
+
 /** @typedef {"advance" | "current" | "first" | "repair"} ChannelState */
+/** @typedef {typeof FETCH_DEFAULTS} FetchOptions */
 
 /**
  * Every version an update manifest lists, across all of its add-ons.
@@ -82,17 +97,30 @@ export function parseSums(sums) {
 
 /**
  * The state for a live update.json this run could read.
- * @param {{ version: string, manifest: any, liveSha256: string, verifiedSha256: string }} options
+ * @param {{
+ *   version: string,
+ *   manifest: any,
+ *   liveSha256: string,
+ *   verifiedSha256: string,
+ *   publishedSha256?: () => string | null,
+ * }} options `publishedSha256` gives the SHA-256 of the update.json this version's published
+ *   release carries, or null when there is none; it is asked only when the channel serves this
+ *   version from bytes other than the verified ones.
  * @returns {{ state: ChannelState, message: string }}
  */
-export function assessLiveChannel({ version, manifest, liveSha256, verifiedSha256 }) {
-  finalVersionParts(version, "The release version");
-  const listed = listedVersions(manifest).map((entry) => {
-    finalVersionParts(entry, "The live update.json lists version");
-    return /** @type {string} */ (entry);
-  });
-  const newest = newestFinalVersion(listed);
-  const order = compareFinalVersions(version, newest);
+export function assessLiveChannel({
+  version,
+  manifest,
+  liveSha256,
+  verifiedSha256,
+  publishedSha256 = () => null,
+}) {
+  assertReleaseVersion(version, "The release version");
+  const listed = listedVersions(manifest).map((entry) =>
+    assertReleaseVersion(entry, "The live update.json lists version"),
+  );
+  const newest = newestVersion(listed);
+  const order = compareVersions(version, newest);
   if (order > 0) {
     return {
       state: "advance",
@@ -102,20 +130,35 @@ export function assessLiveChannel({ version, manifest, liveSha256, verifiedSha25
   if (order < 0) {
     throw new Error(
       `${version} is older than ${newest}, which the live update channel already serves. ` +
-        `Publishing it would move installed copies backwards (${PROCEDURE}).`,
+        `Publishing it would move installed copies backwards (${RUNBOOK}, "Channel refusals").`,
     );
   }
-  if (liveSha256 !== verifiedSha256) {
+  if (liveSha256 === verifiedSha256) {
+    return {
+      state: "current",
+      message: `The live update channel already serves this run's verified update.json for ${version}`,
+    };
+  }
+  const tag = releaseTag(version);
+  const published = publishedSha256();
+  if (published === liveSha256) {
     throw new Error(
-      `The live update channel already serves ${version}, from an update.json (sha256 ` +
-        `${liveSha256}) other than the one this run verified (sha256 ${verifiedSha256}). A ` +
-        `version publishes once; release the next patch version (${PROCEDURE}).`,
+      `Release ${tag} is already complete: the live update channel serves its published ` +
+        `update.json byte for byte (sha256 ${liveSha256}). This attempt built other bytes ` +
+        `(sha256 ${verifiedSha256}), as a change to the runner image between attempts can. ` +
+        `Nothing is left to publish and no version is spent, so leave this run as it is ` +
+        `(${RUNBOOK}, "Re-run recovery").`,
     );
   }
-  return {
-    state: "current",
-    message: `The live update channel already serves this run's verified update.json for ${version}`,
-  };
+  throw new Error(
+    `The live update channel already serves ${version} from an update.json (sha256 ` +
+      `${liveSha256}) that is neither the one this run verified (sha256 ${verifiedSha256}) nor ` +
+      (published === null
+        ? `one release ${tag} carries, since it carries none. `
+        : `release ${tag}'s own (sha256 ${published}). `) +
+      `A version publishes once: find out what changed the channel before anything else, and ` +
+      `ship any change as the next patch version (${RUNBOOK}, "The channel serves other bytes").`,
+  );
 }
 
 /**
@@ -124,26 +167,37 @@ export function assessLiveChannel({ version, manifest, liveSha256, verifiedSha25
  *   version: string,
  *   channelReleaseExists: boolean,
  *   release?: { isDraft: boolean, assetsVerified: boolean } | null,
- *   publishedVersions?: string[],
- * }} options `release` is this tag's versioned release, null when it does not exist.
- *   `publishedVersions` lists the final versions of every published release.
+ *   publishedTags?: string[],
+ * }} options `release` is this version's release, null when it does not exist. `publishedTags`
+ *   lists the tag of every published release.
  * @returns {{ state: ChannelState, message: string }}
  */
 export function assessMissingChannel({
   version,
   channelReleaseExists,
   release = null,
-  publishedVersions = [],
+  publishedTags = [],
 }) {
-  finalVersionParts(version, "The release version");
+  const tag = releaseTag(version);
   if (!channelReleaseExists) {
+    const others = publishedTags.filter((published) => published !== tag);
+    if (others.length > 0) {
+      throw new Error(
+        `No channel Release exists, but other releases have been published (` +
+          `${others.slice(0, 5).join(", ")}${others.length > 5 ? ", …" : ""}), so the channel ` +
+          `was deleted after a release shipped and installed copies find no update. This run ` +
+          `does not start a new channel; restore it by hand (${RUNBOOK}, "The channel Release ` +
+          `is gone").`,
+      );
+    }
     return {
       state: "first",
       message: `No update channel exists yet, so ${version} will be its first version`,
     };
   }
-  const tag = `v${version}`;
-  const newer = publishedVersions.filter((listed) => compareFinalVersions(listed, version) > 0);
+  const newer = publishedTags
+    .map(releaseTagVersion)
+    .filter((listed) => listed !== null && compareVersions(listed, version) > 0);
   const reason = !release
     ? `release ${tag} does not exist yet`
     : release.isDraft
@@ -151,13 +205,14 @@ export function assessMissingChannel({
       : !release.assetsVerified
         ? `release ${tag} carries assets other than the ones this run verified`
         : newer.length > 0
-          ? `${newestFinalVersion(newer)} is a newer published release`
+          ? `${newestVersion(/** @type {string[]} */ (newer))} is a newer published release`
           : null;
   if (reason !== null) {
     throw new Error(
       `The channel Release has no update.json, so installed copies find no update, and this run ` +
         `may not restore it: ${reason}. Restore the channel from the newest published release's ` +
-        `update.json with gh release upload release <update.json> --clobber (${PROCEDURE}).`,
+        `update.json with gh release upload release <update.json> --clobber (${RUNBOOK}, ` +
+        `"The channel's update.json is missing").`,
     );
   }
   return {
@@ -170,37 +225,83 @@ export function assessMissingChannel({
 
 /**
  * Reads the live channel and GitHub's releases, and returns the state Publish acts on.
- * @param {{ version: string, url: string, sums: unknown, repository: string, env?: Record<string, string | undefined> }} options
+ * @param {{
+ *   version: string,
+ *   url: string,
+ *   sums: unknown,
+ *   repository: string,
+ *   env?: Record<string, string | undefined>,
+ *   fetchOptions?: Partial<FetchOptions>,
+ * }} options
  * @returns {Promise<{ state: ChannelState, message: string }>}
  */
-export async function checkChannel({ version, url, sums, repository, env = process.env }) {
-  finalVersionParts(version, "The release version");
+export async function checkChannel({
+  version,
+  url,
+  sums,
+  repository,
+  env = process.env,
+  fetchOptions,
+}) {
+  const tag = releaseTag(version);
   const verifiedSha256 = parseSums(sums).get("update.json");
   if (!verifiedSha256) throw new Error("SUMS has no digest for update.json");
   if (!REPOSITORY.test(repository)) {
     throw new Error(`The repository must be owner/name, got ${JSON.stringify(repository)}`);
   }
+  const options = { ...FETCH_DEFAULTS, ...fetchOptions };
+  const run = { env };
 
-  const response = await fetchChannel(url);
+  let response = await fetchChannel(url, options);
   if (response.status === 404) {
-    if (viewRelease("release", env) === null) {
-      return assessMissingChannel({ version, channelReleaseExists: false });
+    const channel = getOrNull(
+      `repos/${repository}/releases/tags/release`,
+      "the channel Release",
+      run,
+    );
+    if (channel === null) {
+      return assessMissingChannel({
+        version,
+        channelReleaseExists: false,
+        publishedTags: publishedTags(repository, env),
+      });
     }
-    const tag = `v${version}`;
-    const view = viewRelease(tag, env);
-    const release =
-      view === null
-        ? null
-        : {
-            isDraft: view.isDraft,
-            assetsVerified: !view.isDraft && view.assetCount > 0 && releaseCarries(tag, sums, env),
-          };
-    return assessMissingChannel({
-      version,
-      channelReleaseExists: true,
-      release,
-      publishedVersions: publishedFinalVersions(repository, env),
-    });
+    // Only a published release answers here; a draft does not.
+    const own = getOrNull(`repos/${repository}/releases/tags/${tag}`, `release ${tag}`, run);
+    if (own !== null) {
+      // A `gh release upload --clobber` deletes the old update.json before it uploads the new one,
+      // so an upload in flight elsewhere, or one GitHub has not served yet, reads as missing.
+      // Read once more before treating the channel as broken.
+      await drain(response);
+      await sleep(options.clobberRetryDelayMs);
+      response = await fetchChannel(url, options);
+    }
+    if (response.status === 404) {
+      const releases = listAll(
+        `repos/${repository}/releases?per_page=100`,
+        `${repository}'s releases`,
+        run,
+      );
+      const draft = releases.some((entry) => entry?.tag_name === tag && entry?.draft !== false);
+      return assessMissingChannel({
+        version,
+        channelReleaseExists: true,
+        release:
+          own !== null
+            ? {
+                isDraft: own.draft !== false,
+                assetsVerified:
+                  own.draft === false &&
+                  Array.isArray(own.assets) &&
+                  own.assets.length > 0 &&
+                  releaseCarries(tag, sums, env),
+              }
+            : draft
+              ? { isDraft: true, assetsVerified: false }
+              : null,
+        publishedTags: publishedTagsOf(releases),
+      });
+    }
   }
   if (!response.ok) {
     throw new Error(`fetching ${url} returned HTTP ${response.status}`);
@@ -214,51 +315,120 @@ export async function checkChannel({ version, url, sums, repository, env = proce
     throw new Error(`${url} is not JSON`, { cause: error });
   }
   const liveSha256 = createHash("sha256").update(body).digest("hex");
-  return assessLiveChannel({ version, manifest, liveSha256, verifiedSha256 });
+  return assessLiveChannel({
+    version,
+    manifest,
+    liveSha256,
+    verifiedSha256,
+    publishedSha256: () => publishedUpdateSha256(repository, tag, env),
+  });
 }
 
-/** @param {string} url */
-async function fetchChannel(url) {
+/**
+ * GETs the channel, retrying a 5xx, a 429 (after its Retry-After) and a network error. fetch
+ * follows the redirect GitHub answers with to the asset's storage host.
+ * @param {string} url
+ * @param {FetchOptions} options
+ * @returns {Promise<Response>}
+ */
+async function fetchChannel(url, options) {
   for (let attempt = 1; ; attempt++) {
+    let response;
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-      if (response.status < 500 || attempt === FETCH_ATTEMPTS) return response;
+      response = await fetch(url, { signal: AbortSignal.timeout(options.timeoutMs) });
     } catch (error) {
-      if (attempt === FETCH_ATTEMPTS) throw error;
+      if (attempt >= options.attempts) {
+        throw new Error(`fetching ${url} failed ${attempt} times`, { cause: error });
+      }
+      await sleep(options.retryDelayMs);
+      continue;
     }
-    await sleep(RETRY_DELAY_MS);
+    const lastTry = attempt >= options.attempts;
+    if (response.status === 429 && !lastTry) {
+      await drain(response);
+      await sleep(retryAfterMs(response.headers.get("retry-after"), options));
+      continue;
+    }
+    if (response.status >= 500 && !lastTry) {
+      await drain(response);
+      await sleep(options.retryDelayMs);
+      continue;
+    }
+    return response;
   }
 }
 
 /**
- * A release's draft state and asset count, or null when GitHub has no release for the tag. gh finds
- * a draft by its pending tag name too.
+ * How long a 429 asks to wait: Retry-After in seconds or as an HTTP date, capped.
+ * @param {string | null} value
+ * @param {FetchOptions} options
+ */
+export function retryAfterMs(value, options) {
+  const text = (value ?? "").trim();
+  const wait = /^\d+$/.test(text)
+    ? Number(text) * 1000
+    : Number.isNaN(Date.parse(text))
+      ? options.retryDelayMs
+      : Date.parse(text) - Date.now();
+  return Math.min(Math.max(wait, 0), options.maxRetryAfterMs);
+}
+
+/** @param {Response} response */
+async function drain(response) {
+  try {
+    await response.arrayBuffer();
+  } catch {
+    // The body is not needed.
+  }
+}
+
+/**
+ * The tag of every published (not draft) release.
+ * @param {string} repository
+ * @param {Record<string, string | undefined>} env
+ */
+function publishedTags(repository, env) {
+  return publishedTagsOf(
+    listAll(`repos/${repository}/releases?per_page=100`, `${repository}'s releases`, { env }),
+  );
+}
+
+/** @param {any[]} releases */
+function publishedTagsOf(releases) {
+  return releases
+    .filter((release) => release?.draft === false && typeof release?.tag_name === "string")
+    .map((release) => release.tag_name);
+}
+
+/**
+ * The SHA-256 of the update.json a published release carries, or null when the release is not
+ * published or carries none.
+ * @param {string} repository
  * @param {string} tag
  * @param {Record<string, string | undefined>} env
- * @returns {{ isDraft: boolean, assetCount: number } | null}
+ * @returns {string | null}
  */
-function viewRelease(tag, env) {
-  const result = spawnSync("gh", ["release", "view", tag, "--json", "isDraft,assets"], {
-    encoding: "utf8",
-    env,
-  });
-  if (result.status === 0) {
-    let view;
-    try {
-      view = JSON.parse(result.stdout);
-    } catch (error) {
-      throw new Error(`gh release view ${tag} did not return JSON`, { cause: error });
-    }
-    // Anything but an explicit false counts as a draft, which can only refuse.
-    return {
-      isDraft: view?.isDraft !== false,
-      assetCount: Array.isArray(view?.assets) ? view.assets.length : 0,
-    };
+function publishedUpdateSha256(repository, tag, env) {
+  const release = getOrNull(`repos/${repository}/releases/tags/${tag}`, `release ${tag}`, { env });
+  if (release === null || !release.assets?.some?.((asset) => asset?.name === "update.json")) {
+    return null;
   }
-  if (`${result.stderr}`.includes("release not found")) return null;
-  throw new Error(
-    `Could not tell whether release ${tag} exists: ${(result.stderr || String(result.error)).trim()}`,
-  );
+  const dir = mkdtempSync(join(tmpdir(), "citegeist-published-update-"));
+  try {
+    const download = gh(["release", "download", tag, "--pattern", "update.json", "--dir", dir], {
+      env,
+    });
+    if (download.status !== 0) {
+      throw new Error(
+        `Could not download release ${tag}'s update.json to compare it: ${failureText(download)}`,
+      );
+    }
+    return createHash("sha256")
+      .update(readFileSync(join(dir, "update.json")))
+      .digest("hex");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -271,54 +441,15 @@ function viewRelease(tag, env) {
 function releaseCarries(tag, sums, env) {
   const dir = mkdtempSync(join(tmpdir(), "citegeist-release-assets-"));
   try {
-    const download = spawnSync("gh", ["release", "download", tag, "--dir", dir], {
-      encoding: "utf8",
-      env,
-    });
+    const download = gh(["release", "download", tag, "--dir", dir], { env });
     if (download.status !== 0) {
       throw new Error(
-        `Could not download release ${tag}'s assets to check them: ` +
-          (download.stderr || String(download.error)).trim(),
+        `Could not download release ${tag}'s assets to check them: ${failureText(download)}`,
       );
     }
-    const check = spawnSync("bash", [VERIFY_ASSETS, dir], {
-      encoding: "utf8",
-      env: { ...env, SUMS: String(sums) },
-    });
+    const check = bash([VERIFY_ASSETS, dir], { env: { ...env, SUMS: String(sums) } });
     return check.status === 0;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-}
-
-/**
- * The final versions of every published (not draft) release.
- * @param {string} repository
- * @param {Record<string, string | undefined>} env
- * @returns {string[]}
- */
-function publishedFinalVersions(repository, env) {
-  const result = spawnSync(
-    "gh",
-    ["api", "--paginate", "--slurp", `repos/${repository}/releases?per_page=100`],
-    { encoding: "utf8", env, maxBuffer: 256 * 1024 * 1024 },
-  );
-  if (result.status !== 0) {
-    throw new Error(
-      `Could not list ${repository}'s releases: ${(result.stderr || String(result.error)).trim()}`,
-    );
-  }
-  let pages;
-  try {
-    pages = JSON.parse(result.stdout);
-  } catch (error) {
-    throw new Error(`gh api did not return JSON for ${repository}'s releases`, { cause: error });
-  }
-  if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
-    throw new Error(`gh api did not return pages of releases for ${repository}`);
-  }
-  return pages
-    .flat()
-    .filter((release) => release?.draft === false && isReleaseTag(release?.tag_name))
-    .map((release) => release.tag_name.slice(1));
 }

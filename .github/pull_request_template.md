@@ -14,9 +14,7 @@
 ## Testing
 
 <!-- How did you verify this works? -->
-- [ ] `npm test`
-- [ ] `npm run typecheck`
-- [ ] `npm run lint`
+- [ ] `npm run verify` (typecheck, lint, format, OKF, shellcheck, tests, build)
 - [ ] Manually verified in a real Zotero install (write the Zotero version and OS below)
 - [ ] Screenshots / recording attached (for UI changes)
 
@@ -31,7 +29,7 @@
 
 <!--
 Contributors: leave this section empty. The maintainer runs the multi-lens
-review in docs/RELEASE-CHECKLIST.md ("Review loop") before merging, and posts
+review in docs/RELEASE-RUNBOOK.md ("Review loop") before merging, and posts
 the round log as a comment on this PR.
 -->
 - [ ] Round log posted as a PR comment, ending in two consecutive rounds with no confirmed P2+ finding

@@ -3,14 +3,21 @@
 # test/real-zotero/ inside it via zotero-plugin-scaffold.
 #
 # One definition, called by ci.yml (pull requests and pushes to main), by
-# release.yml (before a tag can publish) and later by the scheduled Zotero watch.
-# It runs scaffold and a downloaded Zotero binary, so it never holds more than a
-# read-only token (KTD13).
+# publish-release.yml (before a release can publish) and later by the scheduled
+# Zotero watch. It runs scaffold and a downloaded Zotero binary, so it never holds
+# more than a read-only token (KTD13).
 name: Real Zotero
 
 on:
   workflow_call:
     inputs:
+      ref:
+        description: >-
+          The commit whose specs every cell runs. Empty means the commit the caller
+          runs on; a release passes the commit it builds, so the specs match its XPI.
+        type: string
+        required: false
+        default: ""
       xpi-artifact:
         description: >-
           Name of an artifact in this run holding exactly one citegeist-*.xpi.
@@ -125,11 +132,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref }}
 
+      # A release's cells restore no dependency cache: a release restores nothing another run
+      # could have written. Pull requests keep theirs.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: npm
+          cache: ${{ inputs.xpi-artifact == '' && 'npm' || '' }}
+          package-manager-cache: false
 
       # npm install, not npm ci (CLAUDE.md, CI Notes). No dependency's install
       # script runs: esbuild and @swc/core load their platform packages without
@@ -142,9 +153,10 @@ jobs:
       - name: Lockfile unchanged by install
         run: git diff --exit-code package-lock.json
 
+      # node, not npm run: npm puts node_modules/.bin first on PATH (test/lockfile.test.ts).
       - name: Build the release XPI
         if: ${{ inputs.xpi-artifact == '' }}
-        run: npm run build
+        run: node scripts/build.mjs
 
       - name: Download the XPI under test
         if: ${{ inputs.xpi-artifact != '' }}

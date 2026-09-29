@@ -20,7 +20,8 @@ JOSS-exempt.
 - [Status](STATUS.md) — current state, last session, upcoming work
 - [Issues](ISSUES.md) — open bugs and feature requests by priority
 - [Backlog](BACKLOG.md) — curated longer-term enhancement ideas
-- [Release checklist](RELEASE-CHECKLIST.md) — manual verification gates before tagging any `v*`
+- [Release checklist](RELEASE-CHECKLIST.md) — the steps of every release, in order, from the automated gate to the post-release watch
+- [Release runbook](RELEASE-RUNBOOK.md) — how a release runs, refusals and re-run recovery, one-time repository setup, the review loop, fork proofs, provenance checks, break-glass and the one-off v2.0.6
 
 ## Architecture & migration
 

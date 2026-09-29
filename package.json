@@ -21,9 +21,11 @@
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.{ts,mjs}\" \"scripts/**/*.mjs\" \"*.{json,md,mjs}\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.{ts,mjs}\" \"scripts/**/*.mjs\" \"*.mjs\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.{ts,mjs}\" \"scripts/**/*.mjs\" \"*.{json,md,mjs}\"",
     "okf:check": "bash tools/okf-check.sh",
-    "okf:drift": "bash tools/okf-drift-check.sh"
+    "okf:drift": "bash tools/okf-drift-check.sh",
+    "check:sh": "shellcheck scripts/*.sh",
+    "verify": "npm run typecheck && npm run lint && npm run format:check && npm run okf:check && npm run check:sh && npm test && npm run build"
   },
   "config": {
     "addonName": "Citegeist",

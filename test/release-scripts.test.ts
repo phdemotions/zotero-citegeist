@@ -1,27 +1,26 @@
 /**
- * The scripts release.yml runs and `npm run release` runs, each the way it is run for real: bash
- * scripts under `bash --noprofile --norc -eo pipefail`, Node CLIs through spawnSync, with gh replaced
- * by a stub that records every call and the update channel served by a local HTTP server.
+ * The scripts the Publish release workflow runs and `npm run release` runs, each the way it is run
+ * for real: bash scripts under `bash --noprofile --norc -eo pipefail`, Node CLIs through spawnSync,
+ * with gh replaced by a stub that fails where gh and GitHub fail, and the update channel served by
+ * a local HTTP server that redirects the way github.com does.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
+  FETCH_DEFAULTS,
   assessLiveChannel,
   assessMissingChannel,
+  checkChannel,
   parseSums,
+  retryAfterMs,
 } from "../scripts/check-channel-version.mjs";
 import { badgeValues, formatCount } from "../scripts/readme-badges.mjs";
 import {
-  compareFinalVersions,
-  isReleaseTag,
-  newestFinalVersion,
-  releaseTagVersion,
-} from "../scripts/release-tag.mjs";
-import {
   ChannelServer,
+  GH_TOKEN,
   GhStub,
   type GhState,
   PROCESS_TEST_TIMEOUT_MS,
@@ -44,10 +43,15 @@ const manifest = (...versions: string[]) =>
   `${JSON.stringify({
     addons: { "citegeist@opusvita.org": { updates: versions.map((version) => ({ version })) } },
   })}\n`;
+const assetsFor = (version: string, xpi = `the ${version} XPI`) => ({
+  [`citegeist-${version}.xpi`]: xpi,
+  "update.json": manifest(version),
+});
 
-const ASSETS = { "citegeist-3.0.0.xpi": "the 3.0.0 XPI", "update.json": manifest("3.0.0") };
-const OTHER_ASSETS = { "citegeist-3.0.0.xpi": "another XPI", "update.json": manifest("3.0.0") };
+const ASSETS = assetsFor("3.0.0");
+const OTHER_ASSETS = assetsFor("3.0.0", "another XPI");
 const SUMS = sumsOf(ASSETS);
+const API_VERSION = ["-H", "X-GitHub-Api-Version: 2022-11-28"];
 
 const GNU_SHA256SUM = /GNU coreutils/.test(
   spawnSync("sha256sum", ["--version"], { encoding: "utf8" }).stdout ?? "",
@@ -57,7 +61,7 @@ const SHASUM = findExecutable("shasum");
 const CAN_CHECK_SUMS = GNU_SHA256SUM || SHASUM !== undefined || Boolean(process.env.CI);
 
 const temp = new TempDirs();
-afterEach(() => temp.removeAll());
+afterEach(() => temp.removeAll(), PROCESS_TEST_TIMEOUT_MS);
 
 function writeAssets(dir: string, assets: Record<string, string> = ASSETS): string {
   mkdirSync(dir, { recursive: true });
@@ -65,55 +69,15 @@ function writeAssets(dir: string, assets: Record<string, string> = ASSETS): stri
   return dir;
 }
 
-describe("release tag grammar and version order (scripts/release-tag.mjs)", () => {
-  it("accepts vMAJOR.MINOR.PATCH and nothing else", () => {
-    for (const tag of ["v3.0.0", "v0.1.0", "v10.20.30", "v12345678901.0.0"]) {
-      expect(isReleaseTag(tag), tag).toBe(true);
-    }
-    for (const tag of [
-      "3.0.0",
-      "v3.0",
-      "v3.0.0.1",
-      "v03.0.0",
-      "v3.00.0",
-      "v3.0.0-rc.1",
-      "v3.0.0-alpha.0",
-      "v3.0.0+b",
-      "v3.0.0 ",
-      " v3.0.0",
-      "v3.0.0\n",
-      "V3.0.0",
-      "",
-      undefined,
-      3,
-    ]) {
-      expect(isReleaseTag(tag), JSON.stringify(tag)).toBe(false);
-    }
-    expect(releaseTagVersion("v3.0.0")).toBe("3.0.0");
-    expect(() => releaseTagVersion("v3.0.0-rc.1")).toThrow(
-      /is not a release tag.*docs\/RELEASE-CHECKLIST\.md, section 5/,
-    );
-  });
-
-  it("orders versions numerically, whichever part differs, in both directions", () => {
-    const newerOlder = [
-      ["3.1.0", "3.0.9"],
-      ["2.10.0", "2.9.0"],
-      ["3.0.10", "3.0.9"],
-      ["4.0.0", "3.99.99"],
-      ["10.0.0", "9.0.0"],
-      ["3.0.1", "3.0.0"],
-      ["100000000000.0.0", "99999999999.0.0"],
-    ];
-    for (const [newer, older] of newerOlder) {
-      expect(compareFinalVersions(newer, older), `${newer} is newer than ${older}`).toBe(1);
-      expect(compareFinalVersions(older, newer), `${older} is older than ${newer}`).toBe(-1);
-    }
-    expect(compareFinalVersions("3.0.0", "3.0.0")).toBe(0);
-    expect(newestFinalVersion(["2.9.0", "2.10.0", "2.0.6"])).toBe("2.10.0");
-    expect(() => compareFinalVersions("3.0.0-alpha.0", "3.0.0")).toThrow(/MAJOR\.MINOR\.PATCH/);
-  });
-});
+/** The message a call throws, or "did not throw". */
+function thrown(call: () => unknown): string {
+  try {
+    call();
+  } catch (error) {
+    return (error as Error).message;
+  }
+  return "did not throw";
+}
 
 describe("asset verification (scripts/verify-release-assets.sh)", () => {
   /** `sums` null runs the script with no SUMS variable at all. */
@@ -241,10 +205,11 @@ describe("channel check decisions (scripts/check-channel-version.mjs)", () => {
     return { manifest: JSON.parse(body), liveSha256: sha256(body) };
   };
 
-  it("advances past a channel whose newest version is older, comparing each part numerically", () => {
+  it("advances past a channel whose newest version is older, including where text order says otherwise", () => {
     const cases: [string, string[]][] = [
       ["3.0.0", ["2.0.6"]],
       ["2.0.10", ["2.0.9"]],
+      ["3.0.10", ["3.0.9"]],
       ["3.1.0", ["3.0.9"]],
       ["2.10.0", ["2.9.0"]],
       ["3.0.1", ["2.0.6", "3.0.0"]],
@@ -255,9 +220,10 @@ describe("channel check decisions (scripts/check-channel-version.mjs)", () => {
     }
   });
 
-  it("refuses a version older than the channel's newest, whichever part differs", () => {
+  it("refuses a version older than the channel's newest, including where text order says otherwise", () => {
     const cases: [string, string[], string][] = [
       ["2.0.9", ["2.0.10"], "2.0.10"],
+      ["3.0.9", ["3.0.10"], "3.0.10"],
       ["3.0.9", ["3.1.0"], "3.1.0"],
       ["2.9.0", ["2.10.0"], "2.10.0"],
       ["3.0.0", ["2.0.6", "3.0.1"], "3.0.1"],
@@ -277,14 +243,42 @@ describe("channel check decisions (scripts/check-channel-version.mjs)", () => {
     expect(assessLiveChannel({ version: "3.0.0", ...live(["3.0.0"]), verifiedSha256 }).state).toBe(
       "current",
     );
-    expect(() =>
+  });
+
+  it("says a release is complete, and spends no version, when the channel serves its own published bytes", () => {
+    const published = manifest("3.0.0");
+    const rebuilt = `${published} `;
+    const asked: string[] = [];
+    const message = thrown(() =>
       assessLiveChannel({
         version: "3.0.0",
-        manifest: JSON.parse(body),
-        liveSha256: sha256(`${body} `),
-        verifiedSha256,
+        manifest: JSON.parse(published),
+        liveSha256: sha256(published),
+        verifiedSha256: sha256(rebuilt),
+        publishedSha256: () => {
+          asked.push("asked");
+          return sha256(published);
+        },
       }),
-    ).toThrow("other than the one this run verified");
+    );
+    expect(message).toContain("Release v3.0.0 is already complete");
+    expect(message).toContain("no version is spent");
+    expect(message).not.toContain("next patch version");
+    expect(asked).toEqual(["asked"]);
+
+    for (const publishedSha256 of [() => sha256("a republished cap raise"), () => null]) {
+      const other = thrown(() =>
+        assessLiveChannel({
+          version: "3.0.0",
+          manifest: JSON.parse(published),
+          liveSha256: sha256(published),
+          verifiedSha256: sha256(rebuilt),
+          publishedSha256,
+        }),
+      );
+      expect(other).toContain("neither the one this run verified");
+      expect(other).toContain("ship any change as the next patch version");
+    }
   });
 
   it("refuses a version or a channel it cannot compare", () => {
@@ -303,32 +297,42 @@ describe("channel check decisions (scripts/check-channel-version.mjs)", () => {
     ).toThrow(/no addons/);
   });
 
-  it("starts a missing channel, and restores a missing update.json only from this tag's published, verified, newest release", () => {
-    expect(assessMissingChannel({ version: "3.0.0", channelReleaseExists: false }).state).toBe(
-      "first",
-    );
+  it("starts a channel only while nothing but this version has been published", () => {
+    for (const publishedTags of [[], ["v3.0.0"]]) {
+      expect(
+        assessMissingChannel({ version: "3.0.0", channelReleaseExists: false, publishedTags })
+          .state,
+        publishedTags.join(","),
+      ).toBe("first");
+    }
+    for (const publishedTags of [["v2.0.5"], ["v3.0.0", "v2.0.5"], ["some-other-release"]]) {
+      expect(
+        thrown(() =>
+          assessMissingChannel({ version: "3.0.0", channelReleaseExists: false, publishedTags }),
+        ),
+        publishedTags.join(","),
+      ).toContain("No channel Release exists, but other releases have been published");
+    }
+  });
+
+  it("restores a missing update.json only from this version's published, verified, newest release", () => {
     const repair = {
-      version: "3.0.0",
+      version: "3.0.9",
       channelReleaseExists: true,
       release: { isDraft: false, assetsVerified: true },
-      publishedVersions: ["2.0.6", "3.0.0"],
+      publishedTags: ["release", "v2.0.6", "v3.0.9", "v3.0.8"],
     };
     expect(assessMissingChannel(repair).state).toBe("repair");
     const refusals: [Partial<typeof repair> & { release?: unknown }, string][] = [
-      [{ release: null as unknown as typeof repair.release }, "release v3.0.0 does not exist yet"],
-      [{ release: { isDraft: true, assetsVerified: true } }, "release v3.0.0 is still a draft"],
+      [{ release: null as unknown as typeof repair.release }, "release v3.0.9 does not exist yet"],
+      [{ release: { isDraft: true, assetsVerified: true } }, "release v3.0.9 is still a draft"],
       [{ release: { isDraft: false, assetsVerified: false } }, "carries assets other than"],
-      [{ publishedVersions: ["3.0.0", "3.0.10"] }, "3.0.10 is a newer published release"],
+      // Newer by number, older as text.
+      [{ publishedTags: ["v3.0.9", "v3.0.10"] }, "3.0.10 is a newer published release"],
+      [{ publishedTags: ["v3.0.9", "v3.10.0"] }, "3.10.0 is a newer published release"],
     ];
     for (const [change, reason] of refusals) {
-      const message = (() => {
-        try {
-          assessMissingChannel({ ...repair, ...change } as typeof repair);
-          return "did not throw";
-        } catch (error) {
-          return (error as Error).message;
-        }
-      })();
+      const message = thrown(() => assessMissingChannel({ ...repair, ...change } as typeof repair));
       expect(message, reason).toContain(reason);
       expect(message, reason).toContain("gh release upload release <update.json> --clobber");
     }
@@ -345,12 +349,26 @@ describe("channel check decisions (scripts/check-channel-version.mjs)", () => {
     expect(() => parseSums(SUMS.replace("  ", " "))).toThrow(/is not/);
     expect(() => parseSums(`${SUMS}\n${SUMS.split("\n")[1]}`)).toThrow(/twice/);
   });
+
+  it("waits as long as a 429's Retry-After asks, within a cap", () => {
+    const options = { ...FETCH_DEFAULTS, retryDelayMs: 5_000, maxRetryAfterMs: 60_000 };
+    expect(retryAfterMs("2", options)).toBe(2_000);
+    expect(retryAfterMs("0", options)).toBe(0);
+    expect(retryAfterMs("3600", options)).toBe(60_000);
+    expect(retryAfterMs(null, options)).toBe(5_000);
+    expect(retryAfterMs("soon", options)).toBe(5_000);
+    const inTenSeconds = new Date(Date.now() + 10_000).toUTCString();
+    expect(retryAfterMs(inTenSeconds, options)).toBeGreaterThan(8_000);
+    expect(retryAfterMs(inTenSeconds, options)).toBeLessThanOrEqual(10_000);
+    expect(retryAfterMs(new Date(Date.now() - 10_000).toUTCString(), options)).toBe(0);
+  });
 });
 
-describe("channel check CLI (scripts/check-channel-version-cli.mjs)", () => {
+describe("channel check against GitHub (scripts/check-channel-version.mjs)", () => {
   const dirs = new TempDirs();
   const CLI = scriptPath("check-channel-version-cli.mjs");
   const RELEASE_CHANNEL = { release: { isDraft: false, assets: {} } };
+  const FAST = { retryDelayMs: 20, clobberRetryDelayMs: 20, maxRetryAfterMs: 3_000 };
   let dir = "";
   let server: ChannelServer;
   let gh: GhStub;
@@ -365,9 +383,41 @@ describe("channel check CLI (scripts/check-channel-version-cli.mjs)", () => {
   afterAll(() => {
     server.stop();
     dirs.removeAll();
-  });
+  }, PROCESS_TEST_TIMEOUT_MS);
 
-  function check({
+  const environment = (variables: Record<string, string> = {}) =>
+    isolatedEnv(dir, { ...gh.env(), GH_TOKEN, ...variables }, [gh.bin]);
+
+  /** Runs the check in this process, with short waits. */
+  async function checkHere({
+    version = "3.0.0",
+    state = {},
+    sums = SUMS,
+    env = environment(),
+  }: {
+    version?: string;
+    state?: GhState;
+    sums?: string;
+    env?: Record<string, string>;
+  } = {}) {
+    gh.reset(state);
+    try {
+      const result = await checkChannel({
+        version,
+        url: `${server.url}/update.json`,
+        sums,
+        repository: REPOSITORY,
+        env,
+        fetchOptions: FAST,
+      });
+      return { ...result, error: "" };
+    } catch (error) {
+      return { state: "", message: "", error: (error as Error).message };
+    }
+  }
+
+  /** Runs the CLI, the way Publish runs it, with the channel behind github.com's redirect. */
+  function checkCli({
     channel,
     state = {},
     sums = SUMS,
@@ -381,7 +431,7 @@ describe("channel check CLI (scripts/check-channel-version-cli.mjs)", () => {
     args?: string[];
   } = {}) {
     server.reset();
-    if (channel !== undefined) server.serve("/update.json", 200, channel);
+    if (channel !== undefined) server.serveRedirected("/update.json", 200, channel);
     gh.reset(state);
     const output = join(dir, "github-output");
     writeFileSync(output, "");
@@ -390,11 +440,7 @@ describe("channel check CLI (scripts/check-channel-version-cli.mjs)", () => {
       [cli, ...(args ?? ["3.0.0", `${server.url}/update.json`])],
       {
         encoding: "utf8",
-        env: isolatedEnv(
-          dir,
-          { ...gh.env(), SUMS: sums, GH_REPO: REPOSITORY, GITHUB_OUTPUT: output },
-          [gh.bin],
-        ),
+        env: environment({ SUMS: sums, GH_REPO: REPOSITORY, GITHUB_OUTPUT: output }),
       },
     );
     return {
@@ -406,119 +452,276 @@ describe("channel check CLI (scripts/check-channel-version-cli.mjs)", () => {
   }
 
   it(
-    "exits 1 without both arguments",
+    "reads the live channel through github.com's redirect: newer passes, older refuses, equal passes only with the verified bytes",
     () => {
-      expect(check({ args: [] }).status).toBe(1);
-      expect(check({ args: ["3.0.0"] }).status).toBe(1);
-    },
-    PROCESS_TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "reads the live channel: newer passes, older refuses, equal passes only with the verified bytes",
-    () => {
-      expect(check({ channel: manifest("2.0.6") })).toMatchObject({
+      expect(checkCli({ channel: manifest("2.0.6") })).toMatchObject({
         status: 0,
         output: "state=advance\n",
       });
-      const older = check({ channel: manifest("3.0.1") });
+      expect(server.requests()).toEqual(["/update.json", "/release-assets/update.json"]);
+      const older = checkCli({ channel: manifest("3.0.1") });
       expect(older).toMatchObject({ status: 1, output: "" });
       expect(older.stdout).toContain("3.0.0 is older than 3.0.1");
-      expect(check({ channel: ASSETS["update.json"] })).toMatchObject({
+      expect(checkCli({ channel: ASSETS["update.json"] })).toMatchObject({
         status: 0,
         output: "state=current\n",
       });
-      const differentBytes = check({ channel: `${ASSETS["update.json"]}\n` });
+      const differentBytes = checkCli({ channel: `${ASSETS["update.json"]}\n` });
       expect(differentBytes).toMatchObject({ status: 1, output: "" });
-      expect(differentBytes.stdout).toContain("other than the one this run verified");
-      expect(check({ channel: "<html>not the channel</html>" })).toMatchObject({
+      expect(differentBytes.stdout).toContain("neither the one this run verified");
+      expect(checkCli({ channel: "<html>not the channel</html>" })).toMatchObject({
         status: 1,
         output: "",
       });
-      expect(check({ channel: manifest("2.0.6"), sums: sumsOf({ "a.xpi": "x" }) }).status).toBe(1);
+      expect(checkCli({ channel: manifest("2.0.6"), sums: sumsOf({ "a.xpi": "x" }) }).status).toBe(
+        1,
+      );
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
 
   it(
-    "tolerates a missing update.json only as the first release, or as a repair it is allowed to make",
-    () => {
-      const published = { ...RELEASE_CHANNEL, "v3.0.0": { isDraft: false, assets: ASSETS } };
-      const refused = (state: GhState, reason: string) => {
-        const result = check({ state });
-        expect(result, reason).toMatchObject({ status: 1, output: "" });
-        expect(result.stdout, reason).toContain(reason);
+    "retries a 502 and a 429 after its Retry-After, and gives up after three tries",
+    async () => {
+      server.reset();
+      server.serveSequence("/update.json", [
+        { status: 502, body: "Bad Gateway" },
+        { status: 200, body: manifest("2.0.6") },
+      ]);
+      expect(await checkHere()).toMatchObject({ state: "advance", error: "" });
+      expect(server.requests()).toEqual(["/update.json", "/update.json"]);
+
+      server.reset();
+      server.serveSequence("/update.json", [
+        { status: 429, body: "slow down", headers: { "retry-after": "1" } },
+        { status: 200, body: manifest("2.0.6") },
+      ]);
+      const started = Date.now();
+      expect(await checkHere()).toMatchObject({ state: "advance", error: "" });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1_000);
+      expect(server.requests()).toHaveLength(2);
+
+      server.reset();
+      server.serve("/update.json", 502, "Bad Gateway");
+      expect((await checkHere()).error).toContain("returned HTTP 502");
+      expect(server.requests()).toHaveLength(3);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "treats only GitHub's own 404 as a missing release, and fails on any other answer",
+    async () => {
+      server.reset();
+      const channelPath = `repos/${REPOSITORY}/releases/tags/release`;
+      const transient = await checkHere({
+        state: { releases: RELEASE_CHANNEL, apiStatus: { [channelPath]: 502 } },
+      });
+      expect(transient.state).toBe("");
+      expect(transient.error).toContain(
+        "Could not tell whether the channel Release exists: HTTP 502",
+      );
+
+      const unreachable = await checkHere({
+        state: { failApi: "error connecting to api.github.com" },
+      });
+      expect(unreachable.error).toContain("error connecting to api.github.com");
+
+      // gh's wording is not GitHub's answer: a failure that says "not found" with no 404 behind it
+      // is still a failure, never an absent release.
+      const worded = await checkHere({ state: { failApi: "release not found" } });
+      expect(worded.state).toBe("");
+      expect(worded.error).toContain("Could not tell whether the channel Release exists");
+
+      const { GH_TOKEN: _token, ...withoutToken } = environment();
+      const unauthenticated = await checkHere({ env: withoutToken });
+      expect(unauthenticated.error).toContain("populate the GH_TOKEN environment variable");
+
+      for (const call of gh.calls()) {
+        if (call[0] === "api") expect(call.slice(1, 3)).toEqual(API_VERSION);
+      }
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "starts the channel only while no other release has been published",
+    async () => {
+      server.reset();
+      expect(await checkHere({ state: {} })).toMatchObject({ state: "first", error: "" });
+      expect(
+        await checkHere({ state: { releases: { "v3.0.0": { isDraft: false, assets: ASSETS } } } }),
+      ).toMatchObject({ state: "first", error: "" });
+      expect(
+        await checkHere({ state: { releases: { "v2.0.5": { isDraft: true, assets: {} } } } }),
+        "a draft was never published",
+      ).toMatchObject({ state: "first", error: "" });
+      const deleted = await checkHere({
+        state: { releases: { "v2.0.5": { isDraft: false, assets: assetsFor("2.0.5") } } },
+      });
+      expect(deleted.state).toBe("");
+      expect(deleted.error).toContain(
+        "No channel Release exists, but other releases have been published (v2.0.5)",
+      );
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "restores a missing update.json only from this version's published, verified, newest release",
+    async () => {
+      server.reset();
+      const own = assetsFor("3.0.9");
+      const sums = sumsOf(own);
+      const published = { ...RELEASE_CHANNEL, "v3.0.9": { isDraft: false, assets: own } };
+      const refused = async (state: GhState, reason: string) => {
+        const result = await checkHere({ version: "3.0.9", sums, state });
+        expect(result.state, reason).toBe("");
+        expect(result.error, reason).toContain(reason);
       };
 
-      expect(check({ state: {} })).toMatchObject({ status: 0, output: "state=first\n" });
-      refused({ releases: RELEASE_CHANNEL }, "release v3.0.0 does not exist yet");
+      await refused({ releases: RELEASE_CHANNEL }, "release v3.0.9 does not exist yet");
+      await refused(
+        { releases: { ...RELEASE_CHANNEL, "v3.0.9": { isDraft: true, assets: own } } },
+        "release v3.0.9 is still a draft",
+      );
       if (CAN_CHECK_SUMS) {
-        expect(check({ state: { releases: published } })).toMatchObject({
-          status: 0,
-          output: "state=repair\n",
+        expect(
+          await checkHere({ version: "3.0.9", sums, state: { releases: published } }),
+        ).toMatchObject({
+          state: "repair",
+          error: "",
         });
         expect(
-          check({
-            state: { releases: { ...published, "v9.0.0": { isDraft: true, assets: ASSETS } } },
+          await checkHere({
+            version: "3.0.9",
+            sums,
+            state: { releases: { ...published, "v9.0.0": { isDraft: true, assets: own } } },
           }),
           "a newer draft does not count",
-        ).toMatchObject({ status: 0, output: "state=repair\n" });
-        refused(
+        ).toMatchObject({ state: "repair", error: "" });
+        await refused(
           {
-            releases: { ...RELEASE_CHANNEL, "v3.0.0": { isDraft: false, assets: OTHER_ASSETS } },
+            releases: {
+              ...RELEASE_CHANNEL,
+              "v3.0.9": { isDraft: false, assets: assetsFor("3.0.9", "another XPI") },
+            },
           },
           "carries assets other than the ones this run verified",
         );
-        refused(
-          { releases: { ...published, "v3.0.1": { isDraft: false, assets: {} } } },
-          "3.0.1 is a newer published release",
+        // Newer by number, older as text.
+        await refused(
+          { releases: { ...published, "v3.0.10": { isDraft: false, assets: {} } } },
+          "3.0.10 is a newer published release",
+        );
+        await refused(
+          { releases: { ...published, "v3.10.0": { isDraft: false, assets: {} } } },
+          "3.10.0 is a newer published release",
         );
       }
-      refused(
-        { releases: { ...RELEASE_CHANNEL, "v3.0.0": { isDraft: true, assets: ASSETS } } },
-        "still a draft",
-      );
-      refused(
-        { failRelease: "HTTP 502: Bad Gateway" },
-        "Could not tell whether release release exists",
-      );
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "reads a missing update.json once more while this version's release exists, as an upload in flight leaves it",
+    async () => {
+      server.reset();
+      server.serveSequence("/update.json", [
+        { status: 404, body: "Not Found" },
+        { status: 200, body: ASSETS["update.json"] },
+      ]);
+      const published = { ...RELEASE_CHANNEL, "v3.0.0": { isDraft: false, assets: ASSETS } };
+      expect(await checkHere({ state: { releases: published } })).toMatchObject({
+        state: "current",
+        error: "",
+      });
+      expect(server.requests()).toEqual(["/update.json", "/update.json"]);
+
+      server.reset();
+      server.serveSequence("/update.json", [
+        { status: 404, body: "Not Found" },
+        { status: 200, body: manifest("2.0.6") },
+      ]);
+      const absent = await checkHere({ state: { releases: RELEASE_CHANNEL } });
+      expect(absent.error).toContain("release v3.0.0 does not exist yet");
+      expect(server.requests(), "no release, so no second read").toEqual(["/update.json"]);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "says the release is complete when the channel serves this version's published update.json and this attempt rebuilt other bytes",
+    async () => {
+      server.reset();
+      const publishedUpdate = manifest("3.0.0");
+      server.serve("/update.json", 200, publishedUpdate);
+      const rebuilt = assetsFor("3.0.0", "a rebuilt XPI");
+      rebuilt["update.json"] = `${publishedUpdate} `;
+      const complete = await checkHere({
+        sums: sumsOf(rebuilt),
+        state: { releases: { ...RELEASE_CHANNEL, "v3.0.0": { isDraft: false, assets: ASSETS } } },
+      });
+      expect(complete.error).toContain("Release v3.0.0 is already complete");
+      expect(complete.error).not.toContain("next patch version");
+
+      const republished = await checkHere({
+        sums: sumsOf(rebuilt),
+        state: {
+          releases: {
+            ...RELEASE_CHANNEL,
+            "v3.0.0": {
+              isDraft: false,
+              assets: { ...ASSETS, "update.json": manifest("3.0.0", "9.9.9") },
+            },
+          },
+        },
+      });
+      expect(republished.error).toContain("neither the one this run verified");
+      expect(republished.error).toContain("next patch version");
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
 
   it(
     "never writes to a release",
-    () => {
+    async () => {
       for (const state of [
         {},
         { releases: RELEASE_CHANNEL },
         { releases: { ...RELEASE_CHANNEL, "v3.0.0": { isDraft: false, assets: ASSETS } } },
       ]) {
-        expect(check({ state }).writes).toEqual([]);
-        expect(check({ state, channel: manifest("2.0.6") }).writes).toEqual([]);
+        server.reset();
+        await checkHere({ state });
+        expect(gh.writes()).toEqual([]);
+        server.serve("/update.json", 200, manifest("2.0.6"));
+        await checkHere({ state });
+        expect(gh.writes()).toEqual([]);
       }
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
 
   it(
-    "runs the check through a symlinked path",
+    "exits 1 without both arguments, and runs the check through a symlinked path",
     () => {
+      expect(checkCli({ args: [] }).status).toBe(1);
+      expect(checkCli({ args: ["3.0.0"] }).status).toBe(1);
       const linked = join(dir, "check-channel-version-cli-link.mjs");
       symlinkSync(CLI, linked);
-      expect(check({ cli: linked, channel: manifest("3.0.1") })).toMatchObject({ status: 1 });
-      expect(check({ cli: linked, channel: manifest("2.0.6") })).toMatchObject({
+      expect(checkCli({ cli: linked, channel: manifest("3.0.1") })).toMatchObject({ status: 1 });
+      expect(checkCli({ cli: linked, channel: manifest("2.0.6") })).toMatchObject({
         status: 0,
         output: "state=advance\n",
       });
-      expect(check({ cli: linked, args: [] }).status).toBe(1);
+      expect(checkCli({ cli: linked, args: [] }).status).toBe(1);
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
 });
 
 describe("versioned release (scripts/publish-versioned-release.sh)", () => {
-  function setup(state: GhState) {
+  function setup(state: GhState, { token = true } = {}) {
     const dir = temp.make("versioned-release");
     const assets = writeAssets(join(dir, "assets"));
     const gh = new GhStub(dir, state);
@@ -526,7 +729,11 @@ describe("versioned release (scripts/publish-versioned-release.sh)", () => {
       runBash(
         scriptPath("publish-versioned-release.sh"),
         ["v3.0.0", assets],
-        isolatedEnv(dir, { ...gh.env(), SUMS, GH_REPO: REPOSITORY }, [gh.bin]),
+        isolatedEnv(
+          dir,
+          { ...gh.env(), ...(token ? { GH_TOKEN } : {}), SUMS, GH_REPO: REPOSITORY },
+          [gh.bin],
+        ),
         dir,
       );
     return { assets, gh, run };
@@ -542,15 +749,25 @@ describe("versioned release (scripts/publish-versioned-release.sh)", () => {
     "--title",
     "v3.0.0",
   ];
+  const TAGGED = { tags: ["v3.0.0"] };
 
   it.skipIf(!CAN_CHECK_SUMS)(
-    "creates the release from the verified assets when none exists",
+    "creates the release from the verified assets when none exists, and only on a tag that exists",
     () => {
-      const { assets, gh, run } = setup({});
+      const { assets, gh, run } = setup(TAGGED);
       const result = run();
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(gh.writes()).toEqual([create(assets)]);
       expect(gh.state().releases?.["v3.0.0"]).toMatchObject({ isDraft: false, assets: ASSETS });
+      for (const call of gh.calls().filter((entry) => entry[0] === "api")) {
+        expect(call.slice(1)).toEqual(expect.arrayContaining(API_VERSION));
+      }
+
+      const untagged = setup({});
+      const refused = untagged.run();
+      expect(refused.status).not.toBe(0);
+      expect(refused.stderr).toContain("doesn't exist in the repo");
+      expect(untagged.gh.state().releases ?? {}).toEqual({});
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
@@ -558,12 +775,12 @@ describe("versioned release (scripts/publish-versioned-release.sh)", () => {
   it.skipIf(!CAN_CHECK_SUMS)(
     "leaves a published release with the verified assets, and refuses one with any other, changing nothing",
     () => {
-      const same = setup({ releases: { "v3.0.0": { isDraft: false, assets: ASSETS } } });
+      const same = setup({ ...TAGGED, releases: { "v3.0.0": { isDraft: false, assets: ASSETS } } });
       expect(same.run().status).toBe(0);
       expect(same.gh.writes()).toEqual([]);
 
       for (const assets of [OTHER_ASSETS, { "update.json": ASSETS["update.json"] }, {}]) {
-        const other = setup({ releases: { "v3.0.0": { isDraft: false, assets } } });
+        const other = setup({ ...TAGGED, releases: { "v3.0.0": { isDraft: false, assets } } });
         const result = other.run();
         expect(result.status, JSON.stringify(assets)).toBe(1);
         expect(result.stdout).toContain("A published release is never changed");
@@ -574,9 +791,28 @@ describe("versioned release (scripts/publish-versioned-release.sh)", () => {
   );
 
   it.skipIf(!CAN_CHECK_SUMS)(
+    "refuses a published release whose assets cannot be downloaded to check, changing nothing",
+    () => {
+      const { gh, run } = setup({
+        ...TAGGED,
+        releases: { "v3.0.0": { isDraft: false, assets: ASSETS } },
+        failDownload: { "v3.0.0": "HTTP 502: Bad Gateway" },
+      });
+      const result = run();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("Could not download published release v3.0.0's assets");
+      expect(gh.writes()).toEqual([]);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it.skipIf(!CAN_CHECK_SUMS)(
     "publishes a draft that carries the verified assets",
     () => {
-      const { gh, run } = setup({ releases: { "v3.0.0": { isDraft: true, assets: ASSETS } } });
+      const { gh, run } = setup({
+        ...TAGGED,
+        releases: { "v3.0.0": { isDraft: true, assets: ASSETS } },
+      });
       expect(run().status).toBe(0);
       expect(gh.writes()).toEqual([["release", "edit", "v3.0.0", "--draft=false"]]);
       expect(gh.state().releases?.["v3.0.0"]).toMatchObject({ isDraft: false, assets: ASSETS });
@@ -585,13 +821,20 @@ describe("versioned release (scripts/publish-versioned-release.sh)", () => {
   );
 
   it.skipIf(!CAN_CHECK_SUMS)(
-    "replaces a draft whose assets are not the verified ones",
+    "replaces a draft whose assets are not the verified ones, or cannot be downloaded",
     () => {
-      for (const draftAssets of [OTHER_ASSETS, {}]) {
-        const { assets, gh, run } = setup({
-          releases: { "v3.0.0": { isDraft: true, assets: draftAssets } },
-        });
-        expect(run().status, JSON.stringify(draftAssets)).toBe(0);
+      const drafts: GhState[] = [
+        { releases: { "v3.0.0": { isDraft: true, assets: OTHER_ASSETS } } },
+        { releases: { "v3.0.0": { isDraft: true, assets: {} } } },
+        {
+          releases: { "v3.0.0": { isDraft: true, assets: ASSETS } },
+          failDownload: { "v3.0.0": "HTTP 502: Bad Gateway" },
+        },
+      ];
+      for (const draft of drafts) {
+        const { assets, gh, run } = setup({ ...TAGGED, ...draft });
+        const result = run();
+        expect(result.status, JSON.stringify(draft) + result.stdout + result.stderr).toBe(0);
         expect(gh.writes()).toEqual([["release", "delete", "v3.0.0", "--yes"], create(assets)]);
         expect(gh.state().releases?.["v3.0.0"]).toMatchObject({ isDraft: false, assets: ASSETS });
       }
@@ -600,13 +843,33 @@ describe("versioned release (scripts/publish-versioned-release.sh)", () => {
   );
 
   it.skipIf(!CAN_CHECK_SUMS)(
-    "refuses when gh cannot say whether the release exists, or the local assets are not the verified ones",
+    "refuses when GitHub lists more than one release for the tag",
     () => {
-      const failing = setup({ failRelease: "HTTP 502: Bad Gateway" });
-      expect(failing.run().status).toBe(1);
-      expect(failing.gh.writes()).toEqual([]);
+      const { gh, run } = setup({
+        ...TAGGED,
+        releases: { "v3.0.0": { isDraft: true, assets: ASSETS } },
+        extraReleases: [{ tag_name: "v3.0.0", draft: true, assets: [] }],
+      });
+      const result = run();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("GitHub lists 2 releases for v3.0.0");
+      expect(gh.writes()).toEqual([]);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
-      const tampered = setup({});
+  it.skipIf(!CAN_CHECK_SUMS)(
+    "refuses when gh cannot list the releases or has no token, or the local assets are not the verified ones",
+    () => {
+      for (const failing of [
+        setup({ ...TAGGED, failApi: "HTTP 502: Bad Gateway" }),
+        setup(TAGGED, { token: false }),
+      ]) {
+        expect(failing.run().status).not.toBe(0);
+        expect(failing.gh.writes()).toEqual([]);
+      }
+
+      const tampered = setup(TAGGED);
       writeFileSync(join(tampered.assets, "update.json"), manifest("3.0.1"));
       expect(tampered.run().status).not.toBe(0);
       expect(tampered.gh.calls()).toEqual([]);
@@ -616,7 +879,10 @@ describe("versioned release (scripts/publish-versioned-release.sh)", () => {
 });
 
 describe("update channel upload (scripts/publish-update-channel.sh)", () => {
-  function setup(state: GhState, name = "update.json", body = manifest("3.0.0")) {
+  function setup(
+    state: GhState,
+    { name = "update.json", body = manifest("3.0.0"), token = true } = {},
+  ) {
     const dir = temp.make("update-channel");
     mkdirSync(join(dir, "out"));
     const file = join(dir, "out", name);
@@ -626,18 +892,26 @@ describe("update channel upload (scripts/publish-update-channel.sh)", () => {
       runBash(
         scriptPath("publish-update-channel.sh"),
         [file],
-        isolatedEnv(dir, { ...gh.env(), GH_REPO: REPOSITORY }, [gh.bin]),
+        isolatedEnv(dir, { ...gh.env(), ...(token ? { GH_TOKEN } : {}), GH_REPO: REPOSITORY }, [
+          gh.bin,
+        ]),
         dir,
       );
     return { file, gh, run };
   }
 
   it(
-    "creates the channel release, not marked latest, when it does not exist, then uploads update.json",
+    "creates the channel release, not marked latest, when GitHub answers 404, then uploads update.json",
     () => {
       const { file, gh, run } = setup({});
       const result = run();
       expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(gh.calls()[0]).toEqual([
+        "api",
+        "--include",
+        ...API_VERSION,
+        `repos/${REPOSITORY}/releases/tags/release`,
+      ]);
       expect(gh.writes()).toEqual([
         [
           "release",
@@ -670,17 +944,33 @@ describe("update channel upload (scripts/publish-update-channel.sh)", () => {
   );
 
   it(
-    "refuses when gh cannot say whether the channel exists, a file not named update.json, and an empty file",
+    "refuses, writing nothing, when GitHub answers anything but 200 or 404, gh cannot reach it, or gh has no token",
     () => {
-      const failing = setup({ failRelease: "HTTP 502: Bad Gateway" });
-      expect(failing.run().status).toBe(1);
-      expect(failing.gh.writes()).toEqual([]);
+      const channelPath = `repos/${REPOSITORY}/releases/tags/release`;
+      for (const failing of [
+        setup({ apiStatus: { [channelPath]: 502 } }),
+        setup({ failApi: "error connecting to api.github.com" }),
+        // gh's wording, with no 404 from GitHub behind it.
+        setup({ failApi: "release not found" }),
+        setup({}, { token: false }),
+      ]) {
+        const result = failing.run();
+        expect(result.status).toBe(1);
+        expect(result.stdout).toContain("Could not tell whether the release channel exists");
+        expect(failing.gh.writes()).toEqual([]);
+      }
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
+  it(
+    "refuses a file not named update.json and an empty file",
+    () => {
       for (const [name, body] of [
         ["channel.json", manifest("3.0.0")],
         ["update.json", ""],
       ]) {
-        const refused = setup({}, name, body);
+        const refused = setup({}, { name, body });
         expect(refused.run().status, name).toBe(1);
         expect(refused.gh.calls(), name).toEqual([]);
       }
@@ -833,4 +1123,35 @@ describe("npm run release preflight (scripts/release-preflight.mjs)", () => {
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
+});
+
+describe("the release runbook", () => {
+  it("has a section for every one a release script, a workflow or a .github file points to", () => {
+    const runbook = readFileSync(join(REPO_ROOT, "docs/RELEASE-RUNBOOK.md"), "utf8");
+    const headings = new Set(
+      [...runbook.matchAll(/^#{2,3} (.+)$/gm)].map((match) => match[1].trim()),
+    );
+    const files = [
+      ...readdirSync(join(REPO_ROOT, "scripts")).map((file) => join("scripts", file)),
+      ...readdirSync(join(REPO_ROOT, ".github/workflows")).map((file) =>
+        join(".github/workflows", file),
+      ),
+      ".github/CODEOWNERS",
+      ".github/pull_request_template.md",
+    ];
+    const pointers = new Map<string, string>();
+    for (const file of files) {
+      // Joins a string a script splits across lines, so a section's name reads whole.
+      const source = readFileSync(join(REPO_ROOT, file), "utf8").replace(/["`]\s*\+\s*["`]/g, "");
+      for (const match of source.matchAll(
+        /(?:RELEASE-RUNBOOK\.md|\$\{RUNBOOK\}),? \(?\\?"([^"\\]+)\\?"/g,
+      )) {
+        pointers.set(match[1], file);
+      }
+    }
+    expect(pointers.size).toBeGreaterThanOrEqual(10);
+    for (const [section, file] of pointers) {
+      expect(headings.has(section), `${file} points to "${section}"`).toBe(true);
+    }
+  });
 });

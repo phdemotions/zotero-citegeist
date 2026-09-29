@@ -3,9 +3,9 @@
  *
  *   node scripts/readme-badges-cli.mjs <releases.json> <output dir>
  *
- * <releases.json> is `gh api --paginate --slurp "repos/<owner>/<name>/releases?per_page=100"`
- * output. It writes badge-release.json and badge-downloads.json into <output dir> and exits 1 on
- * any error.
+ * <releases.json> is the output of `gh api --paginate --slurp -H "X-GitHub-Api-Version: 2022-11-28"
+ * "repos/<owner>/<name>/releases?per_page=100"`. It writes badge-release.json and
+ * badge-downloads.json into <output dir> and exits 1 on any error.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

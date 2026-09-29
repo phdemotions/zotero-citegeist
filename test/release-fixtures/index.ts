@@ -1,7 +1,8 @@
 /**
  * Fixtures for the release script and workflow tests: throwaway directories, an environment that
  * takes nothing from the developer's shell but PATH, git and bash runners, a stand-in for the GitHub
- * CLI (gh-stub.mjs) and a local server for the update channel URL (channel-server.mjs).
+ * CLI (gh-stub.mjs) that fails where gh and GitHub fail, and a local server for the update channel
+ * URL (channel-server.mjs) that redirects as github.com does.
  */
 import { type ChildProcess, spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
@@ -122,11 +123,20 @@ export interface StubRelease {
 
 export interface GhState {
   releases?: Record<string, StubRelease>;
+  /** Tags that exist on GitHub, for `gh release create --verify-tag`. */
+  tags?: string[];
   pulls?: Record<string, unknown[]>;
   extraReleases?: unknown[];
   failRelease?: string;
   failApi?: string;
+  /** An HTTP status every `gh api` call for this path answers with. */
+  apiStatus?: Record<string, number>;
+  /** A message `gh release download <tag>` fails with. */
+  failDownload?: Record<string, string>;
 }
+
+/** The token a release step carries. The gh stub exits 4 without one, as gh does. */
+export const GH_TOKEN = "test-token";
 
 const WRITE_COMMANDS = new Set(["create", "edit", "delete", "upload"]);
 
@@ -169,6 +179,7 @@ export class GhStub {
     return this.calls().filter((call) => call[0] === "release" && WRITE_COMMANDS.has(call[1]));
   }
 
+  /** Where the stub keeps its state. It carries no token: the caller supplies GH_TOKEN. */
   env(): Record<string, string> {
     return { GH_STUB_STATE: this.statePath, GH_STUB_LOG: this.logPath };
   }
@@ -179,6 +190,7 @@ export class ChannelServer {
   url = "";
   private child: ChildProcess | undefined;
   private readonly routesPath: string;
+  private sequences = 0;
 
   constructor(dir: string) {
     this.routesPath = join(dir, "channel-routes.json");
@@ -202,14 +214,45 @@ export class ChannelServer {
     this.url = `http://127.0.0.1:${port}`;
   }
 
-  serve(path: string, status: number, body: string): void {
-    const routes = JSON.parse(readFileSync(this.routesPath, "utf8")) as Record<string, unknown>;
-    routes[path] = { status, body };
-    writeFileSync(this.routesPath, JSON.stringify(routes));
+  /** Answers `path` with `status` and `body` every time. */
+  serve(path: string, status: number, body: string, headers: Record<string, string> = {}): void {
+    this.route(path, { status, body, headers });
+  }
+
+  /**
+   * Answers `path` as github.com answers a release asset URL: a 302, with cache-control: no-cache,
+   * to the asset on another path, which answers `status` and `body`.
+   */
+  serveRedirected(path: string, status: number, body: string): void {
+    const target = `/release-assets${path}`;
+    this.route(path, { redirect: target });
+    this.route(target, { status, body });
+  }
+
+  /** Answers `path` with each response in turn, the last one repeating, from the first again. */
+  serveSequence(
+    path: string,
+    responses: { status: number; body?: string; headers?: Record<string, string> }[],
+  ): void {
+    // The server counts requests per route definition; a fresh one starts the sequence over.
+    this.route(path, { sequence: responses, served: ++this.sequences });
+  }
+
+  /** Every path requested since the last reset, in order. */
+  requests(): string[] {
+    const log = `${this.routesPath}.log`;
+    return existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : [];
   }
 
   reset(): void {
     writeFileSync(this.routesPath, "{}");
+    writeFileSync(`${this.routesPath}.log`, "");
+  }
+
+  private route(path: string, route: unknown): void {
+    const routes = JSON.parse(readFileSync(this.routesPath, "utf8")) as Record<string, unknown>;
+    routes[path] = route;
+    writeFileSync(this.routesPath, JSON.stringify(routes));
   }
 
   stop(): void {

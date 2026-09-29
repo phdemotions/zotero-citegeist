@@ -11,6 +11,8 @@ const RELEASE_NOTE_FILES = new Set(["CHANGELOG.md", "CITATION.cff"]);
 
 const status = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=no"], {
   encoding: "utf8",
+  // A git that hangs, on a lock or a network filesystem, fails the preflight rather than stalling it.
+  timeout: 60_000,
 });
 const fields = status.split("\0");
 const unexpected = [];

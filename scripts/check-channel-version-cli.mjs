@@ -16,8 +16,8 @@ const [version, url] = process.argv.slice(2);
 try {
   if (!version || !url) {
     throw new Error(
-      "usage: SUMS=<asset sums> GH_REPO=<owner/name> node scripts/check-channel-version-cli.mjs " +
-        "<MAJOR.MINOR.PATCH> <update.json URL>",
+      "usage: SUMS=<asset sums> GH_REPO=<owner/name> GH_TOKEN=<token> node " +
+        "scripts/check-channel-version-cli.mjs <MAJOR.MINOR.PATCH> <update.json URL>",
     );
   }
   const { state, message } = await checkChannel({

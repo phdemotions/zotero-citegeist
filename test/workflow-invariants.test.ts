@@ -1,15 +1,17 @@
 /**
  * Safety properties of every GitHub Actions workflow (plan KTD13). A published release reaches every
- * installed copy on its next update check, so each test here closes one way a bad tag, a stale run
- * or a compromised dependency could get there. If one fails, fix the workflow; never weaken the test.
+ * installed copy on its next update check, so each test here closes one way a wrong commit, a stale
+ * run or a compromised dependency could get there. If one fails, fix the workflow; never weaken the
+ * test.
  *
  * The release scripts' own behaviour is tested in release-guard.test.ts and release-scripts.test.ts.
  * This file checks that the workflows call them, in the right jobs, in the right order, with the
- * right permissions.
+ * right permissions, and runs the workflow steps that act on their own with the environment their
+ * YAML gives them.
  */
 import { createHash } from "node:crypto";
 import {
-  chmodSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -21,6 +23,7 @@ import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isAlias, isScalar, parseDocument, visit } from "yaml";
 import {
+  GH_TOKEN,
   GhStub,
   PROCESS_TEST_TIMEOUT_MS,
   REPO_ROOT,
@@ -85,9 +88,12 @@ const workflows = Object.fromEntries(
   WORKFLOW_FILES.map((file) => [file, (documents[file].toJS() ?? { jobs: {} }) as Workflow]),
 );
 
+const RELEASE = "publish-release.yml";
+
 /**
  * Every permission every job holds, exactly. A workflow or job missing from this table fails, so a
- * new write scope is a reviewed change to this file (CODEOWNERS).
+ * new write scope is a reviewed change to this file (CODEOWNERS). Every job that holds a write scope
+ * here is held to the command allowlist below.
  */
 const PERMISSIONS: Record<
   string,
@@ -95,35 +101,55 @@ const PERMISSIONS: Record<
 > = {
   "ci.yml": {
     workflow: { contents: "read" },
-    jobs: { test: { contents: "read" }, "real-zotero": { contents: "read" }, gate: {} },
+    jobs: {
+      test: { contents: "read" },
+      "real-zotero": { contents: "read" },
+      zizmor: { contents: "read" },
+      gate: {},
+    },
   },
   "okf-watch.yml": {
     workflow: { contents: "read" },
     jobs: { drift: { contents: "read", issues: "write" } },
   },
-  "real-zotero.yml": {
-    workflow: { contents: "read" },
-    jobs: { "real-zotero": { contents: "read" } },
-  },
-  "release.yml": {
-    workflow: { contents: "read" },
+  [RELEASE]: {
+    workflow: {},
     jobs: {
       build: { contents: "read", "pull-requests": "read" },
       verify: { contents: "read" },
       "real-zotero": { contents: "read" },
-      publish: { contents: "write" },
+      publish: { contents: "write", "id-token": "write", attestations: "write" },
       badges: { contents: "write" },
     },
   },
+  "real-zotero.yml": {
+    workflow: { contents: "read" },
+    jobs: { "real-zotero": { contents: "read" } },
+  },
 };
 
+/** "<file> <job>" for every job the table gives a write scope. Each runs only allowlisted commands. */
+const WRITE_SCOPED_JOBS = new Set(
+  Object.entries(PERMISSIONS).flatMap(([file, { jobs }]) =>
+    Object.entries(jobs)
+      .filter(([, scopes]) => Object.values(scopes).includes("write"))
+      .map(([id]) => `${file} ${id}`),
+  ),
+);
+/** The actions each write-scoped job may use, and nothing else. */
+const WRITE_SCOPED_ACTIONS: Record<string, string[]> = {
+  [`${RELEASE} publish`]: ["actions/download-artifact", "actions/checkout", "actions/attest"],
+  [`${RELEASE} badges`]: ["actions/checkout"],
+  "okf-watch.yml drift": ["actions/checkout"],
+};
 /** The jobs whose checkout keeps its credentials, because they push. They run no dependency. */
-const PUSHING_JOBS = new Set(["release.yml publish", "release.yml badges"]);
+const PUSHING_JOBS = new Set([`${RELEASE} publish`, `${RELEASE} badges`]);
 /** A step that mentions any of these runs dependencies, test code or Zotero. */
 const THIRD_PARTY_CODE = /\b(?:npm|npx|pnpm|yarn|vitest|mocha|zotero-plugin|xvfb-run)\b/;
 const INSTALL = "npm install --no-audit --no-fund --ignore-scripts";
 const LOCKFILE_CHECK = "git diff --exit-code package-lock.json";
-/** The install and gates, in order, that ci.yml's test job and release.yml's verify job run. */
+const BUILD = "node scripts/build.mjs";
+/** The install and gates, in order, that ci.yml's test job and the release's Verify job run. */
 const GATES = [
   INSTALL,
   LOCKFILE_CHECK,
@@ -131,9 +157,27 @@ const GATES = [
   "npm run lint",
   "npm run format:check",
   "npm run okf:check",
-  "shellcheck scripts/*.sh",
+  "npm run check:sh",
   "npm test",
 ];
+const API_VERSION_HEADER = "X-GitHub-Api-Version: 2022-11-28";
+/** Build's step ids, in order. */
+const BUILD_STEPS = [
+  "dispatch-ref",
+  "checkout",
+  "setup-node",
+  "release-guard",
+  "release-checkout",
+  "install",
+  "lockfile",
+  "build",
+  "digest",
+  "upload",
+];
+/** Publish's step ids, in order: reads, then the attestation, then writes. */
+const PUBLISH_READS = ["download", "checkout", "digest-check", "tag-state", "channel-version"];
+const PUBLISH_WRITES = ["tag", "versioned-release", "channel"];
+const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 
 function workflow(file: string): Workflow {
   const parsed = workflows[file];
@@ -194,10 +238,87 @@ function valuesOfKey(node: unknown, key: string): unknown[] {
   ]);
 }
 
+/** A step, by id or by what it runs or uses, for a readable order check. */
+function describeStep(step: Step): string {
+  if (step.id) return step.id;
+  if (step.uses) return step.uses.split("@")[0];
+  return `run ${step.run?.trim()}`;
+}
+
+/**
+ * The environment a step's run: script sees from its YAML: the workflow's env:, the job's and the
+ * step's, with each ${{ }} expression replaced by the value the test gives for it. An expression
+ * with no value throws, so a test states every value the step depends on. `runner` adds the
+ * variables GitHub's runner provides, such as RUNNER_TEMP and GITHUB_OUTPUT.
+ */
+function stepEnvironment(
+  file: string,
+  job: Job,
+  step: Step,
+  values: Record<string, string>,
+  runner: Record<string, string> = {},
+): Record<string, string> {
+  const env: Record<string, string> = { ...runner };
+  for (const [name, value] of Object.entries({
+    ...(workflow(file).env ?? {}),
+    ...(job.env ?? {}),
+    ...(step.env ?? {}),
+  })) {
+    env[name] = String(value).replace(/\$\{\{\s*(.*?)\s*\}\}/g, (_match, expression: string) => {
+      if (!(expression in values)) {
+        throw new Error(`the test gives no value for \${{ ${expression} }} in ${name}`);
+      }
+      return values[expression];
+    });
+  }
+  return env;
+}
+
+/** A directory holding an executable Node script under each name given. */
+function nodeTools(dir: string, tools: Record<string, string>): string {
+  const bin = join(dir, "tools-bin");
+  mkdirSync(bin, { recursive: true });
+  for (const [name, body] of Object.entries(tools)) {
+    writeFileSync(join(bin, name), `#!${process.execPath}\n${body}\n`, { mode: 0o755 });
+  }
+  return bin;
+}
+
+/** A git stand-in that records each call's arguments as a JSON line and succeeds. */
+function recordingGit(dir: string, log: string): string {
+  writeFileSync(log, "");
+  return nodeTools(dir, {
+    git: [
+      'const fs = require("fs");',
+      "const args = process.argv.slice(2);",
+      `fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");`,
+      'if (args[0] === "worktree" && args[1] === "add") fs.mkdirSync(args[3], { recursive: true });',
+    ].join("\n"),
+  });
+}
+
+function recorded(log: string): string[][] {
+  return readFileSync(log, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as string[]);
+}
+
 const temp = new TempDirs();
-afterEach(() => temp.removeAll());
+afterEach(() => temp.removeAll(), PROCESS_TEST_TIMEOUT_MS);
 
 describe("every workflow", () => {
+  it("is loaded: every file in .github/workflows is a workflow this file reads", () => {
+    const entries = readdirSync(WORKFLOW_DIR).sort();
+    expect(entries, "a file the loader skips is a workflow nothing here checks").toEqual(
+      WORKFLOW_FILES,
+    );
+    for (const file of entries) {
+      expect(lstatSync(join(WORKFLOW_DIR, file)).isFile(), file).toBe(true);
+    }
+    expect(WORKFLOW_FILES).toContain(RELEASE);
+  });
+
   it("parses cleanly, with no anchors, aliases or merge keys", () => {
     for (const file of WORKFLOW_FILES) {
       const document = documents[file];
@@ -234,6 +355,22 @@ describe("every workflow", () => {
       for (const [id, permissions] of Object.entries(expected.jobs)) {
         expect(jobOf(file, id).permissions, `${file} job ${id} permissions`).toEqual(permissions);
       }
+    }
+  });
+
+  it("never runs on a tag, so no old commit's workflow can publish", () => {
+    for (const file of WORKFLOW_FILES) {
+      const on = workflow(file).on;
+      const events = triggers(on);
+      // A tag's creation, and a release's, would run the workflow file in that tag's commit.
+      for (const event of ["create", "release"]) {
+        expect(events, `${file} runs on ${event}`).not.toContain(event);
+      }
+      if (!events.includes("push")) continue;
+      // `on: push` with no filter, or any tags filter, runs on a tag push too.
+      const push = (on as Record<string, unknown>)?.push as Record<string, unknown> | null;
+      expect(push, `${file} runs on every push, tags included`).toBeTypeOf("object");
+      expect(Object.keys(push ?? {}), `${file} push filters`).toEqual(["branches"]);
     }
   });
 
@@ -288,12 +425,15 @@ describe("every workflow", () => {
   });
 
   it("keeps credentials out of every checkout, except in the jobs that push and run no dependency", () => {
+    expect([...PUSHING_JOBS].every((job) => WRITE_SCOPED_JOBS.has(job))).toBe(true);
     let checkouts = 0;
     for (const { where, job } of everyJob()) {
       for (const step of stepsOf(job)) {
         if (!step.uses?.startsWith("actions/checkout@")) continue;
         checkouts++;
         if (PUSHING_JOBS.has(where.replace(" job ", " "))) {
+          // Said outright, so the reason reads in the workflow and zizmor's artipacked audit sees it.
+          expect(step.with?.["persist-credentials"], `${where} checkout`).toBe(true);
           for (const other of stepsOf(job)) {
             expect(other.run ?? "", `${where} pushes, so it runs no dependency`).not.toMatch(
               THIRD_PARTY_CODE,
@@ -304,7 +444,7 @@ describe("every workflow", () => {
         }
       }
     }
-    expect(checkouts).toBeGreaterThanOrEqual(6);
+    expect(checkouts).toBe(8);
   });
 
   it("puts no ${{ }} expression inside a run: script, where it would be spliced in as code", () => {
@@ -336,217 +476,106 @@ describe("every workflow", () => {
     }
     expect(installs, "npm install steps found").toBe(4);
   });
-});
 
-describe("ci.yml", () => {
-  it("triggers on push and pull_request only", () => {
-    expect(triggers(workflow("ci.yml").on).sort()).toEqual(["pull_request", "push"]);
-  });
-
-  it("runs the install and every gate in order, then the build, in the test job", () => {
-    const steps = stepsOf(jobOf("ci.yml", "test"));
-    expect(steps.slice(0, 2).map((step) => step.uses?.split("@")[0])).toEqual([
-      "actions/checkout",
-      "actions/setup-node",
-    ]);
-    expect(steps.slice(2).map((step) => step.run?.trim())).toEqual([...GATES, "npm run build"]);
-    for (const step of steps) expect(step.if, step.name ?? step.run).toBeUndefined();
-  });
-
-  it("calls real-zotero.yml with no inputs, so pull requests run the default matrix", () => {
-    const job = jobOf("ci.yml", "real-zotero");
-    expect(job.uses).toBe("./.github/workflows/real-zotero.yml");
-    expect(job.with).toBeUndefined();
-  });
-
-  it("gates on every other job, always", () => {
-    const gate = jobOf("ci.yml", "gate");
-    expect(gate.name).toBe("CI gate");
-    const others = Object.keys(workflow("ci.yml").jobs).filter((id) => id !== "gate");
-    expect([...needsOf(gate)].sort()).toEqual(others.sort());
-    // A skipped required check counts as passing, so the gate must run whatever its needs did.
-    expect(gate.if).toBe("${{ always() }}");
-    const steps = stepsOf(gate);
-    expect(steps).toHaveLength(1);
-    expect(steps[0].if).toBeUndefined();
-    expect(steps[0].env?.RESULTS).toBe("${{ join(needs.*.result, ' ') }}");
-  });
-
-  it("fails the gate unless every job result is success", () => {
-    const run = stepsOf(jobOf("ci.yml", "gate"))[0]?.run ?? "exit 0";
-    const dir = temp.make("gate");
-    const status = (results: string) =>
-      runScript(run, isolatedEnv(dir, { RESULTS: results }), dir).status;
-
-    expect(status("success success")).toBe(0);
-    for (const results of [
-      "success failure",
-      "cancelled success",
-      "success skipped",
-      "failure",
-      "",
-    ]) {
-      expect(status(results), `RESULTS="${results}"`).not.toBe(0);
+  it("builds with node, never through npm run, which puts node_modules/.bin first on PATH", () => {
+    const builds: string[] = [];
+    for (const { where, job } of everyJob()) {
+      for (const step of stepsOf(job)) {
+        const run = step.run ?? "";
+        expect(run, `${where} step "${step.name ?? step.id}"`).not.toMatch(
+          /\bnpm run build\b|\bnpm run-script build\b/,
+        );
+        if (!/\bscripts\/build\.mjs\b/.test(run)) continue;
+        builds.push(where);
+        expect(run.trim(), where).toBe(BUILD);
+      }
     }
+    expect(builds.sort()).toEqual(
+      ["ci.yml job test", `${RELEASE} job build`, "real-zotero.yml job real-zotero"].sort(),
+    );
+  });
+
+  it("pins the API version on every gh api call a step makes", () => {
+    let calls = 0;
+    for (const { where, job } of everyJob()) {
+      for (const step of stepsOf(job)) {
+        if (step.run === undefined) continue;
+        for (const words of shellCommands(step.run).commands) {
+          if (words[0] !== "gh" || words[1] !== "api") continue;
+          calls++;
+          const header = words.indexOf("-H");
+          expect(unquote(words[header + 1] ?? ""), `${where}: ${words.join(" ")}`).toBe(
+            API_VERSION_HEADER,
+          );
+        }
+      }
+    }
+    expect(calls).toBeGreaterThan(0);
+  });
+
+  it("gives GH_TOKEN to every step that runs gh, directly or through a script it calls", () => {
+    let steps = 0;
+    for (const { file, where, job } of everyJob()) {
+      for (const step of stepsOf(job)) {
+        if (step.run === undefined || !runsGh(step.run, REPO_ROOT)) continue;
+        steps++;
+        const token = {
+          ...(workflow(file).env ?? {}),
+          ...(job.env ?? {}),
+          ...(step.env ?? {}),
+        }.GH_TOKEN;
+        expect(
+          ["${{ github.token }}", "${{ secrets.GITHUB_TOKEN }}"],
+          `${where} step "${step.name ?? step.id}" runs gh`,
+        ).toContain(token);
+      }
+    }
+    // The guard, the channel check, the versioned release, the channel move, the badges refresh,
+    // and okf-watch's drift check and issue step.
+    expect(steps).toBe(7);
   });
 });
 
-describe("release.yml build", () => {
-  const build = () => jobOf("release.yml", "build");
-
-  it("runs only the release guard, the install, the lockfile check and the build, then records and uploads", () => {
-    const describeStep = (step: Step) =>
-      step.uses !== undefined
-        ? `uses ${step.uses.split("@")[0]}`
-        : step.id === "digest"
-          ? "digest"
-          : `run ${step.run?.trim()}`;
-    expect(stepsOf(build()).map(describeStep)).toEqual([
-      "uses actions/checkout",
-      "uses actions/setup-node",
-      'run node scripts/release-guard-cli.mjs "$TAG" "$GITHUB_SHA"',
-      `run ${INSTALL}`,
-      `run ${LOCKFILE_CHECK}`,
-      "run npm run build",
-      "digest",
-      "uses actions/upload-artifact",
-    ]);
-    expect(runOf(build(), "digest")).not.toMatch(/\bnode\b/);
-    expect(runOf(build(), "digest")).not.toMatch(THIRD_PARTY_CODE);
-    for (const step of stepsOf(build())) expect(step.if, step.name ?? step.run).toBeUndefined();
+describe("the write-scoped jobs", () => {
+  it("are every job the permissions table gives a write scope, and the pushing jobs are among them", () => {
+    // Read from the workflows themselves, so the set cannot be a list of names kept by hand.
+    const writing = everyJob()
+      .filter(({ job }) =>
+        Object.values((job.permissions ?? {}) as Record<string, string>).includes("write"),
+      )
+      .map(({ where }) => where.replace(" job ", " "))
+      .sort();
+    expect(writing.length).toBeGreaterThan(0);
+    expect([...WRITE_SCOPED_JOBS].sort()).toEqual(writing);
+    expect(Object.keys(WRITE_SCOPED_ACTIONS).sort()).toEqual(writing);
+    for (const job of PUSHING_JOBS) expect(WRITE_SCOPED_JOBS.has(job), job).toBe(true);
   });
 
-  it("gives the release guard the tag, a read token and full history without credentials", () => {
-    const guard = stepById(build(), "release-guard");
-    expect(guard.env).toEqual({ TAG: "${{ github.ref_name }}", GH_TOKEN: "${{ github.token }}" });
-    expect(stepsOf(build())[0].with).toEqual({ "persist-credentials": false, "fetch-depth": 0 });
-  });
-
-  it("restores no dependency cache in build or verify", () => {
-    for (const id of ["build", "verify"]) {
-      for (const step of stepsOf(jobOf("release.yml", id))) {
-        expect(step.with?.cache, `release.yml ${id} ${step.uses ?? step.run}`).toBeUndefined();
+  it("use no action but the ones listed for them", () => {
+    for (const { where, job } of everyJob()) {
+      const allowed = WRITE_SCOPED_ACTIONS[where.replace(" job ", " ")];
+      if (allowed === undefined) continue;
+      for (const step of stepsOf(job)) {
+        if (step.uses === undefined) continue;
+        expect(allowed, `${where} uses ${step.uses}`).toContain(step.uses.split("@")[0]);
       }
     }
   });
 
-  it("names the artifact per run attempt, and every consumer takes the name and digests from build's outputs", () => {
-    const job = build();
-    const digest = stepById(job, "digest");
-    const upload = stepsOf(job).find((step) => step.uses?.startsWith("actions/upload-artifact@"));
-    expect(digest.env?.ARTIFACT).toBe("release-assets-${{ github.run_attempt }}");
-    expect(digest.run).toContain('echo "artifact=$ARTIFACT"');
-    expect(upload?.with?.name).toBe("${{ steps.digest.outputs.artifact }}");
-    expect(job.outputs).toEqual({
-      artifact: "${{ steps.digest.outputs.artifact }}",
-      "asset-sums": "${{ steps.digest.outputs.sums }}",
-      "xpi-sha256": "${{ steps.digest.outputs.xpi-sha256 }}",
-    });
-
-    const realZotero = jobOf("release.yml", "real-zotero");
-    expect(realZotero.uses).toBe("./.github/workflows/real-zotero.yml");
-    expect(needsOf(realZotero)).toEqual(["build"]);
-    expect(realZotero.with).toEqual({
-      "xpi-artifact": "${{ needs.build.outputs.artifact }}",
-      "xpi-sha256": "${{ needs.build.outputs.xpi-sha256 }}",
-    });
-
-    const publish = jobOf("release.yml", "publish");
-    expect(stepById(publish, "download").with).toEqual({
-      name: "${{ needs.build.outputs.artifact }}",
-      path: "${{ runner.temp }}/release-assets",
-    });
-    expect(publish.env?.SUMS).toBe("${{ needs.build.outputs.asset-sums }}");
-  });
-});
-
-describe("release.yml verify", () => {
-  it("runs the install and every gate in order, and nothing else", () => {
-    const steps = stepsOf(jobOf("release.yml", "verify"));
-    expect(steps.slice(0, 2).map((step) => step.uses?.split("@")[0])).toEqual([
-      "actions/checkout",
-      "actions/setup-node",
-    ]);
-    expect(steps.slice(2).map((step) => step.run?.trim())).toEqual(GATES);
-    for (const step of steps) expect(step.if, step.name ?? step.run).toBeUndefined();
-  });
-});
-
-describe("release.yml publish", () => {
-  const publish = () => jobOf("release.yml", "publish");
-  /** The steps after the digest check that only read. Every other step after it writes. */
-  const READ_ONLY_AFTER_DIGEST_CHECK = ["tag-current", "channel-version"];
-
-  it("needs build, verify and real-zotero, with no if: or continue-on-error to skip them", () => {
-    expect([...needsOf(publish())].sort()).toEqual(["build", "real-zotero", "verify"]);
-    expect(publish().if).toBeUndefined();
-  });
-
-  it("downloads build's artifact once, checks out, then proves the bytes before anything else", () => {
-    const steps = stepsOf(publish());
-    expect(
-      steps.filter((step) => step.uses?.startsWith("actions/download-artifact@")),
-    ).toHaveLength(1);
-    expect(steps.slice(0, 3).map((step) => step.id)).toEqual([
-      "download",
-      "checkout",
-      "digest-check",
-    ]);
-    expect(steps[0].uses).toMatch(/^actions\/download-artifact@/);
-    expect(steps[1].uses).toMatch(/^actions\/checkout@/);
-    expect(steps[2].run?.trim()).toBe(
-      'bash scripts/verify-release-assets.sh "$RUNNER_TEMP/release-assets"',
-    );
-    expect(steps[2]["working-directory"]).toBeUndefined();
-  });
-
-  it("gives every step an id and no if:, reads only before it writes, and writes in the steps that follow", () => {
-    const steps = stepsOf(publish());
-    for (const step of steps) {
-      expect(step.id, `publish step "${step.name ?? step.uses}" has an id`).toBeTruthy();
-      expect(step.if, `publish step ${step.id}`).toBeUndefined();
-    }
-    const afterCheck = steps.slice(steps.findIndex((step) => step.id === "digest-check") + 1);
-    expect(afterCheck.slice(0, READ_ONLY_AFTER_DIGEST_CHECK.length).map((step) => step.id)).toEqual(
-      READ_ONLY_AFTER_DIGEST_CHECK,
-    );
-    const writes = afterCheck.slice(READ_ONLY_AFTER_DIGEST_CHECK.length);
-    expect(writes.length).toBeGreaterThan(0);
-    for (const step of afterCheck.slice(0, READ_ONLY_AFTER_DIGEST_CHECK.length)) {
-      expect(step.run, `read-only step ${step.id}`).not.toMatch(
-        /gh release (?:create|upload|edit|delete)|git push|git tag|publish-/,
-      );
-    }
-    expect(runOf(publish(), "tag-current")).toContain('git ls-remote origin "refs/tags/$TAG"');
-    expect(runOf(publish(), "channel-version")).toContain(
-      'node scripts/check-channel-version-cli.mjs "${TAG#v}"',
-    );
-    expect(runOf(publish(), "versioned-release")).toContain(
-      'bash scripts/publish-versioned-release.sh "$TAG" "$RUNNER_TEMP/release-assets"',
-    );
-    const channel = stepById(publish(), "channel");
-    expect(channel.env?.CHANNEL_STATE).toBe("${{ steps.channel-version.outputs.state }}");
-    expect(channel.run).toContain("bash scripts/publish-update-channel.sh");
-  });
-
-  it("uses no action but download-artifact and checkout, and badges only checkout", () => {
-    for (const step of stepsOf(publish())) {
-      if (step.uses === undefined) continue;
-      expect(step.uses).toMatch(/^actions\/(?:download-artifact|checkout)@[0-9a-f]{40}$/);
-    }
-    for (const step of stepsOf(jobOf("release.yml", "badges"))) {
-      if (step.uses === undefined) continue;
-      expect(step.uses).toMatch(/^actions\/checkout@[0-9a-f]{40}$/);
-    }
-  });
-
-  it("runs only allowlisted commands, in publish's and badges' steps and every script they call", () => {
+  it("run only allowlisted commands, in their steps and every script those call", () => {
     const problems: string[] = [];
     const followed = new Set<string>();
-    for (const id of ["publish", "badges"]) {
-      for (const step of stepsOf(jobOf("release.yml", id))) {
+    for (const { where, job } of everyJob()) {
+      if (!WRITE_SCOPED_JOBS.has(where.replace(" job ", " "))) continue;
+      for (const step of stepsOf(job)) {
         if (step.run === undefined) continue;
-        checkShell(step.run, `release.yml ${id} step ${step.id}`, REPO_ROOT, problems, followed);
+        checkShell(
+          step.run,
+          `${where} step ${step.id ?? step.name}`,
+          REPO_ROOT,
+          problems,
+          followed,
+        );
       }
     }
     expect(problems).toEqual([]);
@@ -558,24 +587,499 @@ describe("release.yml publish", () => {
         "scripts/publish-versioned-release.sh",
         "scripts/readme-badges-cli.mjs",
         "scripts/readme-badges.mjs",
-        "scripts/release-tag.mjs",
+        "scripts/release-github.mjs",
         "scripts/verify-release-assets.sh",
+        "scripts/version.mjs",
+        "tools/okf-drift-check.sh",
       ].sort(),
     );
   });
+});
 
-  it("serializes in the release-channel group, and nothing in release.yml cancels a run in progress", () => {
+describe("ci.yml", () => {
+  it("triggers on push to main and pull requests only", () => {
+    expect(triggers(workflow("ci.yml").on).sort()).toEqual(["pull_request", "push"]);
+  });
+
+  it("runs the install and every gate in order, then the build, in the test job", () => {
+    const steps = stepsOf(jobOf("ci.yml", "test"));
+    expect(steps.slice(0, 2).map((step) => step.uses?.split("@")[0])).toEqual([
+      "actions/checkout",
+      "actions/setup-node",
+    ]);
+    expect(steps.slice(2).map((step) => step.run?.trim())).toEqual([...GATES, BUILD]);
+    for (const step of steps) expect(step.if, step.name ?? step.run).toBeUndefined();
+  });
+
+  it("runs the same gates in the same order as npm run verify, which is the local pre-commit line", () => {
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    expect(pkg.scripts.build).toBe(BUILD);
+    expect(pkg.scripts["check:sh"]).toBe("shellcheck scripts/*.sh");
+    const verify = pkg.scripts.verify.split(" && ");
+    const ciGates = stepsOf(jobOf("ci.yml", "test"))
+      .slice(4)
+      .map((step) => step.run?.trim());
+    expect(verify).toEqual(
+      ciGates.map((command) => (command === BUILD ? "npm run build" : command)),
+    );
+  });
+
+  it("formats and checks the same files", () => {
+    const { scripts } = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    const globs = (script: string, flag: string) => {
+      expect(script.startsWith(`prettier ${flag} `), script).toBe(true);
+      return script.slice(`prettier ${flag} `.length);
+    };
+    expect(globs(scripts["format:check"], "--check")).toBe(globs(scripts.format, "--write"));
+  });
+
+  it("calls real-zotero.yml with no inputs, so pull requests run the default matrix", () => {
+    const job = jobOf("ci.yml", "real-zotero");
+    expect(job.uses).toBe("./.github/workflows/real-zotero.yml");
+    expect(job.with).toBeUndefined();
+  });
+
+  it("audits every workflow with zizmor at a pinned version", () => {
+    const steps = stepsOf(jobOf("ci.yml", "zizmor"));
+    expect(steps.map((step) => step.uses?.split("@")[0])).toEqual([
+      "actions/checkout",
+      "zizmorcore/zizmor-action",
+    ]);
+    expect(steps[1].with).toEqual({
+      version: "1.30.1",
+      inputs: ".",
+      collect: "workflows",
+      "advanced-security": false,
+      annotations: true,
+    });
+  });
+
+  it("gates on every other job, always", () => {
+    const gate = jobOf("ci.yml", "gate");
+    expect(gate.name).toBe("CI gate");
+    const others = Object.keys(workflow("ci.yml").jobs).filter((id) => id !== "gate");
+    expect([...needsOf(gate)].sort()).toEqual(others.sort());
+    expect(others).toContain("zizmor");
+    // A skipped required check counts as passing, so the gate must run whatever its needs did.
+    expect(gate.if).toBe("${{ always() }}");
+    const steps = stepsOf(gate);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].if).toBeUndefined();
+    expect(steps[0].env?.RESULTS).toBe("${{ join(needs.*.result, ' ') }}");
+  });
+
+  it(
+    "fails the gate unless every job result is success",
+    () => {
+      const run = stepsOf(jobOf("ci.yml", "gate"))[0]?.run ?? "exit 0";
+      const dir = temp.make("gate");
+      const status = (results: string) =>
+        runScript(run, isolatedEnv(dir, { RESULTS: results }), dir).status;
+
+      expect(status("success success")).toBe(0);
+      for (const results of [
+        "success failure",
+        "cancelled success",
+        "success skipped",
+        "failure",
+        "",
+      ]) {
+        expect(status(results), `RESULTS="${results}"`).not.toBe(0);
+      }
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+});
+
+describe("publish-release.yml: how a release starts", () => {
+  it("runs only on a dispatch, with exactly a required version and an optional commit", () => {
+    const on = workflow(RELEASE).on as {
+      workflow_dispatch?: { inputs?: Record<string, Record<string, unknown>> };
+    };
+    expect(triggers(on)).toEqual(["workflow_dispatch"]);
+    const inputs = on.workflow_dispatch?.inputs ?? {};
+    expect(Object.keys(inputs).sort()).toEqual(["commit", "version"]);
+    expect(inputs.version).toMatchObject({ type: "string", required: true });
+    expect(inputs.commit).toMatchObject({ type: "string", required: false, default: "" });
+  });
+
+  it(
+    "refuses, as its first step, a run started anywhere but main",
+    () => {
+      const build = jobOf(RELEASE, "build");
+      expect(stepsOf(build)[0].id).toBe("dispatch-ref");
+      const dir = temp.make("dispatch-ref");
+      const status = (ref: string) =>
+        runScript(
+          runOf(build, "dispatch-ref"),
+          isolatedEnv(dir, { GITHUB_REF: ref, GITHUB_SHA: COMMIT }),
+          dir,
+        ).status;
+      expect(status("refs/heads/main")).toBe(0);
+      for (const ref of [
+        "refs/heads/release/v3.1.0",
+        "refs/heads/main-old",
+        "refs/heads/feature/main",
+        "refs/tags/v3.1.0",
+        "refs/pull/12/merge",
+        "main",
+        "",
+      ]) {
+        expect(status(ref), `GITHUB_REF="${ref}"`).toBe(1);
+      }
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it("runs every later job only once build has passed, directly or through it", () => {
+    for (const id of ["real-zotero", "publish", "badges"]) {
+      expect(needsOf(jobOf(RELEASE, id)), id).toContain(id === "badges" ? "publish" : "build");
+    }
+    expect([...needsOf(jobOf(RELEASE, "publish"))].sort()).toEqual([
+      "build",
+      "real-zotero",
+      "verify",
+    ]);
+    for (const { where, job } of everyJob().filter(({ file }) => file === RELEASE)) {
+      expect(job.if, where).toBeUndefined();
+    }
+  });
+});
+
+describe("publish-release.yml build", () => {
+  const build = () => jobOf(RELEASE, "build");
+
+  it("checks the dispatch, then main's copy of the guard, then builds the commit the guard resolved", () => {
+    expect(stepsOf(build()).map(describeStep)).toEqual(BUILD_STEPS);
+    for (const step of stepsOf(build())) expect(step.if, step.id).toBeUndefined();
+    expect(stepById(build(), "checkout").with).toEqual({
+      "persist-credentials": false,
+      "fetch-depth": 0,
+    });
+    expect(stepById(build(), "release-guard")).toMatchObject({
+      run: 'node scripts/release-guard-cli.mjs "$VERSION" "${COMMIT:-$GITHUB_SHA}"',
+      env: {
+        VERSION: "${{ inputs.version }}",
+        COMMIT: "${{ inputs.commit }}",
+        GH_TOKEN: "${{ github.token }}",
+      },
+    });
+    expect(stepById(build(), "release-checkout")).toMatchObject({
+      run: 'git checkout --quiet --detach "$COMMIT"',
+      env: { COMMIT: "${{ steps.release-guard.outputs.commit }}" },
+    });
+    expect(runOf(build(), "install").trim()).toBe(INSTALL);
+    expect(runOf(build(), "lockfile").trim()).toBe(LOCKFILE_CHECK);
+    expect(runOf(build(), "digest")).not.toMatch(/\bnode\b/);
+    expect(runOf(build(), "digest")).not.toMatch(THIRD_PARTY_CODE);
+  });
+
+  it(
+    "gives the guard the commit input, or the run's own commit when that is empty",
+    () => {
+      const dir = temp.make("guard-step");
+      const log = join(dir, "node-args.json");
+      const bin = nodeTools(dir, {
+        node: `require("fs").writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)));`,
+      });
+      const step = stepById(build(), "release-guard");
+      const argsFor = (commit: string) => {
+        const env = stepEnvironment(
+          RELEASE,
+          build(),
+          step,
+          { "inputs.version": "3.1.0", "inputs.commit": commit, "github.token": GH_TOKEN },
+          { GITHUB_SHA: COMMIT },
+        );
+        expect(runScript(step.run ?? "", isolatedEnv(dir, env, [bin]), dir).status).toBe(0);
+        return JSON.parse(readFileSync(log, "utf8")) as string[];
+      };
+      expect(argsFor("")).toEqual(["scripts/release-guard-cli.mjs", "3.1.0", COMMIT]);
+      expect(argsFor("f".repeat(40))).toEqual([
+        "scripts/release-guard-cli.mjs",
+        "3.1.0",
+        "f".repeat(40),
+      ]);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it("builds with node alone, taking the time from the commit and nothing from the clock or the run", () => {
+    const step = stepById(build(), "build");
+    // No env:, with: or working-directory, so nothing reaches the build but the runner's own
+    // environment; build.mjs then takes the build id and file times from the commit
+    // (test/build-end-to-end.test.ts, "a reproducible production build").
+    expect(step).toEqual({ name: "Build the release XPI", id: "build", run: BUILD });
+    expect(workflow(RELEASE).env, "workflow env").toBeUndefined();
+    expect(build().env, "build job env").toBeUndefined();
+    expect(valuesOfKey(workflow(RELEASE), "SOURCE_DATE_EPOCH")).toEqual([]);
+    const beforeBuild = stepsOf(build()).slice(0, BUILD_STEPS.indexOf("build"));
+    for (const earlier of beforeBuild) {
+      expect(earlier.run ?? "", `${earlier.id} sets nothing later steps inherit`).not.toMatch(
+        /GITHUB_ENV|GITHUB_PATH/,
+      );
+    }
+    expect(build()["runs-on"]).toBe("ubuntu-24.04");
+  });
+
+  it("restores no dependency cache in build or verify, and turns setup-node's own caching off", () => {
+    let setups = 0;
+    for (const id of ["build", "verify"]) {
+      for (const step of stepsOf(jobOf(RELEASE, id))) {
+        if (!step.uses?.startsWith("actions/setup-node@")) {
+          expect(step.with?.cache, `${id} ${step.id ?? step.uses ?? step.run}`).toBeUndefined();
+          continue;
+        }
+        setups++;
+        expect(step.with, `${id} setup-node`).toEqual({
+          "node-version": 22,
+          "package-manager-cache": false,
+        });
+      }
+    }
+    expect(setups).toBe(2);
+  });
+
+  it("names the artifact per run attempt, and every consumer takes the release and its digests from build's outputs", () => {
+    const job = build();
+    const digest = stepById(job, "digest");
+    expect(digest.env?.ARTIFACT).toBe("release-assets-${{ github.run_attempt }}");
+    expect(digest.run).toContain('echo "artifact=$ARTIFACT"');
+    expect(stepById(job, "upload").with?.name).toBe("${{ steps.digest.outputs.artifact }}");
+    expect(job.outputs).toEqual({
+      commit: "${{ steps.release-guard.outputs.commit }}",
+      tag: "${{ steps.release-guard.outputs.tag }}",
+      artifact: "${{ steps.digest.outputs.artifact }}",
+      "asset-sums": "${{ steps.digest.outputs.sums }}",
+      "xpi-sha256": "${{ steps.digest.outputs.xpi-sha256 }}",
+    });
+
+    const realZotero = jobOf(RELEASE, "real-zotero");
+    expect(realZotero.uses).toBe("./.github/workflows/real-zotero.yml");
+    expect(needsOf(realZotero)).toEqual(["build"]);
+    expect(realZotero.with).toEqual({
+      ref: "${{ needs.build.outputs.commit }}",
+      "xpi-artifact": "${{ needs.build.outputs.artifact }}",
+      "xpi-sha256": "${{ needs.build.outputs.xpi-sha256 }}",
+    });
+
+    const publish = jobOf(RELEASE, "publish");
+    expect(stepById(publish, "download").with).toEqual({
+      name: "${{ needs.build.outputs.artifact }}",
+      path: "${{ runner.temp }}/release-assets",
+    });
+    expect(publish.env).toEqual({
+      TAG: "${{ needs.build.outputs.tag }}",
+      COMMIT: "${{ needs.build.outputs.commit }}",
+      SUMS: "${{ needs.build.outputs.asset-sums }}",
+      GH_REPO: "${{ github.repository }}",
+    });
+  });
+});
+
+describe("publish-release.yml verify", () => {
+  it("checks out the commit build releases, then runs the install and every gate in order, and nothing else", () => {
+    const steps = stepsOf(jobOf(RELEASE, "verify"));
+    expect(steps[0].uses).toMatch(/^actions\/checkout@/);
+    expect(steps[0].with).toEqual({
+      "persist-credentials": false,
+      ref: "${{ inputs.commit || github.sha }}",
+    });
+    expect(steps[1].uses).toMatch(/^actions\/setup-node@/);
+    expect(steps.slice(2).map((step) => step.run?.trim())).toEqual(GATES);
+    for (const step of steps) expect(step.if, step.name ?? step.run).toBeUndefined();
+  });
+});
+
+describe("publish-release.yml publish", () => {
+  const publish = () => jobOf(RELEASE, "publish");
+
+  it("downloads build's artifact once, checks out the workflow's own commit, then proves the bytes before anything else", () => {
+    const steps = stepsOf(publish());
+    expect(
+      steps.filter((step) => step.uses?.startsWith("actions/download-artifact@")),
+    ).toHaveLength(1);
+    expect(steps.slice(0, 3).map((step) => step.id)).toEqual([
+      "download",
+      "checkout",
+      "digest-check",
+    ]);
+    expect(steps[0].uses).toMatch(/^actions\/download-artifact@/);
+    expect(steps[1].uses).toMatch(/^actions\/checkout@/);
+    expect(steps[1].with).toEqual({ "persist-credentials": true, "fetch-depth": 0 });
+    expect(steps[2].run?.trim()).toBe(
+      'bash scripts/verify-release-assets.sh "$RUNNER_TEMP/release-assets"',
+    );
+    expect(steps[2]["working-directory"]).toBeUndefined();
+  });
+
+  it("reads, then attests, then writes, each step with an id and no if:, and creates the tag only after every check", () => {
+    const steps = stepsOf(publish());
+    for (const step of steps) {
+      expect(step.id, `publish step "${step.name ?? step.uses}" has an id`).toBeTruthy();
+      expect(step.if, `publish step ${step.id}`).toBeUndefined();
+    }
+    expect(steps.map((step) => step.id)).toEqual([...PUBLISH_READS, "attest", ...PUBLISH_WRITES]);
+    for (const id of PUBLISH_READS) {
+      const run = stepById(publish(), id).run ?? "";
+      expect(run, `read-only step ${id}`).not.toMatch(
+        /gh release (?:create|upload|edit|delete)|git push|git tag|publish-|gh api -X/,
+      );
+    }
+    expect(runOf(publish(), "tag-state")).toContain(
+      'git ls-remote origin "refs/tags/$TAG" "refs/tags/$TAG^{}"',
+    );
+    expect(runOf(publish(), "channel-version")).toContain(
+      'node scripts/check-channel-version-cli.mjs "${TAG#v}"',
+    );
+    expect(stepById(publish(), "tag").env).toEqual({
+      TAG_STATE: "${{ steps.tag-state.outputs.state }}",
+    });
+    expect(runOf(publish(), "versioned-release")).toContain(
+      'bash scripts/publish-versioned-release.sh "$TAG" "$RUNNER_TEMP/release-assets"',
+    );
+    const channel = stepById(publish(), "channel");
+    expect(channel.env?.CHANNEL_STATE).toBe("${{ steps.channel-version.outputs.state }}");
+    expect(channel.run).toContain("bash scripts/publish-update-channel.sh");
+  });
+
+  it("attests exactly the verified assets, before anything is published", () => {
+    const attest = stepById(publish(), "attest");
+    expect(attest.uses).toMatch(/^actions\/attest@[0-9a-f]{40}$/);
+    expect(attest.with).toEqual({
+      "subject-path":
+        "${{ runner.temp }}/release-assets/citegeist-*.xpi\n${{ runner.temp }}/release-assets/update.json\n",
+    });
+    // The token scopes it needs, and only those, are the permissions table's.
+    expect(publish().permissions).toEqual({
+      contents: "write",
+      "id-token": "write",
+      attestations: "write",
+    });
+    for (const { where, job } of everyJob()) {
+      const scopes = (job.permissions ?? {}) as Record<string, string>;
+      if (where === `${RELEASE} job publish`) continue;
+      expect(scopes["id-token"], `${where} can mint an OIDC token`).toBeUndefined();
+      expect(scopes.attestations, `${where} can write attestations`).toBeUndefined();
+    }
+  });
+
+  it("serializes in the release-channel group, queueing rather than cancelling, and nothing cancels a run in progress", () => {
     expect(publish().concurrency).toEqual({
       group: "release-channel",
       "cancel-in-progress": false,
+      queue: "max",
     });
-    expect(jobOf("release.yml", "badges").concurrency).toEqual({
+    expect(jobOf(RELEASE, "badges").concurrency).toEqual({
       group: "readme-badges",
       "cancel-in-progress": false,
     });
-    expect(valuesOfKey(workflow("release.yml"), "cancel-in-progress")).not.toContain(true);
-    expect(sources["release.yml"]).not.toMatch(/cancel-in-progress:\s*(?!false\b)\S/);
+    expect(valuesOfKey(workflow(RELEASE), "cancel-in-progress")).not.toContain(true);
+    expect(sources[RELEASE]).not.toMatch(/cancel-in-progress:\s*(?!false\b)\S/);
   });
+
+  /** A bare origin, and a clone holding the release commit and a later one, as Publish's checkout does. */
+  function repository() {
+    const root = temp.make("publish-git");
+    const env = isolatedEnv(root);
+    const origin = join(root, "origin.git");
+    const work = join(root, "work");
+    git(root, env, "init", "--quiet", "--bare", origin);
+    git(root, env, "init", "--quiet", work);
+    git(work, env, "remote", "add", "origin", origin);
+    git(work, env, "commit", "--quiet", "--allow-empty", "-m", "release commit");
+    const released = git(work, env, "rev-parse", "HEAD");
+    git(work, env, "commit", "--quiet", "--allow-empty", "-m", "a later commit");
+    const later = git(work, env, "rev-parse", "HEAD");
+    git(work, env, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+    return { root, env, origin, work, released, later };
+  }
+
+  const values = (commit: string, extra: Record<string, string> = {}) => ({
+    "needs.build.outputs.tag": "v3.0.0",
+    "needs.build.outputs.commit": commit,
+    "needs.build.outputs.asset-sums": "unused",
+    "github.repository": REPOSITORY,
+    "github.token": GH_TOKEN,
+    ...extra,
+  });
+
+  it(
+    "finds the version's tag absent, on this commit, or taken by another commit, and refuses only the last",
+    () => {
+      const { root, env, work, released, later } = repository();
+      const step = stepById(publish(), "tag-state");
+      const check = (commit: string) => {
+        const output = join(root, "github-output");
+        writeFileSync(output, "");
+        const variables = stepEnvironment(RELEASE, publish(), step, values(commit), {
+          GITHUB_OUTPUT: output,
+        });
+        const result = runScript(step.run ?? "", { ...env, ...variables }, work);
+        return { status: result.status, output: readFileSync(output, "utf8") };
+      };
+
+      expect(check(released)).toEqual({ status: 0, output: "state=absent\n" });
+      git(work, env, "tag", "v3.0.0", released);
+      git(work, env, "push", "--quiet", "origin", "refs/tags/v3.0.0");
+      expect(check(released), "a lightweight tag on this commit").toEqual({
+        status: 0,
+        output: "state=present\n",
+      });
+      expect(check(later), "the tag on another commit").toEqual({ status: 1, output: "" });
+
+      git(work, env, "tag", "--force", "--annotate", "--message", "annotated", "v3.0.0", released);
+      git(work, env, "push", "--quiet", "--force", "origin", "refs/tags/v3.0.0");
+      expect(check(released), "an annotated tag on this commit").toEqual({
+        status: 0,
+        output: "state=present\n",
+      });
+      expect(check(later)).toEqual({ status: 1, output: "" });
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "creates and pushes the version's tag on the release commit when it is absent, and leaves one already there",
+    () => {
+      const { env, origin, work, released, later } = repository();
+      const step = stepById(publish(), "tag");
+      const run = (state: string, commit = released) =>
+        runScript(
+          step.run ?? "",
+          {
+            ...env,
+            ...stepEnvironment(
+              RELEASE,
+              publish(),
+              step,
+              values(commit, { "steps.tag-state.outputs.state": state }),
+            ),
+          },
+          work,
+        ).status;
+      const remoteTag = () =>
+        git(work, env, "ls-remote", origin, "refs/tags/v3.0.0").split(/\s+/)[0] ?? "";
+
+      for (const state of ["", "unknown"]) {
+        expect(run(state), `state "${state}"`).toBe(1);
+        expect(remoteTag()).toBe("");
+      }
+      expect(run("absent")).toBe(0);
+      expect(remoteTag()).toBe(released);
+      expect(run("present")).toBe(0);
+      expect(remoteTag()).toBe(released);
+      // A tag another run pushed in between is never moved: the push is refused.
+      git(work, env, "tag", "--delete", "v3.0.0");
+      expect(run("absent", later)).not.toBe(0);
+      expect(remoteTag()).toBe(released);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
   it(
     "moves the channel only in a state the channel check reports, and not at all when it is current",
@@ -584,44 +1088,45 @@ describe("release.yml publish", () => {
       symlinkSync(join(REPO_ROOT, "scripts"), join(dir, "scripts"));
       mkdirSync(join(dir, "release-assets"));
       writeFileSync(join(dir, "release-assets/update.json"), '{"addons":{}}\n');
-      const fakeBin = join(dir, "git-bin");
-      mkdirSync(fakeBin);
       const gitLog = join(dir, "git-calls.log");
-      writeFileSync(join(fakeBin, "git"), `#!/bin/sh\necho "$*" >> '${gitLog}'\n`);
-      chmodSync(join(fakeBin, "git"), 0o755);
-      writeFileSync(gitLog, "");
+      const gitBin = recordingGit(dir, gitLog);
       const gh = new GhStub(dir);
+      const step = stepById(publish(), "channel");
       const run = (state: string) => {
         gh.reset({ releases: { release: { isDraft: false, assets: {} } } });
         writeFileSync(gitLog, "");
         const result = runScript(
-          runOf(publish(), "channel"),
+          step.run ?? "",
           isolatedEnv(
             dir,
             {
               ...gh.env(),
-              CHANNEL_STATE: state,
-              TAG: "v3.0.0",
-              GH_REPO: REPOSITORY,
-              RUNNER_TEMP: dir,
+              ...stepEnvironment(
+                RELEASE,
+                publish(),
+                step,
+                values(COMMIT, { "steps.channel-version.outputs.state": state }),
+                { RUNNER_TEMP: dir, GITHUB_REPOSITORY: REPOSITORY },
+              ),
             },
-            [fakeBin, gh.bin],
+            [gitBin, gh.bin],
           ),
           dir,
         );
-        return { status: result.status, git: readFileSync(gitLog, "utf8"), writes: gh.writes() };
+        return { status: result.status, git: recorded(gitLog), writes: gh.writes() };
       };
 
-      expect(run("current")).toEqual({ status: 0, git: "", writes: [] });
+      expect(run("current")).toEqual({ status: 0, git: [], writes: [] });
       for (const state of ["", "unknown"]) {
-        expect(run(state), `state "${state}"`).toEqual({ status: 1, git: "", writes: [] });
+        expect(run(state), `state "${state}"`).toEqual({ status: 1, git: [], writes: [] });
       }
       for (const state of ["advance", "first", "repair"]) {
         const moved = run(state);
         expect(moved.status, state).toBe(0);
-        expect(moved.git).toBe(
-          "tag -f release\npush --force origin refs/tags/release:refs/tags/release\n",
-        );
+        expect(moved.git).toEqual([
+          ["tag", "-f", "release", COMMIT],
+          ["push", "--force", "origin", "refs/tags/release:refs/tags/release"],
+        ]);
         expect(moved.writes).toEqual([
           ["release", "upload", "release", join(dir, "release-assets/update.json"), "--clobber"],
         ]);
@@ -629,57 +1134,72 @@ describe("release.yml publish", () => {
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
+});
+
+describe("publish-release.yml badges", () => {
+  it("runs after publish, in its own job, so it can fail and be re-run alone", () => {
+    const badges = jobOf(RELEASE, "badges");
+    expect([...needsOf(badges)].sort()).toEqual(["build", "publish"]);
+    expect(badges.if).toBeUndefined();
+    const refresh = runOf(badges, "refresh");
+    expect(refresh).toContain(
+      `gh api --paginate --slurp -H "${API_VERSION_HEADER}" "repos/$REPO/releases?per_page=100"`,
+    );
+    expect(refresh).toContain("node scripts/readme-badges-cli.mjs");
+    for (const id of ["publish", "build", "verify"]) {
+      for (const step of stepsOf(jobOf(RELEASE, id))) {
+        expect(step.run ?? "", `${RELEASE} ${id}`).not.toContain("badges");
+      }
+    }
+  });
 
   it(
-    "refuses to publish once the tag has moved off the run's commit",
+    "commits the badges with the tag it refreshes after, from its own job's environment",
     () => {
-      const check = runOf(publish(), "tag-current");
-      const root = temp.make("tag-current");
-      const env = isolatedEnv(root);
-      const origin = join(root, "origin.git");
-      const work = join(root, "work");
-      git(root, env, "init", "--quiet", "--bare", origin);
-      git(root, env, "init", "--quiet", work);
-      git(work, env, "remote", "add", "origin", origin);
-      git(work, env, "commit", "--quiet", "--allow-empty", "-m", "release commit");
-      const released = git(work, env, "rev-parse", "HEAD");
-      git(work, env, "commit", "--quiet", "--allow-empty", "-m", "a later commit");
-      const later = git(work, env, "rev-parse", "HEAD");
-      git(work, env, "tag", "v3.0.0", released);
-      git(work, env, "tag", "--annotate", "--message", "annotated", "v3.0.1", released);
-      git(work, env, "push", "--quiet", "origin", "--tags");
-      const status = (tag: string, sha: string) =>
-        runScript(check, { ...env, TAG: tag, GITHUB_SHA: sha }, work).status;
-
-      expect(status("v3.0.0", released), "a lightweight tag on the run's commit").toBe(0);
-      expect(status("v3.0.1", released), "an annotated tag on the run's commit").toBe(0);
-      expect(status("v3.0.2", released), "a tag missing from the remote").not.toBe(0);
-
-      git(work, env, "tag", "--force", "v3.0.0", later);
-      git(work, env, "push", "--quiet", "--force", "origin", "refs/tags/v3.0.0");
-      expect(status("v3.0.0", released), "the run for a tag since moved").not.toBe(0);
-      expect(status("v3.0.0", later), "the run for the tag's new commit").toBe(0);
+      const dir = temp.make("badges-step");
+      symlinkSync(join(REPO_ROOT, "scripts"), join(dir, "scripts"));
+      const gitLog = join(dir, "git-calls.log");
+      const gitBin = recordingGit(dir, gitLog);
+      const gh = new GhStub(dir, {
+        releases: {
+          "v3.0.0": { isDraft: false, assets: { "citegeist-3.0.0.xpi": "x" }, downloads: {} },
+        },
+      });
+      const badges = jobOf(RELEASE, "badges");
+      const step = stepById(badges, "refresh");
+      const result = runScript(
+        step.run ?? "",
+        isolatedEnv(
+          dir,
+          {
+            ...gh.env(),
+            ...stepEnvironment(
+              RELEASE,
+              badges,
+              step,
+              {
+                "github.token": GH_TOKEN,
+                "github.repository": REPOSITORY,
+                "needs.build.outputs.tag": "v3.0.0",
+              },
+              { RUNNER_TEMP: dir },
+            ),
+          },
+          [gitBin, gh.bin],
+        ),
+        dir,
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const commit = recorded(gitLog).find((call) => call.includes("commit"));
+      expect(commit).toContain("chore(badges): refresh after v3.0.0");
+      expect(recorded(gitLog).at(-1)).toEqual(["push", "--force", "origin", "badges-tmp:badges"]);
+      expect(
+        JSON.parse(readFileSync(join(dir, "cg-badges/badge-release.json"), "utf8")),
+      ).toMatchObject({ message: "v3.0.0" });
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
 });
-
-describe("release.yml badges", () => {
-  it("runs after publish, in its own job, so it can fail and be re-run alone", () => {
-    const badges = jobOf("release.yml", "badges");
-    expect(needsOf(badges)).toEqual(["publish"]);
-    expect(badges.if).toBeUndefined();
-    const refresh = runOf(badges, "refresh");
-    expect(refresh).toContain('gh api --paginate --slurp "repos/$REPO/releases?per_page=100"');
-    expect(refresh).toContain("node scripts/readme-badges-cli.mjs");
-    for (const id of ["publish", "build", "verify"]) {
-      for (const step of stepsOf(jobOf("release.yml", id))) {
-        expect(step.run ?? "", `release.yml ${id}`).not.toContain("badges");
-      }
-    }
-  });
-});
-
 describe("real-zotero.yml", () => {
   const job = () => jobOf("real-zotero.yml", "real-zotero");
   const inputs = () =>
@@ -691,11 +1211,29 @@ describe("real-zotero.yml", () => {
   const defaultVersions = () =>
     JSON.parse(String(inputs()["zotero-versions"]?.default)) as string[];
 
-  it("takes exactly the artifact, digest, versions and negative-control inputs", () => {
+  it("takes exactly the ref, artifact, digest, versions and negative-control inputs", () => {
     expect(Object.keys(inputs()).sort()).toEqual(
-      ["negative-control-version", "xpi-artifact", "xpi-sha256", "zotero-versions"].sort(),
+      ["negative-control-version", "ref", "xpi-artifact", "xpi-sha256", "zotero-versions"].sort(),
     );
+    expect(inputs().ref?.default).toBe("");
     expect(job().strategy?.matrix?.zotero).toBe("${{ fromJSON(inputs.zotero-versions) }}");
+  });
+
+  it("runs the caller's commit's specs, and in a release restores no dependency cache and builds nothing", () => {
+    const steps = stepsOf(job());
+    const checkout = steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+    expect(checkout?.with).toEqual({
+      "persist-credentials": false,
+      ref: "${{ inputs.ref }}",
+    });
+    const setup = steps.find((step) => step.uses?.startsWith("actions/setup-node@"));
+    expect(setup?.with).toEqual({
+      "node-version": 22,
+      cache: "${{ inputs.xpi-artifact == '' && 'npm' || '' }}",
+      "package-manager-cache": false,
+    });
+    const build = steps.find((step) => step.run?.includes("scripts/build.mjs"));
+    expect(build).toMatchObject({ if: "${{ inputs.xpi-artifact == '' }}", run: BUILD });
   });
 
   it("runs the negative control on its default cell once the suite passed, and no caller overrides it", () => {
@@ -855,31 +1393,35 @@ describe("real-zotero.yml", () => {
     PROCESS_TEST_TIMEOUT_MS,
   );
 
-  it("refuses a Zotero version that is not MAJOR.MINOR.PATCH, a negative control outside the matrix, and an artifact without its digest", () => {
-    const dir = temp.make("real-zotero-inputs");
-    const status = (variables: Record<string, string>) =>
-      runScript(
-        runOf(job(), "inputs"),
-        isolatedEnv(dir, {
-          ZOTERO_VERSION: "10.0.2",
-          NEGATIVE_CONTROL_VERSION: "10.0.2",
-          NEGATIVE_CONTROL_IN_MATRIX: "true",
-          XPI_ARTIFACT: "",
-          XPI_SHA256: "",
-          ...variables,
-        }),
-        dir,
-      ).status;
+  it(
+    "refuses a Zotero version that is not MAJOR.MINOR.PATCH, a negative control outside the matrix, and an artifact without its digest",
+    () => {
+      const dir = temp.make("real-zotero-inputs");
+      const status = (variables: Record<string, string>) =>
+        runScript(
+          runOf(job(), "inputs"),
+          isolatedEnv(dir, {
+            ZOTERO_VERSION: "10.0.2",
+            NEGATIVE_CONTROL_VERSION: "10.0.2",
+            NEGATIVE_CONTROL_IN_MATRIX: "true",
+            XPI_ARTIFACT: "",
+            XPI_SHA256: "",
+            ...variables,
+          }),
+          dir,
+        ).status;
 
-    expect(status({})).toBe(0);
-    expect(status({ XPI_ARTIFACT: "release-assets-1", XPI_SHA256: "a".repeat(64) })).toBe(0);
-    for (const version of ["10.0", "10.0.2-beta.1", "10.0.2; touch pwned", "$(id)", ""]) {
-      expect(status({ ZOTERO_VERSION: version }), `ZOTERO_VERSION="${version}"`).toBe(1);
-    }
-    expect(status({ NEGATIVE_CONTROL_IN_MATRIX: "false" })).toBe(1);
-    expect(status({ XPI_ARTIFACT: "release-assets-1" })).toBe(1);
-    expect(status({ XPI_ARTIFACT: "release-assets-1", XPI_SHA256: "A".repeat(64) })).toBe(1);
-  });
+      expect(status({})).toBe(0);
+      expect(status({ XPI_ARTIFACT: "release-assets-1", XPI_SHA256: "a".repeat(64) })).toBe(0);
+      for (const version of ["10.0", "10.0.2-beta.1", "10.0.2; touch pwned", "$(id)", ""]) {
+        expect(status({ ZOTERO_VERSION: version }), `ZOTERO_VERSION="${version}"`).toBe(1);
+      }
+      expect(status({ NEGATIVE_CONTROL_IN_MATRIX: "false" })).toBe(1);
+      expect(status({ XPI_ARTIFACT: "release-assets-1" })).toBe(1);
+      expect(status({ XPI_ARTIFACT: "release-assets-1", XPI_SHA256: "A".repeat(64) })).toBe(1);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 });
 
 /**
@@ -903,7 +1445,7 @@ function deadlineMinutes(step: Step): number | undefined {
 // ---------------------------------------------------------------------------------------------
 // The command allowlist for the write-scoped jobs.
 
-/** What publish and badges may run: git, gh, the repository's own scripts and plain shell utilities. */
+/** What a write-scoped job may run: git, gh, the repository's own scripts and plain shell utilities. */
 const ALLOWED_COMMANDS = new Set([
   "gh",
   "git",
@@ -923,6 +1465,7 @@ const ALLOWED_COMMANDS = new Set([
   "echo",
   "exit",
   "grep",
+  "head",
   "local",
   "mkdir",
   "mktemp",
@@ -939,8 +1482,23 @@ const ALLOWED_COMMANDS = new Set([
   "trap",
   "true",
 ]);
-/** Child processes a publish script may start from Node. */
+/** Child processes a release script may start from Node. */
 const ALLOWED_NODE_CHILDREN = new Set(["gh", "git", "bash"]);
+/** `bash <script>`: one of the repository's own shell scripts, or a sibling of the calling one. */
+const BASH_TARGET = /^(?:scripts|tools|\$here)\/([\w.-]+\.sh)$/;
+/** `node <script>`: one of the release scripts' command-line entry files. */
+const NODE_TARGET = /^scripts\/[\w.-]+-cli\.mjs$/;
+
+/** The repository file a `bash` or `node` command runs, or undefined for anything else. */
+function scriptRun(name: string, target: string, baseDir: string): string | undefined {
+  if (name === "bash") {
+    const match = BASH_TARGET.exec(target);
+    if (!match) return undefined;
+    return target.startsWith("$here/") ? join(baseDir, match[1]) : join(REPO_ROOT, target);
+  }
+  if (name === "node" && NODE_TARGET.test(target)) return join(REPO_ROOT, target);
+  return undefined;
+}
 
 /**
  * Checks every command a bash script runs against ALLOWED_COMMANDS, following `bash <script>` and
@@ -962,28 +1520,38 @@ function checkShell(
       continue;
     }
     const target = unquote(words[1] ?? "");
-    if (name === "bash") {
-      const match = /^(?:scripts|\$here)\/([\w.-]+\.sh)$/.exec(target);
-      if (!match) {
-        problems.push(`${where} runs bash on ${target || "nothing"}, not a script in scripts/`);
-        continue;
-      }
-      const file = target.startsWith("$here/") ? join(baseDir, match[1]) : join(REPO_ROOT, target);
-      followFile(file, problems, followed);
-    } else if (name === "node") {
-      if (!/^scripts\/[\w.-]+-cli\.mjs$/.test(target)) {
+    if (name === "bash" || name === "node") {
+      const file = scriptRun(name, target, baseDir);
+      if (file === undefined) {
         problems.push(
-          `${where} runs node on ${target || "nothing"}, not a scripts/*-cli.mjs entry`,
+          `${where} runs ${name} on ${target || "nothing"}, not one of the repository's own ` +
+            (name === "bash" ? "shell scripts" : "scripts/*-cli.mjs entries"),
         );
         continue;
       }
-      followFile(join(REPO_ROOT, target), problems, followed);
+      followFile(file, problems, followed);
     } else if (name === "command" && target !== "-v") {
       problems.push(`${where} runs command ${target}, which can run anything`);
     } else if (name === "trap") {
       checkShell(target, `${where} trap`, baseDir, problems, followed);
     }
   }
+}
+
+/** The repository files a Node script imports, relative ones only; packages are reported. */
+function nodeImports(file: string, problems: string[], relative: string): string[] {
+  const source = readFileSync(file, "utf8");
+  const imports: string[] = [];
+  for (const match of source.matchAll(/^import\s(?:[\s\S]*?\sfrom\s)?"([^"]+)";/gm)) {
+    const specifier = match[1];
+    if (specifier.startsWith("node:")) continue;
+    if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+      problems.push(`${relative} imports the package ${specifier}`);
+      continue;
+    }
+    imports.push(resolve(dirname(file), specifier));
+  }
+  return imports;
 }
 
 function followFile(file: string, problems: string[], followed: Set<string>): void {
@@ -995,14 +1563,8 @@ function followFile(file: string, problems: string[], followed: Set<string>): vo
     checkShell(source, relative, dirname(file), problems, followed);
     return;
   }
-  for (const match of source.matchAll(/^import\s(?:[\s\S]*?\sfrom\s)?"([^"]+)";/gm)) {
-    const specifier = match[1];
-    if (specifier.startsWith("node:")) continue;
-    if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
-      problems.push(`${relative} imports the package ${specifier}`);
-      continue;
-    }
-    followFile(resolve(dirname(file), specifier), problems, followed);
+  for (const imported of nodeImports(file, problems, relative)) {
+    followFile(imported, problems, followed);
   }
   const childProcess = /import\s*\{([^}]*)\}\s*from\s*"node:child_process"/.exec(source);
   for (const name of (childProcess?.[1] ?? "").split(",").map((part) => part.trim())) {
@@ -1021,6 +1583,29 @@ function followFile(file: string, problems: string[], followed: Set<string>): vo
   for (const match of source.matchAll(/new URL\("\.\/([\w.-]+\.sh)", import\.meta\.url\)/g)) {
     followFile(join(dirname(file), match[1]), problems, followed);
   }
+}
+
+/**
+ * Whether a bash script runs gh, itself or through a repository script it calls: a shell script
+ * that runs gh, or a Node script whose imports start it.
+ */
+function runsGh(script: string, baseDir: string, seen = new Set<string>()): boolean {
+  for (const words of shellCommands(script).commands) {
+    const name = unquote(words[0]);
+    if (name === "gh") return true;
+    const file = scriptRun(name, unquote(words[1] ?? ""), baseDir);
+    if (file !== undefined && fileRunsGh(file, seen)) return true;
+  }
+  return false;
+}
+
+function fileRunsGh(file: string, seen: Set<string>): boolean {
+  if (seen.has(file)) return false;
+  seen.add(file);
+  const source = readFileSync(file, "utf8");
+  if (file.endsWith(".sh")) return runsGh(source, dirname(file), seen);
+  if (/\bspawnSync\(\s*"gh"/.test(source)) return true;
+  return nodeImports(file, [], "").some((imported) => fileRunsGh(imported, seen));
 }
 
 function unquote(word: string): string {

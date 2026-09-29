@@ -41,10 +41,13 @@ import {
 const FTL_FILE = "citegeist.ftl";
 
 /**
- * Unique per-build stamp injected by scripts/build.mjs. The version is
- * intentionally held steady across many iterations, so it cannot identify a
- * build; this can. Logged at startup so Debug Output proves which build Zotero
- * actually loaded.
+ * The build's id, injected by scripts/build.mjs. A production build takes it
+ * from the commit alone (the first 12 characters of its SHA and its commit
+ * time), so every production build of one commit carries the same id and the
+ * same bytes; a dev build adds the time of day. The version stays the same
+ * across many builds, so the id is what identifies one. Logged at startup, so
+ * Debug Output shows which commit, and for a dev build which build, Zotero
+ * loaded.
  */
 declare const __BUILD_ID__: string;
 
