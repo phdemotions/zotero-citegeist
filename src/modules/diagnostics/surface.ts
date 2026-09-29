@@ -21,7 +21,33 @@ import { describeCode } from "./codes";
 import { buildDiagnosticReport } from "./report";
 import type { DiagnosticCode } from "./codes";
 import { logError } from "../utils";
-import { COPY_FEEDBACK_REVERT_MS } from "../../constants";
+import {
+  CODED_NOTICE_CLOSE_MS,
+  CODED_NOTICE_DELAY_MS,
+  COPY_FEEDBACK_REVERT_MS,
+} from "../../constants";
+
+/**
+ * Show a coded notice in a non-modal Zotero popup that closes itself, once the
+ * main window has finished drawing. For a condition that lasts the whole
+ * session and needs saying once, such as a read-only cache: an alert would have
+ * to be dismissed at every launch by someone running an older copy on purpose.
+ * Never throws; with no main window there is nowhere to show it.
+ */
+export function showCodedNotice(headline: string, code: DiagnosticCode): void {
+  const win = Zotero.getMainWindow();
+  win?.setTimeout(() => {
+    try {
+      const notice = new Zotero.ProgressWindow({ window: win, closeOnClick: true });
+      notice.changeHeadline(`${headline} (${code})`);
+      notice.addDescription(describeCode(code).message);
+      notice.show();
+      notice.startCloseTimer(CODED_NOTICE_CLOSE_MS);
+    } catch (e) {
+      logError("coded notice", e);
+    }
+  }, CODED_NOTICE_DELAY_MS);
+}
 
 /**
  * Copy text to the system clipboard. `Zotero.Utilities.Internal` isn't in the

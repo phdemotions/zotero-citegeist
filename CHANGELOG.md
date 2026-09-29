@@ -44,6 +44,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The right-click menu no longer leaves a stray empty section.** Right-clicking a
   single item with no DOI or other recognized identifier used to show a lone
   separator with no Citegeist entries beneath it. (#72)
+- **Settings now take effect.** Every earlier version looked up its settings under
+  the wrong name, so changes made in Citegeist's settings were ignored: citation
+  data went stale after 7 days and the citation browser loaded 25 results per page,
+  whatever you chose. Your choices now apply. A page size above 200, the most
+  OpenAlex returns at once, is read as 200.
+- **"Automatically fetch citation data when viewing items" now works.** The setting
+  has always been ticked by default, but it never ran. Citegeist now fills in
+  missing or out-of-date citation data for the rows Zotero draws in your item list,
+  and redraws just the rows whose data arrived, a few at a time, without reloading
+  the list. Sorting by a Citegeist column draws every row, so it covers the whole
+  library, and hiding the Citegeist columns does not stop it. These background
+  lookups use only OpenAlex's free lookups: by DOI, PMID, arXiv ID or ISBN, or by
+  the OpenAlex match you confirmed for an item. A title search, which OpenAlex
+  charges for, happens only when you select an item and its pane shows it, or when
+  you use Fetch Citation Counts. Items in a feed are not looked up. If OpenAlex
+  rejects your API key or your daily budget runs out, background lookups pause until
+  you change the key or restart Zotero; a spent budget also lifts at midnight UTC,
+  when OpenAlex's daily allowance starts over. When OpenAlex can't be reached, they
+  pause and try again a minute later, then at longer intervals, up to 15 minutes,
+  while the trouble lasts. To turn them off, open Settings → Citegeist and untick
+  "Automatically fetch citation data when viewing items".
+- **The clean-up of cached data for deleted items runs weekly, not on every
+  launch.** It was meant to run at most once a week, but the time of its last run
+  was never stored correctly.
+- **Title matches you confirmed in Citegeist 1.x carry over.** Version 2.0 was
+  meant to move what 1.x kept in each item's Extra field into Citegeist's own
+  database, but that one-time move never ran, so the matches you had confirmed by
+  hand were not used. Citegeist now copies each confirmed match into its database
+  once, the first time it starts, along with any match confirmed under 2.x on
+  another computer that reached this one through Zotero sync. A match you have
+  confirmed or dismissed since is kept as it is. Your Extra field is not changed:
+  the old `Citegeist.` lines stay until a later version adds a command to remove
+  them when you ask. Citation counts and the other numbers are fetched fresh from
+  OpenAlex.
+- **Turning Citegeist off no longer breaks Zotero's right-click menu.** After
+  Citegeist was disabled or uninstalled, right-clicking an item could fail to open
+  Zotero's menu, and new text in the Zotero window could appear blank, until Zotero
+  restarted. Turning Citegeist back on did not repair it, and Citegeist's own
+  entries then showed no text. On Zotero 8, Citegeist's entries also stayed in the
+  menu while it was off. Citegeist now takes its translations and its menu entries
+  out of every Zotero window as it shuts down, and links its translations afresh
+  when it starts.
+- **Turning Citegeist off and on no longer adds a second set of right-click
+  entries.** Citegeist tried to remove its menus under the wrong name, which
+  removed nothing. If Citegeist was turned off while it was still starting up, its
+  menus stayed registered, Zotero refused the next registration as a duplicate, and
+  a second set of entries appeared. Citegeist now removes its menus under the name
+  Zotero gave them, clears a leftover set before it registers, and stops starting
+  up as soon as it is turned off.
 
 ## [2.0.5] — 2026-07-09
 

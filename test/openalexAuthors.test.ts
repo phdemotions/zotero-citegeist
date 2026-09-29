@@ -7,17 +7,12 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { OpenAlexBudgetError } from "../src/modules/utils";
+import { makeFakePrefs } from "./_helpers/fakePrefs";
 
-let apiKeyPref = "";
 const httpRequest = vi.fn();
 
 const mockZotero = {
-  Prefs: {
-    get: vi.fn((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.openAlexApiKey") return apiKeyPref;
-      return undefined;
-    }),
-  },
+  Prefs: makeFakePrefs({ addonDefaults: true }),
   HTTP: { request: httpRequest },
   debug: vi.fn(),
 };
@@ -68,7 +63,7 @@ async function settle<T>(p: Promise<T>): Promise<T> {
 }
 
 beforeEach(() => {
-  apiKeyPref = "";
+  mockZotero.Prefs = makeFakePrefs({ addonDefaults: true });
   httpRequest.mockReset();
   mockZotero.debug.mockReset();
   clearAuthorProfileCache();

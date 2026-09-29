@@ -2,14 +2,15 @@
 type: issues
 title: Citegeist — open issues
 description: Open bugs, verification gates, and technical debt, tracked by priority.
-timestamp: 2026-08-13
+timestamp: 2026-09-28
 tags: [citegeist, issues]
 ---
 
 # Citegeist — Open Issues
 
-> **Last Updated:** 2026-08-13 (planning unification: FEAT-003/FEAT-004 moved out — feature requests live in `BACKLOG.md` + GitHub `enhancement` issues; this tracker carries bugs, verification gates, and debt only.)
-> **Previously:** 2026-08-02 (GitHub-issue reconcile: the right-click-menu bug (#67/#72) is confirmed STILL OPEN on the released v2.0.5 by 3 users — the internal tracker had it marked fixed; added BUG-MENU + BUG-QUIT (#78) + OKF drift #79. **v2.0.5 is the last released version**, 2026-07-09.)
+> **Last Updated:** 2026-09-28 (plan consolidation: BUG-Z10-INSTALL still live after 42 days; BUG-ROWPROXY filed, a suspected shipped bug found by review on 2026-09-14 and never recorded; BUG-PREFS carries its open round-2 findings; the live plan is `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`.)
+> **Previously:** 2026-08-13 (planning unification: FEAT-003/FEAT-004 moved out — feature requests live in `BACKLOG.md` + GitHub `enhancement` issues; this tracker carries bugs, verification gates, and debt only.)
+> 2026-08-02 (GitHub-issue reconcile: the right-click-menu bug (#67/#72) is confirmed STILL OPEN on the released v2.0.5 by 3 users — the internal tracker had it marked fixed; added BUG-MENU + BUG-QUIT (#78) + OKF drift #79. **v2.0.5 is the last released version**, 2026-07-09.)
 > 2026-07-20 (DIAG-001 + DEBT-010 closed: diagnostic codes and guards now cover the network dialog; settings pane swapped the dead `mailto` field for the `api_key` field). 2026-07-18 (author-identity layer **v3.0.0 merged to `main`** #75, untagged — see STATUS.md). Closed issues archived to `docs/archive/issues-closed.jsonl`.
 
 ---
@@ -18,9 +19,9 @@ tags: [citegeist, issues]
 
 | Priority     | Open |
 | ------------ | ---- |
-| P0 (Blocker) | 0    |
-| P1 (High)    | 2    |
-| P2 (Medium)  | 2    |
+| P0 (Blocker) | 3    |
+| P1 (High)    | 3    |
+| P2 (Medium)  | 8    |
 | P3 (Low)     | 7    |
 
 Feature requests are not tracked here — they live in [`BACKLOG.md`](BACKLOG.md) (curated detail) and GitHub `enhancement` issues (public intake).
@@ -29,25 +30,54 @@ Feature requests are not tracked here — they live in [`BACKLOG.md`](BACKLOG.md
 
 ## P0 — Blockers
 
-_None currently._
+### BUG-Z10-INSTALL: Citegeist cannot be installed on Zotero 10
+
+**Impact:** Every Zotero 10 user is locked out. v2.0.5's manifest and the live `update.json` both cap the plugin at `strict_max_version: "9.*"`, so Zotero 10.0.x refuses the install ("could not be installed. It may be incompatible with this version of Zotero") and disables an existing copy after upgrading. Zotero 10.0 shipped 2026-08-17; the first report arrived 2026-09-13 on the Zotero forums ([comment 518143](https://forums.zotero.org/discussion/comment/518143#Comment_518143), Zotero 10.0.2, Windows 11). No GitHub issue exists yet.
+**Status (2026-09-28):** Still live, 42 days after Zotero 10.0 shipped. The planned bridge (raising 2.0.5's cap in `update.json`) was withdrawn after its smoke run failed: on Zotero 10.0.4, and on Zotero 9.0.6 as a baseline, released v2.0.5 renders no pane (BUG-PANE-XML), shows blank menu labels (BUG-MENU) and crashes Zotero on quit (BUG-QUIT), so re-enabling it would harm Zotero 10 users. On draft PR [#93](https://github.com/phdemotions/zotero-citegeist/pull/93), the manifest takes its range from `package.json` (capped `10.0.*`) and Zotero 10's throwing selection getters are replaced (U1, U2). Zotero is at 10.0.3 (Linux, Windows) and 10.0.4 (macOS), all inside `10.0.*`.
+**Fix:** v2.0.6 (plan U3, Decisions item 2), proved with the local smoke run on Zotero 9 and 10 before release; the scheduled Zotero watch (U10) catches the next cap lockout before users do.
+**Found:** 2026-09-13.
+
+### BUG-PANE-XML: The item pane never renders in v2.0.4 and v2.0.5, and hides other plugins' panes
+
+**Impact:** Zotero parses an item-pane section's body as XML. Since v2.0.4 the pane's embedded `<style>` has held a `<strong>` inside two CSS comments, with no CDATA wrapper, so Zotero reports "not well-formed XML" and never initialises Citegeist's section: no pane, no sidenav button. Other plugins' item-pane sections stop rendering too: a control section rendered without Citegeist and did not render beside v2.0.5. Reproduced on 2026-09-28 in fresh profiles on Zotero 9.0.6 and 10.0.4 (`itemPaneSection.js` at 9.0.6, line 288; `itemPaneCustomSection.js` at 10.0.4, line 140). A June memory note said the CDATA fix shipped in v2.0.5; the v2.0.5 tag has no CDATA, and only `main` has the fix.
+**Fix:** v2.0.6 wraps the `<style>` in CDATA as `main` does, with the no-`<`/`&` guard test `main` already has.
+**Found:** 2026-06 (fix on `main` only); confirmed in released v2.0.5 on 2026-09-28.
+
+### BUG-QUIT: Zotero 9.0.6 hangs on quit → force-quit required (#78)
+
+**Impact:** With Citegeist enabled, quitting Zotero 9.0.6 shows a spinning loader and never exits; the user must force-quit. Reported on v2.0.5 / macOS. A hang on every quit is severe.
+**Status:** Not yet reproduced or root-caused. The v3.0.0 shutdown rework on `main` (bounded cache drain, explicit `chromeHandle.destruct()`) does **not** run on quit: `addon/bootstrap.js` returns early on `APP_SHUTDOWN` in both v2.0.5 and `main`, so `onShutdown` and `closeCache()` never execute when the user quits, and the plugin's own `Zotero.DBConnection("citegeist")` is still open at exit. Treat #78 as open on `main`. Planned as U6 in `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`.
+**Reproduced (2026-09-28):** in fresh isolated profiles on Zotero 9.0.6 and 10.0.4 on macOS, quitting with v2.0.5 took 61 s and ended in a crash (exit code 139), while quitting without Citegeist took 0.5 s with exit code 0. The 60 s matches Firefox's shutdown watchdog, which aborts when a database connection is still open: `addon/bootstrap.js` returns early on `APP_SHUTDOWN`, so `citegeist.sqlite` is never closed. Josh's own Mac runs the reporter's setup, Zotero 9.0.6 on macOS. A round-B reviewer expects every real-Zotero CI cell's closing quit to stall on the still-open `citegeist.sqlite`, which would reproduce the hang on Linux too. After the U17 bridge, Zotero 10 users meet it as well.
+**Fix:** Reproduce on real Z9.0.6 (macOS) with Debug Output and confirm the blocker in Zotero/Firefox source before changing code. Leads, none confirmed: the open SQLite connection at quit; `bootstrap.js` dropping the promise from `citegeist.shutdown()`; unbounded awaits in `closeCache()`; fetch batches that cannot be cancelled.
+**Found:** 2026-07-23.
 
 ---
 
 ## P1 — High Priority
 
+### BUG-PREFS: Settings-pane choices are never read (doubled pref prefix)
+
+**Impact:** Changing auto-fetch, cache lifetime, or citation-network page size in Zotero → Settings → Citegeist has no effect, and on `main` the optional OpenAlex API key is never sent. Zotero's `Zotero.Prefs.get(pref, global)` and `set(pref, value, global)` prepend `extensions.zotero.` unless `global` is `true` (Zotero `chrome/content/zotero/xpcom/prefs.js` at tag 10.0.2). Citegeist's pref constants are already full names (`extensions.zotero.citegeist.*`) and every call omits `true`, so each read looks up `extensions.zotero.extensions.zotero.citegeist.*`, which is never set. Released v2.0.5 carries the same pattern. Internal flags (migration done, relation purge done, last orphan GC, last backup path) were written and read under the same doubled name, so a naive fix would re-run the one-shot migration and purge for every user.
+**Status:** Landed on `fix/zotero-10-compat` (draft PR [#93](https://github.com/phdemotions/zotero-citegeist/pull/93)) as plan unit U18: commit 6215ec0 and the review-round-1 fix commit after it. `src/modules/prefs.ts` is the only module that reads or writes a Citegeist pref, always under its real name, and `test/prefs-invariants.test.ts` bans direct `Zotero.Prefs` calls elsewhere. Three internal flags (migration done, relation purge done, last backup path) are read from the doubled name when the real name is unset and copied forward. The doubled keys are kept on purpose, for downgrade safety: v2.0.5 reads only that name, so Citegeist never removes one, and it writes `migrationV1Complete` there too, or a downgrade would migrate again and strip `Citegeist match ID:` lines. `lastOrphanGcAt` is excluded from the fallback: earlier builds wrote `Date.now()` into a 32-bit integer pref, so the doubled value is a wrapped number unrelated to the time, and copying it would make the real name an integer pref that wraps every later write. It is now stored as a decimal string. Because the settings are now read, auto-fetch runs for the first time; U18 limits it to free identifier lookups and stops it on a rejected key, a spent budget or a read-only cache. Found by the real-Zotero harness work (U4), confirmed against Zotero source.
+**Open on the branch (2026-09-28):** review round 2 (2026-09-14) is not clean and nothing from it is fixed yet, including a P1: every background lookup that lands reloads the whole item list in every window. The fix batch is listed under "Open findings" in the live plan. Because no v2.x user ever had auto-fetch, v3.0.0 switches it on for everyone for the first time; the plan gates that on the P1 fix and a timing check on a large library.
+**Fix:** Ship in v3.0.0; not in v2.0.6, whose scope stays minimal.
+**Found:** 2026-09-13.
+
+### SEC-001: Security fix in the citation browser (details held until the fix ships)
+
+**Impact:** A markup-handling defect in the citation-network browser, present in every released version. Details are held in a private GitHub security advisory until users have the fix, following coordinated-disclosure practice; the maintainer's notes are in the advisory. It supersedes DEBT-011.
+**Fix:** Ships in v2.0.6 and v3.0.0, with a regression test; the advisory and this entry are completed when the fix is released.
+**Found:** recorded as DEBT-011 in the #77 review (merged 2026-08-02); re-rated 2026-09-28.
+
 ### BUG-MENU: Right-click menu stops responding after one use on Zotero 8/9 (#67, #72)
 
 **Impact:** On Zotero 8/9, the Citegeist context-menu entries can render without labels, and after using one entry the right-click menu stops opening on **any** item until the plugin is toggled off/on or Zotero restarts. Breaks a core surface for Z8/9 users. **Confirmed STILL BROKEN on the released v2.0.5 by three users** (MattGiulP, bwegge, scolino — latest confirmation 2026-07-23), after two fix attempts (the v2.0.5 hotfix per [#67](https://github.com/phdemotions/zotero-citegeist/issues/67); registration-lifecycle plan `docs/plans/2026-07-06-001-fix-menu-manager-registration-lifecycle-plan.md`). The stray-empty-section half of #72 appears addressed; the "menu dies after use" half is not.
 **Status:** `main`/v3.0.0 carries further MenuManager registration + teardown work (the code cites #67/#72), but it is **unverified on a real Zotero 9** and unreleased — so from a user's view it is still open. This is the top item on the `docs/RELEASE-CHECKLIST.md` right-click-menu gate; do not claim fixed until confirmed on a real Z9 install.
+**Reproduced (2026-09-28):** in fresh profiles on Zotero 9.0.6 and 10.0.4, v2.0.5's three item entries appear with blank labels, five opens of five: v2.0.5 loads its strings only when a window opens, and the main window is already open when it starts (the Zotero 9 write-up's root cause 2).
+**Lead (2026-09-28, round-B review):** every released version unregisters its MenuManager menus with the raw id (`citegeist-item-menu`), but Zotero stores and removes them only under `CSS.escape(pluginID + "-" + menuID)`. Teardown and rollback therefore remove nothing, and a later registration refused as a duplicate falls back to DOM entries beside the stale MenuManager set: the dual-menu state the v2.0.5 plan suspected. Confirmed by running Zotero 9.0.6's own `pluginAPIBase.mjs`; v2.0.5 `menu.ts:377`, `main` `menu.ts:587` and `:801`. In normal use Zotero's own cleanup removes the menus on disable, so this alone may not explain the first-use death; it is where U7 starts.
+**Second lead (2026-09-28, first CI run):** a main window that keeps Citegeist's translation link after the plugin's translation source is unregistered makes every context-menu build reject until the source returns (BUG-DISABLE-L10N). Toggling the plugin off and on, the workaround reporters use, re-registers that source.
 **Fix:** Needs a real-Zotero-9 debug session to find why the popup stops responding after the first `onCommand`/`onShowing` (likely a MenuManager `onShowing`/DOM-fallback interaction that corrupts the native popup). Keep #67 and #72 open until users confirm.
 **Found:** #67 2026-06-25, #72 2026-07-14.
-
-### BUG-QUIT: Zotero 9.0.6 hangs on quit → force-quit required (#78)
-
-**Impact:** With Citegeist enabled, quitting Zotero 9.0.6 shows a spinning loader and never exits; the user must force-quit. Reported on v2.0.5 / macOS. A hang on every quit is severe.
-**Status:** Not yet reproduced or root-caused. `main`/v3.0.0 reworked the shutdown path (bounded cache-drain capped at `CLOSE_CACHE_DRAIN_TIMEOUT_MS`, explicit `chromeHandle.destruct()` on shutdown), which **may** address it, but it is a distinct symptom that needs real-Z9 confirmation. Added to the release-checklist smoke as a "clean quit, no hang" check.
-**Fix:** Reproduce on real Z9.0.6; trace `onShutdown` (`hooks.ts`) — an unresolved await in menu/cache teardown, or the `registerChrome`/GC path — as the likely culprit.
-**Found:** 2026-07-23.
 
 ---
 
@@ -59,9 +89,48 @@ _None currently._
 **Fix:** Confirm target journal, run final checks on `paper/paper.md`, submit
 **Found:** 2026-04-08 — paper.md exists and is complete, submission is the remaining step
 
+### BUG-ROWPROXY: Refreshing an item cached in an earlier session may fail on v2.0.x (suspected)
+
+**Impact:** If real, re-fetching any item whose metrics were cached in an earlier session fails on every v2.0.x install, and the pane keeps showing the old numbers. v2.0.0 to v2.0.5 load Zotero's query rows straight into the in-memory mirror. Zotero wraps each row in a Proxy with only `get` and `has` traps (`db.js` at 9.0.6, line 683), so spreading one (`...base` in `cache/write.ts`) keeps none of its columns, and the write that follows lacks `library_id` and `item_key`. Found by reading Zotero's and Gecko's source during review on 2026-09-14; not reproduced, and no user has reported it.
+**Status:** Fixed on `fix/zotero-10-compat` by copying rows at load (318885c).
+**Fix:** A real-Zotero spec that spreads a row from Citegeist's own `DBConnection` on Zotero 8, 9 and 10 confirms or refutes it (plan: next steps, step 5). If confirmed, raise to P1 and ship the row copy in v2.0.6.
+**Found:** 2026-09-14 (review); filed 2026-09-28.
+
+### BUG-GROUPADD: With a group-library collection selected, every Add in the citation browser fails
+
+**Impact:** The citation browser takes the selected collection as its default filing target. When that collection belongs to a group library, "Add" creates the new item in My Library and files it into the group collection, which Zotero's database trigger refuses (`fki_collectionItems_libraryID`), so every row shows "Add failed — please try again" until the user picks the Library root in the picker. Released v2.0.5 does the same (`dialog.ts:203`, `getSelectedCollection()`). Found by the round-B adversarial review on 2026-09-28 against Zotero 9.0.6 source, with the trigger run in SQLite.
+**Fix:** Default only to collections in the user library, the only library the dialog adds to; add a test with a group collection selected. v2.0.6 rewrites the same line for Zotero 10 and takes this fix too.
+**Found:** 2026-09-28.
+
+### BUG-MIGRATION: The v1.3.x → v2 cache migration has never run
+
+**Impact:** Since v2.0.0 (c99ef8f, 2026-06-07), `cache/migration.ts` calls `await Zotero.Sync.Runner.delaySync(async () => { … })`. Zotero's `delaySync(ms)` takes a number of milliseconds and never calls a function (`syncRunner.js` at 8.0.4, line 1037, unchanged since), so the migration loop has never run on any install: no v1.3.x profile's confirmed matches were imported, no backup was written, and the done flag was set anyway. While the cache is empty, the scan repeats at every launch. Nothing was stripped from anyone's Extra field. The typings declare a signature Zotero lacks, and three unit-test mocks call the function, which hid it. Found by the first real-Zotero CI run (spec 92) and its triage on 2026-09-28.
+**Status (2026-09-28):** Fixed on `fix/zotero-10-compat` as an import only, per the plan's Decisions, item 8. `migrateFromExtraV1` holds sync with `Zotero.Sync.Runner.delayIndefinite()` and releases it in a `finally` (the API exists and returns the release function at 7.0.10, 8.0.4, 9.0.6 and 10.0.2), loads each library's items before reading them, and copies one value into the cache: the confirmed title match, from v1.x's `Citegeist.confirmedOpenAlexId` or the `Citegeist match ID:` line, which wins. It writes no item and no backup file, keeps any confirmation, no-match or other work's metrics the cache already holds, and runs once per profile under a new flag, `extraMatchImportComplete`. The old `migrationV1Complete` no longer gates it, and a finished pass still writes it under both names for a downgraded copy. A pass cut short runs again at the next launch. The typing and the three test mocks now behave like Zotero, and real-Zotero spec 93 seeds v1.3.x items and checks the imported rows, byte-identical Extra and no second scan.
+**Follow-ups:** (1) Removing the old lines from Extra becomes an explicit command with its own backup. It is a visible surface, so it waits on a mockup and Josh's approval. (2) `docs/MIGRATION-v2.0.0.md` and the one-time startup alert in `hooks.ts` still describe the strip and its backup file; the alert can no longer fire, because `migrateFromExtraV1` resolves false. (3) The runtime never reads a `Citegeist match ID:` line, so a match confirmed on another device after this one imported, or one lost with a cache deleted after the import, is not picked up; reading the line at fetch time would cover both. (4) Same class, not fixed here: `purgeAllAuthorRelations` (`cache/authors/relations.ts`) reads each item's relations without loading its library first, and Zotero throws for an item whose library has not been shown yet (`dataObject.js` at 10.0.2, `_requireData`), so on a real library the purge can fail and retry at every launch.
+**Found:** 2026-09-28.
+
+### BUG-DISABLE-L10N: Disabling or removing Citegeist breaks the main window's text until restart
+
+**Impact:** Citegeist's shutdown leaves its `<link rel="localization" href="citegeist.ftl">` in the main window (only window unload removes it, in v2.0.5 and on `main`). Zotero then unregisters the plugin's translation source, and every translation the window rebuilds fails: the right-click menu build rejects before other plugins' entries refresh, and newly rendered text shows blank until Zotero restarts. On Zotero 8.0.x stale Citegeist menu entries also stay. Seen on Zotero 8.0.4, 9.0.6 and 10.0.2 in the first real-Zotero CI run (spec 90), traced through Zotero and Gecko source on 2026-09-28.
+**Fix:** Before `onShutdown`'s first `await`, remove the link and Citegeist's rendered menu items from every main window, as Zotero's sample plugin does, and unregister menus with the key `registerMenu` returns (see BUG-MENU).
+**Found:** 2026-09-28.
+
+### BUG-ERRFLOOD: Each startup fills Zotero's Report Errors buffer
+
+**Impact:** On Zotero 8, 9 and 10, `Zotero.warn` lands in Help → Report Errors as an error, because Zotero's logger passes Gecko 115's argument list to Gecko 140's `scriptError.init`. Citegeist unregisters each column and its pane section before registering them, which logs 10 "Can't remove unknown option" warnings per startup (in v2.0.5 too), and Zotero's own `defaultIn`/`disableIn` check adds 18 more for Citegeist's nine columns. The buffer holds 25 entries, so every startup pushes out the errors a user's report is meant to carry.
+**Fix:** Unregister only what exists (`Zotero.ItemTreeManager.isCustomColumn`, `Zotero.ItemPaneManager.customSectionData`, both available since Zotero 7.0.10). The other 18 entries and the logger fault need a Zotero fix; the plan's Decisions, item 7, lists the reports.
+**Found:** 2026-09-28.
+
+### BUG-STARTUP-TX: Startup column registration can make Zotero's own writes time out
+
+**Impact:** Each of Citegeist's nine `registerColumn` calls makes Zotero's plugin API open a main-database transaction to queue a tree refresh. In two of eight smoke startups on 2026-09-28, one of those transactions stayed open about 30 s and ten of Zotero's own transactions timed out waiting ("Timed out waiting for transaction", `TimeoutError` at `db.js` line 2638, Zotero 10.0.4). The branch registers columns the same way.
+**Fix:** Find why the refresh transaction runs long (read `pluginAPIBase.mjs` `_refresh` and the item tree's refresh at 9.0.6 and 10.0.4); if registering nine columns one by one is the cause, register them in one pass or defer registration until startup's database work settles. U8.
+**Found:** 2026-09-28.
+
 ### VERIFY-001: v3.0.0 pane needs a real-Zotero visual-verify before release
 
 **Impact:** The v3.0.0 unified pane rebuild + the Zotero 8/9 context-fill sidenav icon are code-verified (451 tests, two review rounds) but not yet eyeballed in a running Zotero. Release gate.
+**Also (2026-09-28):** the first real-Zotero CI run timed out waiting for the pane's hero on Zotero 8.0.4, 9.0.6 and 10.0.2. The triage traced it to the test: a scripted click never scrolled the section into view, so it never rendered. The visual check itself is still open.
 **Fix:** Install `citegeist-3.0.0.xpi`, confirm the composition (hero → metric line → explore buttons → author link rows), the wide-pane cap, and that the sidenav icon renders in the Zotero 8/9 strip; fix any spacing/contrast issue as a follow-up commit to `main`.
 **Found:** 2026-07-18 — merged to `main` (#75); pending before tagging v3.0.0.
 
@@ -81,11 +150,11 @@ _None currently._
 **Fix:** On device A that ran a pre-release build (or after resolving authors), confirm library sync completes with no 400 / "Made no progress during upload", and device B syncs clean. Confirm author data is present on B via the pane (SQLite is per-device; not synced — that's expected).
 **Effort:** Low (manual check)
 
-### DEBT-011: Add-button aria-label interpolates the collection name unescaped
+### DEBT-015: Diagnostics redaction misses home folders outside `/Users` and `/home`
 
-**Impact:** `results.ts` and `actions.ts` build the citation-network "+ Add to _Collection_" button via `safeInnerHTML`, and the visible label escapes the collection name (`escapeHTML(defaultName)`) but the sibling `aria-label` interpolates it raw. A collection named with `<`/`&`/quotes yields a malformed attribute; low XSS risk (attribute context, DOMParser-parsed) but an inconsistency. Pre-existing on `main` (predates this branch) — surfaced by the multi-round review, carved out to keep the review PR single-concern.
-**Fix:** wrap the `defaultName` interpolation in the aria-label with `escapeHTML`, both sites.
-**Effort:** Trivial.
+**Impact:** `normalizeError` appends a stack line that carries the add-on's file URL inside the user's profile. Redaction strips `/Users/<name>`, `/home/<name>` and `X:\Users\<name>` only, so a university layout such as `/homes/<name>`, `/afs/…/<name>` or a redirected Windows profile share keeps the account name in the report users paste into public issues, although the settings pane promises the report carries no username. The redaction dates from #77 on `main` (unreleased); U2 adds new automatic entries that reach it. Round-B security review, 2026-09-28 (RB-SEC-3).
+**Fix:** Replace the exact known prefixes (the add-on's `rootURI`, `Zotero.Profile.dir`, the data directory and the home directory, as paths and as encoded file URLs), or cut each stack frame to what follows `!/content/`; add tests for each layout.
+**Effort:** Small.
 
 ### DEBT-014: Menu batch-runners duplicate a ~30-line skeleton four ways
 
@@ -104,6 +173,24 @@ _None currently._
 **Impact:** `citationColumn.ts` `unregisterCitationColumn` clears `fetchTimer` but not `repaintTimer`, so a repaint debounced within `COLUMN_REPAINT_DEBOUNCE_MS` (150ms) of teardown still fires against a torn-down column. Blast radius is tiny (one `refreshAndMaintainSelection` on an unregistered column, already null-guarded) and it is pre-existing on `main`, so the review verifier ruled it a non-defect — but it is a real stray-timer leak worth tidying. Carved out to keep the review PR single-concern.
 **Fix:** clear `repaintTimer` in `unregisterCitationColumn` alongside `fetchTimer`.
 **Effort:** Trivial.
+
+### BUG-REPAINT-SOLE: On Zotero 8/9 a fetched sole-selected item's cell never repaints (regression from U18 R2-1)
+
+**Impact:** CI-confirmed on branch commit 4795293: on Zotero 8.0.4 and 9.0.6, real-Zotero spec 05 "paints the stub's count into the Citations cell after a fetch" times out with the cell blank; it passes on Zotero 10.0.3. The U18 round-2 batch (cc0290f) replaced the full-reload `refreshColumns()` with a targeted `Zotero.Notifier.trigger("refresh", "item", ids)`. Its `orderForHost` avoids the disruptive deselect/reselect Zotero 8/9 do when a refresh leads with a tree's sole selection by leading with another row — but when the only rows to refresh ARE a window's sole selection and there is no other own-row or recently-drawn row to lead with, it skips the refresh entirely ("Row refresh skipped"), so the cell waits for its next paint. A user who fetches the one item they have selected sees the citation cell stay blank until they click away and back. This contradicts the standing note that Zotero 8/9 columns repaint only via `refreshAndMaintainSelection`, not the Notifier path.
+**Fix:** for the sole-selected-with-no-safe-lead case on Zotero 8/9, repaint that row through a path that updates the cell without stranding it — accept the one-time reselection for that row, or invalidate its cached cell directly. Add a real-Zotero case that fetches the sole selection. Must be fixed before the 3.0.0 merge; v2.0.6 is unaffected (it keeps v2.0.5's repaint path).
+**Found:** 2026-09-29 (first green-enough CI run after the billing lock).
+
+### V206-REVIEW: v2.0.6 release-review findings, for 3.0.0
+
+Three parallel reviews of the v2.0.6 candidate (lifecycle/host, security, data/update-path, 2026-09-28/29) found no release blocker for 2.0.6. These items are recorded for the 3.0.0 line, and the smoke-verified 2.0.6 candidate ships without them. Sources checked against Zotero 7.0.10, 8.0.4, 9.0.6 and 10.0.4 omni.ja and Firefox ESR 115/140.
+
+- **BUG-Z78-LOCALE (P2, Zotero 7/8 only, non-English UI).** Citegeist ships only `locale/en-US/citegeist.ftl`, and on Zotero 7/8 `registerLocales` registers a plugin's Fluent source for exactly the locale directories it ships. A non-English window listing `citegeist.ftl` as a required resource it cannot resolve then drops the whole co-localized bundle to English, so Zotero's own retranslated text (section headers, relabeled menus) comes out English until restart, every launch. Zotero fixed this host-side in 9/10 (zotero/zotero#5896). Not a regression from 2.0.5 (which blanked the same text). **Fix:** fan `en-US/citegeist.ftl` out to every Zotero locale at build time. Moot for the parts of the UI dropped if 3.0.0 drops Zotero 7 (U9); still applies to Zotero 8.
+- **BUG-BOOTSTRAP-HANDLE (P3, all hosts, narrow race).** `addon/bootstrap.js` destructs whichever `chromeHandle` is current when the async shutdown resolves. A disable-then-re-enable inside the cache-close window (ms, up to 5 s with pending writes) reuses the sandbox, so the new startup overwrites `chromeHandle` and the old shutdown destructs the new registration → blank chrome icons until restart. **Fix:** take the handle into a local before the async teardown, destruct that. (Zotero also does not serialise the two events, so this narrows but does not fully close the window.) Check `main`'s bootstrap has the same shape.
+- **BUG-Z7-KEYFMT (P3, Zotero 7 only, harmless today).** Zotero 7's `_namespacedMainKey` replaces every non-alphanumeric with `-` before `CSS.escape`; 8+ escapes the raw string. Citegeist computes the 8+ form for its defensive unregisters (`citationColumn.ts`, `citationPane.ts`, and the menu keys A2 fixed), so on Zotero 7 those unregisters match nothing. Harmless: Zotero's plugin-shutdown observer removes the registrations, and 2.0.6's guards skip rather than warn. The one gap is the failed-UI-registration cleanup path, which predates 2.0.6. **Fix:** keep the keys `registerColumn`/`registerSection` return. Moot if U9 drops Zotero 7.
+- **UPGRADE-TEST (P1 test gap, not a code defect).** No smoke exercised installing 2.0.6 over a *running* prior version — Josh's exact 3.0.0→2.0.6 path. Zotero fires the old copy's `shutdown` with `ADDON_UPGRADE`, which in 2.0.5/main/3.0.0 is synchronous and returns undefined, so Zotero does not await the old `closeCache()`; 2.0.6 then reopens `citegeist.sqlite` under Zotero's EXCLUSIVE lock and can hit SQLITE_BUSY. With the init-close guard (f789b47) the worst case is a one-time recoverable "cache unavailable — restart" alert, not a hang. **Verify:** on a 3.0.0 profile with a stale row + pending suggestion, install 2.0.6 from file without restarting, re-fetch/confirm the row, quit and time it.
+- **AUTHOR-ORPHAN-LINGER (P3, 3.0.0 data hygiene).** 2.0.6's orphan GC deletes `item_cache` rows for removed items but not their `item_authors` rows (2.0.6 does not know the author tables); 3.x's author GC keys off `item_cache` orphans, so those rows linger as stale until re-derived on next fetch. Not corruption.
+
+**How to apply:** fold BUG-Z78-LOCALE and BUG-BOOTSTRAP-HANDLE into 3.0.0; run UPGRADE-TEST before the 3.0.0 release. Full review notes in the 2026-09-28 orchestration log under `.claude/drafts/`.
 
 ### DEBT-009: v3.0.0 review advisory residuals
 

@@ -2,8 +2,8 @@
 type: architecture
 title: Citegeist — design rationale
 description: Key architectural decisions behind Citegeist and the trade-offs involved.
-timestamp: 2026-08-02
-tags: [citegeist, architecture, design, openalex, zotero, sqlite, authors, diagnostics]
+timestamp: 2026-09-13
+tags: [citegeist, architecture, design, openalex, zotero, sqlite, schema, authors, diagnostics]
 ---
 
 # Design Rationale
@@ -65,7 +65,7 @@ Updates happen at plugin release time. When ABDC or AJG publish new editions, we
 
 ## Why a Plugin-Owned SQLite Cache?
 
-Through v1.3.x, Citegeist cached everything it knew about a paper — citation count, FWCI, percentile, journal metrics, confirmed title matches — in that item's `Extra` field, tagged with `Citegeist.` prefixes. That was a mistake, and v2.0.0 undid it. Cached metrics now live in a plugin-owned SQLite database at `<profile>/citegeist.sqlite`, opened via `Zotero.DBConnection` — the documented Zotero 7+ plugin-storage pattern, the same one Better BibTeX uses.
+Through v1.3.x, Citegeist cached everything it knew about a paper — citation count, FWCI, percentile, journal metrics, confirmed title matches — in that item's `Extra` field, tagged with `Citegeist.` prefixes. That was a mistake, and v2.0.0 stopped it. Cached metrics now live in a plugin-owned SQLite database at `<profile>/citegeist.sqlite`, opened via `Zotero.DBConnection` — the documented Zotero 7+ plugin-storage pattern, the same one Better BibTeX uses.
 
 Four problems drove the move off `Extra`:
 
@@ -74,13 +74,21 @@ Four problems drove the move off `Extra`:
 3. **Orphan data on uninstall.** Removing the plugin left `Citegeist.*` lines in every item forever.
 4. **Backup-restore staleness.** Restoring an older library backup silently overwrote fresher cached values.
 
-Owning the store fixes all four: the database is Citegeist's alone, invisible to citation processing, and a researcher's bibliographic records stop carrying the plugin's bookkeeping.
+Owning the store fixes all four for everything Citegeist has cached since v2.0.0: the database is Citegeist's alone, invisible to citation processing, and nothing new lands in a researcher's bibliographic records. The lines v1.3.x already wrote are still there; see "The v1.3.x lines" below.
 
 SQLite also resolves a constraint the `Extra` field never had to satisfy. Zotero's column `dataProvider` is **synchronous** — a sortable column must return a value in the same tick it is asked — but SQLite reads are async. Citegeist bridges this with an in-memory mirror: at startup the whole `item_cache` table loads into a `Map` keyed by `(libraryID, itemKey)`, column rendering reads that map with zero SQL per row, and writes go to SQLite first and then update the mirror. The database is the source of truth; the mirror is the sync-read surface over it.
 
-One line still travels back to `Extra`: the user-curated `Citegeist match ID: W…` for an item whose citation data was confirmed by title match. It is the only thing worth preserving outside the plugin's own store — it survives a downgrade to v1.x and rides Zotero Sync to the user's other devices, so a confirmed match never has to be re-confirmed.
+One line still travels back to `Extra`: the user-curated `Citegeist match ID: W…` for an item whose citation data was confirmed by title match. It is the only thing worth preserving outside the plugin's own store. It survives a downgrade to v1.x, and Zotero Sync carries it to the user's other devices, where the one-time import below reads it into that device's cache.
 
-**Trade-off:** The cache is now re-derivable local state rather than synced content. On a new device, or after clearing the database, each item re-fetches from OpenAlex the first time it is viewed — a brief "loading" beat on first scroll. Nothing is lost, because every cached value is re-derivable from a free singleton lookup, and the one piece that is _not_ re-derivable (the curated match ID) is exactly the piece kept in `Extra`. Full detail: [`docs/MIGRATION-v2.0.0.md`](MIGRATION-v2.0.0.md).
+**The v1.3.x lines.** v2.0.0 shipped a migration to copy each item's `Citegeist.` lines into the database and strip them from `Extra`. It never ran on any library. It handed its loop to `Zotero.Sync.Runner.delaySync`, which takes a number of milliseconds and never calls a function (`syncRunner.js` at 8.0.4, lines 1037-1039), and set its done flag anyway. Every profile upgraded from v1.3.x still carries its lines, and none of its confirmed matches reached the cache (BUG-MIGRATION in [`ISSUES.md`](ISSUES.md)).
+
+Its replacement, `migrateFromExtraV1` in `cache/migration.ts`, only reads. At startup it walks every library except feeds, loading each one's items first, since Zotero loads a library's items only when the library is first shown, and holds sync for the pass through `Zotero.Sync.Runner.delayIndefinite`. From each item it copies the one value that can't be fetched again: the OpenAlex work the user confirmed as the item's title match, from v1.x's `Citegeist.confirmedOpenAlexId` or from the `Citegeist match ID:` line v2.x writes. Where an item has both, the `Citegeist match ID:` line wins, because only a later confirmation writes it. Metrics, suggestions and no-match lines stay in `Extra`, and the next lookup fetches the metrics again. An item whose lines name two different works is left for the user. The import writes nothing to any item and overrides nothing in the cache: a row holding a confirmation, a no-match (which may be the user's "Not this paper"), or metrics for another work is kept. An item with no row gets one holding just the confirmation, and a row with a pending suggestion, or with metrics for the same work, gains it.
+
+The first pass that reads every library sets `extraMatchImportComplete`, and no later launch scans again. A pass cut short, by Citegeist being disabled during startup, a library that won't load or a write that fails, runs again from the start at the next launch; a match it already imported is then a confirmation the second pass keeps. `migrationV1Complete`, which the migration that never ran set on every v2.0.x profile, no longer decides anything, but a finished pass still sets it under its real and its doubled name, so a copy downgraded to v2.0.x starts no migration of its own.
+
+The lines themselves stay in `Extra`, a field Zotero syncs, because the v2.0.0 rewrite never ran on a real library. Removing them becomes a command the user starts, with its own backup ([plan](plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md), "Decisions", item 8); it waits on a mockup.
+
+**Trade-off:** The cache is now re-derivable local state rather than synced content. On a new device, or after clearing the database, each item re-fetches from OpenAlex the first time it is viewed — a brief "loading" beat on first scroll. Nothing is lost, because every cached value is re-derivable from a free singleton lookup, and the one piece that is _not_ re-derivable (the curated match ID) is exactly the piece kept in `Extra`. The import that reads that piece back runs once per profile, though: a cache deleted afterwards, or a match confirmed on another device after this one imported, returns only when the user confirms it again, or resets `extensions.zotero.citegeist.extraMatchImportComplete` in the Config Editor so the next launch imports again. Full detail on the v2.0.0 design: [`docs/MIGRATION-v2.0.0.md`](MIGRATION-v2.0.0.md), which still describes the strip that never ran.
 
 ---
 
@@ -96,11 +104,44 @@ The external handoff is the SQLite file itself. A downstream pipeline reads `cit
 
 ---
 
+## Why Stamp the Cache Schema Version?
+
+Zotero's updater only moves a plugin forward, yet an older Citegeist can still open a database a newer one wrote. A researcher reinstalls an older XPI to get around a regression, or keeps one Zotero data folder in Dropbox and opens it from two computers running different Citegeist versions. The older build cannot know what the newer schema changed, so the protection has to ship in the older build before the newer schema exists.
+
+From v3.0.0, the cache records its schema in SQLite's `PRAGMA user_version` as major × 1000 + minor, from `CACHE_SCHEMA_MAJOR` and `CACHE_SCHEMA_MINOR` in `src/constants.ts`. Schema 1.0 is `1000`; SQLite's default of `0` means unstamped. `initCache` reads the stamp before it runs any `CREATE` statement, and reads a stamp the host returns as a bigint or a numeric string as the number it spells:
+
+| Stamp found                                            | What init does                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`, or an older schema                                | Creates any missing tables, then writes the current stamp. Every v2.0.x database starts here: its `item_cache` and `migration_progress` tables are unchanged in 1.0, and the author tables are new.                                                                                         |
+| The current schema, or a newer minor of the same major | Continues normally and leaves the stamp alone, so a newer minor is never lowered.                                                                                                                                                                                                           |
+| A newer major                                          | Creates nothing and stamps nothing. Records `CG-DB03` once, sets `PRAGMA query_only` on the connection, then loads the mirror, which reads keep serving.                                                                                                                                    |
+| Negative, unreadable, or major 100 and above           | The same read-only open, recorded as `CG-DB04`. No release reaches major 100, so the file is the likely problem, not the build: the copy says to move `citegeist.sqlite` aside, after which confirmed title matches come back from each item's `Extra` field and metrics are fetched again. |
+
+A stamp write that fails leaves the database unstamped, records `CG-DB01`, and lets init finish; the next startup tries again.
+
+**One writable choke point, and a transaction for every write.** Every write gets its connection from `requireWritableDb` in `cache/db.ts`. On a read-only cache it throws a `CacheWriteRefusedError` carrying `CG-DB03` or `CG-DB04`, and once `closeCache` has started, `CG-DB02`. Otherwise it returns a `WritableDb`, whose `transaction` method runs the write in one Zotero transaction and is the only source of the `WriteTransaction` that `runWrite` takes. Both classes are exported as types only, so the compiler proves that every write passed the gate and runs inside a transaction. The writers are `upsertRow`, `deleteRow`, `mutateRow` (behind `cacheWorkData`, the match writers and `clearPendingSuggestion`), `cacheItemAuthors`, `setCuratedItemAuthor`, `updateAuthorMetrics`, `reconcileAuthorMerge`, and the migration and orphan-GC deletes. Each commits its statements together, so `deleteRow`'s three deletes, an author reconcile or one chunk of orphans lands whole or not at all. A refused write rejects before it touches SQLite, the mirror or an item's `Extra` field, so no caller can mistake it for one that landed. A private `rawQuery` holds the only `queryAsync` call, and `runRead` refuses a write statement at run time. `test/cache-write-invariants.test.ts` checks the syntax tree of every source file for write SQL that reaches the database other than through `runWrite`, and runs each function that passes the gate against a fake database that fails any write outside a transaction.
+
+The transaction is what keeps a write on Zotero 10. `new Zotero.DBConnection("citegeist")` names a database in Zotero's data directory, which Zotero maintains itself. When the user goes idle, Zotero 10.0.2 backs the file up and vacuums it: `VACUUM INTO` writes a compacted copy, Zotero closes the connection, and it moves the copy over the live file unless its commit count changed in between (`db.js`, `observe` and `vacuum`). Only `executeTransaction` advances that count, so a write committed on its own during the copy was discarded with the old file, curated author picks included. Zotero 8.0.4 and 9.0.6 only back up on idle.
+
+Init creates the tables and writes the stamp in one transaction, so the stamp never commits without the tables it names. It closes a connection it failed to open: Zotero holds a data-directory database under an exclusive lock, and a leaked connection would fail every later open until Zotero restarts. It also copies each row it loads into a plain object. Zotero returns rows as Proxies over mozStorage rows whose column names are not own properties, so spreading one, as every row update does to keep the columns it leaves alone, cannot copy its columns. Without the copy, a refetch of an item cached in an earlier session loses the columns that session saved.
+
+Callers ask `cacheWriteRefusalCode()`, the one question about whether the cache takes writes, before work that only matters if it can be saved. The fetch service returns a `cache-unwritable` result carrying the code before any OpenAlex request, and a batch stops at its first item, so a read-only session spends none of the user's budget. A saved "not on OpenAlex" still shows, read from the mirror, and a refusal that lands mid-item because the cache closed stops a batch the same way, with nothing recorded. The item pane shows the code in place of Confirm and "Not this paper" rather than offering choices it can't keep. The citation-network browser counts the new Zotero item as the add whether or not its metrics could be cached, so a refusal never invites the second click that would duplicate it. Migration and orphan GC have nothing to do on a read-only cache and return quietly through `skipMaintenanceOnReadOnlyCache`; on a closed cache they throw `CG-DB02` before any backup file or `Extra` change. On a read-only cache, an author read that fails because a newer major reshaped its table shows nothing, and is recorded only while the diagnostic report doesn't already hold that entry, not on every render. Startup shows one non-modal notice per launch, and every diagnostic report carries a `Cache: read-only` line that neither later failures nor Clear removes.
+
+`query_only` is the backstop behind the choke point, and it belongs to the connection. Zotero 9.0.6 and later close and reopen a plugin database around their idle backup, so the cache re-applies it through `DBConnection.onConnect` for as long as the session is read-only. The callback reads the classification init makes before it loads the mirror, so a reopen during that load keeps `query_only` too. Zotero 10's idle `VACUUM INTO` of the plugin database then fails under `query_only` and logs an error to Zotero's console. That noise is accepted: the alternative is a connection that takes writes.
+
+Zotero 8.0.4 and 9.0.6 leave a connection's idle observer registered when it closes permanently (`closeDatabase`; 10.0.2 removes it). After Citegeist closes its cache, on disable, upgrade or a failed open, a later idle backup of that connection can call `backup` on it and log a TypeError to Zotero's console; 9.0.6 skips that call when the data directory is on APFS. Nothing is lost. Citegeist doesn't remove the observer itself: those versions add one each time the connection opens, so how many remain isn't knowable from the plugin, and removing them would mean passing Zotero's private observer object and idle interval to the idle service.
+
+**Within a major, schema changes are additive.** An older build with the same major keeps writing, so a change counts as additive only if that build's writes cannot damage it. A new table or index qualifies. A new column on `item_cache` or `item_authors` requires a major bump: `upsertRow`, `mutateRow`, `cacheItemAuthors` and `setCuratedItemAuthor` write those tables with `INSERT OR REPLACE` and an explicit column list, which deletes the row and reinserts only the columns the older build knows, so the new column's value is wiped. Tightening a constraint, dropping, renaming or retyping a table or column, or changing what a column means also bumps `CACHE_SCHEMA_MAJOR`, and relies on the refusal path to keep older builds from writing.
+
+**Trade-off:** A read-only session saves nothing new. A researcher who never updates keeps the metrics saved earlier and makes no new lookups. The refusal also runs only in builds that read the stamp. v2.0.x predates it and writes to any database it opens, so the first major bump has to assume a v2.0.x copy may still share the file.
+
+---
+
 ## Why a Centralized Rate Limiter?
 
 OpenAlex is metered rather than gated behind a polite pool, so there is no published per-second ceiling to hug — but a burst of requests is still antisocial and risks a transient throttle. Citegeist targets 8 req/s. All API calls — works and authors alike — go through a single `rateLimitedFetch` function that:
 
-1. Enforces a minimum 125ms interval between requests.
+1. Starts every request, retries included, at least 125 ms after the one before it. Callers wait their turn in one line, so callers that arrive in the same moment go out one interval apart instead of together.
 2. Retries transient failures (network errors, a per-second 429, 5xx) with backoff (2s, then 4s). A _budget-exhausted_ 429 — the daily allowance spent, flagged by `X-RateLimit-Remaining: 0` — is **not** retried; it raises a distinct error that prompts the user for an optional API key rather than hammering a quota that won't refill for hours.
 
 This matters because Citegeist has multiple concurrent callers: the auto-fetch triggered by browsing items, batch operations on entire collections, and the citation network browser paginating through results. Without centralization, each caller would independently track timing, and concurrent operations could easily exceed the rate limit.
@@ -108,6 +149,53 @@ This matters because Citegeist has multiple concurrent callers: the auto-fetch t
 A single-queue approach is simpler than a token bucket or sliding window and sufficient for a Zotero plugin where requests are inherently serial (one user, one machine).
 
 **Trade-off:** Strict serialization means a burst of requests (e.g., batch-fetching 200 items) takes longer than if we could parallelize. In practice, 8 req/s processes a 200-item collection in ~25 seconds, which is acceptable for a background operation.
+
+---
+
+## Why Background Fetches Use Only Identifier Lookups?
+
+With "Automatically fetch citation data when viewing items" ticked, which is the default, the item-tree columns fetch an item's metrics when Zotero draws its row. Nobody asks for these lookups, and sorting by a Citegeist column draws every row in the library. OpenAlex's cost page (https://help.openalex.org/access/example-costs/, updated 2026-08-09) makes retrieving one work by ID or DOI free and unlimited, and charges $1 per 1,000 searches against a daily budget of $0.10 without a key. A background title search over a few hundred items without identifiers would spend that budget before the user opened one of them. So the background fetcher (`backgroundFetch.ts`) calls `fetchAndCacheItem` with `identifierLookupsOnly: true`. It looks an item up by DOI, PMID, arXiv ID, ISBN or a confirmed OpenAlex ID, and leaves the title search to fetches the user starts from the item pane or Fetch Citation Counts.
+
+One rule, `isDue` in `backgroundFetch.ts`, decides both whether a row is queued and whether its cells show "…". A row qualifies when its cached metrics are missing or stale, the fetcher has not looked it up without result in the last cache lifetime, it is a library item (neither a feed item nor in the trash), it resolves to a work without a title search (`canResolveWork`, the rule the fetch itself uses), the cache takes writes, auto-fetch is on, and lookups are not paused. A row already queued or being looked up also shows "…". The 30-day hold-off after a title search found nothing does not apply here: it holds off the metered search, and without this exception a DOI added to such an item would wait a month for a free lookup. In the trash Zotero also hands the columns deleted collections and saved searches (itemTreeRow.js@10.0.2, lines 590–597 and 627–634), so each column checks that its row is a Zotero item before it reads anything.
+
+### The fetcher and its phases
+
+One fetcher serves one registration of the columns: `registerCitationColumn` creates it and `unregisterCitationColumn` stops it, so a pass left over from one registration cannot reach the next. It keeps one state object, whose phase is always one of `idle`; `scheduled` (rows queued, and the first batch waits out a 500 ms debounce); `running` (a pass works through the queue two lookups at a time, taking rows queued while it runs); `paused`, with its reason, the time that ends it and the API key it waits on; and `stopped`. Every timer it sets is its own, and `stop()` clears them, drops the queue and resolves once a running pass has ended; the lookups that pass had started still settle, but it changes nothing after `stop()`. However a pass ends, the rows still queued are dropped and redrawn, so no cell keeps showing "…", and a pass that throws pauses with the network cool-down below instead of queueing the same rows again at once.
+
+### Pauses
+
+Some results say the next lookups would fail the same way. The fetcher then drops the queue, records one diagnostic for the pause with the error that caused it (its HTTP status and which lookup), and holds the rows drawn meanwhile, which it redraws when the pause ends so they queue without a scroll:
+
+| Result                                                                                        | The pause ends                                                                                                                                                       |
+| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenAlex rejects the key (CG-API01)                                                           | when the key changes, cleared included; for a request that carried no key, where the 403 comes from a CDN or firewall refusing anonymous traffic, also after an hour |
+| The daily budget is spent (CG-API42)                                                          | when the key changes, or at the next midnight UTC, when OpenAlex's allowance starts over                                                                             |
+| No connection, a failed DNS lookup, a timeout, or a 5xx or rate-limit 429 through every retry | after a cool-down of one minute, which doubles while the trouble lasts, up to 15 minutes, and resets once a lookup gets an answer                                    |
+| The cache refuses writes (CG-DB02, CG-DB03, CG-DB04)                                          | when Zotero restarts; no diagnostic, since the cache recorded the refusal once already                                                                               |
+
+The key a refused batch carried is read before the batch starts: each request builds its URL before its first await, so a key read afterwards could already be its replacement, and the pause would then wait on a key no request was refused with. A row a pause cut short is not remembered as looked up. The lookups pass `callerRecordsStops: true`, so none of these failures is recorded once per row, and network trouble records its one entry only while the diagnostics buffer does not already hold it, so an outage that pauses lookups again and again stays a single entry. A journal-stats lookup refused after the work lookup succeeded stops the item too, rather than saving the work without its journal metrics for the whole cache lifetime.
+
+With `successCodes: false`, Zotero resolves a request that got no HTTP status at all, such as a refused connection or a failed DNS lookup, with status 0 instead of rejecting it (http.js@8.0.4, lines 461–502; @10.0.2, lines 429–467). `openalex.ts` treats status 0 as the network failure it is: retried, then CG-NET01, and a pause.
+
+The fetcher reads the auto-fetch setting on a paint past a 5-second cache, sooner when the clock reads earlier than the cached reading, and again before every batch, so unticking it stops a running pass at its next batch. It accepts a subscription to the auto-fetch and API-key settings (`watchSettings`), which redraws the held rows the moment either changes; that waits on `prefs.ts`, the only module allowed to touch `Zotero.Prefs`, to offer a pref observer, and until then a changed setting reaches a row drawn earlier on its next paint.
+
+### The rows already looked up
+
+The fetcher remembers a row it looked up without data to show, such as a DOI OpenAlex does not know, so repaints do not queue it again. It does not remember a row whose data landed: fresh metrics keep that row from being due, and once they go stale in a long session it is due again. A remembered row is tried again after one cache lifetime, and at once when the clock reads earlier than the attempt. The set forgets its oldest entries past `MAX_ATTEMPTED_FETCH_CACHE`, so an overflow re-runs only those lookups. It never forgets a row the running pass looked up, or one that a paint has drawn since the last pass ended: sorting by a Citegeist column draws every row, so forgetting either would queue the row again and repeat the overflow on every pass. When one pass covers more rows than the cap, the set grows to that many instead.
+
+**Trade-off:** An item with no identifier gets nothing in the background. Hiding the Citegeist columns does not stop lookups for drawn rows; unticking the setting does.
+
+---
+
+## Why Landed Rows Are Redrawn by a Targeted Refresh?
+
+Zotero caches each row's cells and calls a column's `dataProvider` again only for a row whose cached cells were dropped. The columns used to drop them with `ItemTreeManager.refreshColumns()`, which queues an "itemtree" refresh (pluginAPIBase.mjs@10.0.2, lines 325–337). Every item tree in every window answers that by resetting its columns and reloading every item it shows (itemTree.jsx@8.0.4, lines 458–461 and 4128–4133; @10.0.2, lines 1324–1327), and each landed lookup asked for it again, so a pass over a few hundred rows reloaded the library a few hundred times, window by window.
+
+A row whose data changed is now redrawn by `Zotero.Notifier.trigger("refresh", "item", ids)`, which every tree answers by dropping just those rows' cached cells and redrawing them (itemTree.jsx@8.0.4, lines 532–562; @10.0.2 through its row provider, lines 854–868, and collectionViewItemTree.jsx, lines 719–762). The rows that change within `COLUMN_REFRESH_THROTTLE_MS` go in one refresh, and the end of a pass sends its last rows at once. The item pane, the citation browser and the menu's Fetch Citation Counts redraw through the same batched path (`invalidateColumnCache`). `refreshColumns` is left to Zotero's own `registerColumn` and `unregisterColumn`, which call it themselves (pluginAPIBase.mjs@10.0.2, lines 124 and 138).
+
+Two host behaviours set the details. Every open item pane answers an item refresh by rendering again (itemDetails.js@10.0.2, lines 381–389), which can scroll it back to a pinned section (lines 269–289), so refreshes stay two seconds apart. And Zotero 8 and 9 answer a refresh whose first ID is a tree's only selected item by redrawing that row alone and then deselecting and reselecting it (itemTree.jsx@8.0.4, lines 545–553; @9.0.6, lines 552–560), which renders the item pane empty and back and can take the focus from a field being edited; the other rows go unredrawn in that tree. Zotero 10 has no such branch. So on hosts before 10 the refresh leads with a row that is no main window's only selection, one of its own or one drawn recently, and when there is none the selected row waits for its next paint.
+
+**Trade-off:** A landed row can take up to two seconds to show its data, and each refresh still wakes every open item pane, which Zotero's own item refreshes do too.
 
 ---
 
@@ -128,9 +216,11 @@ src/modules/
     index.ts           → Public surface (re-exports)
     authors/           → Normalized author-identity store (authors + item_authors)
   citationService.ts   → Orchestration (fetch + cache + journal stats + author backfill)
-  citationColumn.ts    → Sortable column registration
+  citationColumn.ts    → Sortable column registration + targeted row redraws
+  backgroundFetch.ts   → The columns' background lookups (queue, phases, pauses)
   citationPane.ts      → Sidebar pane rendering
   menu.ts              → Right-click context menus
+  prefs.ts             → The only reader and writer of preferences (real names, legacy flags, timestamps)
   authorProfile.ts     → Author profile + view-model layer (pure logic, unit-tested)
   titleSearch.ts       → Metadata matching (title/year/author scoring)
   diagnostics/         → Quotable error codes, ring buffer, guards, copy-report
@@ -187,7 +277,7 @@ The fallback fires in exactly two cases:
 1. `extractIdentifier(item)` returns `null` — no DOI, PMID, arXiv ID, or ISBN present
 2. An identifier was found but the OpenAlex lookup returned `null` (work not found in the index)
 
-In both cases, the same title search pipeline runs. A prior explicit dismiss (stored in `Citegeist.noMatch: true`) suppresses the search for 30 days, after which it retries automatically. A manual "Fetch Citation Counts" always retries regardless of the suppress flag.
+In both cases, the same title search pipeline runs, but only for a fetch the user starts, by opening the item or using Fetch Citation Counts. The columns' background fetch stops at either case instead (see [Why Background Fetches Use Only Identifier Lookups?](#why-background-fetches-use-only-identifier-lookups)). A search that finds nothing, and the user dismissing a match, both set `Citegeist.noMatch: true` with a timestamp. `attemptTitleSearch` in `citationService.ts` checks that flag before every search, whoever started the fetch, so for 30 days (`NO_MATCH_RETRY_DAYS`) opening the item and Fetch Citation Counts both return no match without searching, and after that the search runs again. A fetch that caches the work and a confirmed match both clear the flag, and so does the pane's Refresh button, which deletes the item's cached row before it fetches: Refresh is how a user searches again inside the 30 days.
 
 ### Search strategy
 

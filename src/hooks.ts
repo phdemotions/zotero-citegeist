@@ -5,8 +5,10 @@
 
 import { registerCitationColumn, unregisterCitationColumn } from "./modules/citationColumn";
 import { registerCitationPane, unregisterCitationPane } from "./modules/citationPane";
+import { installBridge, removeBridge } from "./modules/bridge";
 import {
   registerMenus,
+  removeRenderedMenus,
   unregisterMenus,
   unregisterGlobalMenus,
   setMenuPluginID,
@@ -20,10 +22,17 @@ import {
   migrateFromExtraV1,
   garbageCollectOrphans,
   purgeAllAuthorRelations,
+  cacheWriteRefusalCode,
 } from "./modules/cache";
+import { getPref, setPref } from "./modules/prefs";
 import { logError } from "./modules/utils";
-import { buildDiagnosticReport, clearDiagnostics, setPluginVersion } from "./modules/diagnostics";
-import { PREF_AUTHOR_RELATIONS_PURGED, PREF_LAST_BACKUP_PATH, SETTINGS_PANE_ID } from "./constants";
+import { setPluginVersion, showCodedNotice } from "./modules/diagnostics";
+import {
+  CACHE_READ_ONLY_HEADLINE,
+  PREF_AUTHOR_RELATIONS_PURGED,
+  PREF_LAST_BACKUP_PATH,
+  SETTINGS_PANE_ID,
+} from "./constants";
 
 // Bare FTL filename. Zotero auto-registers the plugin's locale/<locale>/*.ftl
 // into its Fluent registry before onStartup, addressable by this bare name —
@@ -32,32 +41,15 @@ import { PREF_AUTHOR_RELATIONS_PURGED, PREF_LAST_BACKUP_PATH, SETTINGS_PANE_ID }
 const FTL_FILE = "citegeist.ftl";
 
 /**
- * Unique per-build stamp injected by scripts/build.mjs. The version is
- * intentionally held steady across many iterations, so it cannot identify a
- * build; this can. Logged at startup so Debug Output proves which build Zotero
- * actually loaded.
+ * The build's id, injected by scripts/build.mjs. A production build takes it
+ * from the commit alone (the first 12 characters of its SHA and its commit
+ * time), so every production build of one commit carries the same id and the
+ * same bytes; a dev build adds the time of day. The version stays the same
+ * across many builds, so the id is what identifies one. Logged at startup, so
+ * Debug Output shows which commit, and for a dev build which build, Zotero
+ * loaded.
  */
 declare const __BUILD_ID__: string;
-
-/**
- * Expose the diagnostics API on a namespaced global.
- *
- * The settings pane is a standalone XHTML document with an inline script — it
- * cannot import from the bundle. Rather than duplicate the report builder
- * there (where it would immediately drift), the pane calls through this one
- * object. Namespaced under `Zotero` so it is reachable from any Zotero
- * document, and removed on shutdown so a disabled plugin leaves nothing behind.
- */
-function installDiagnosticsBridge(): void {
-  (Zotero as unknown as Record<string, unknown>).Citegeist = {
-    buildDiagnosticReport,
-    clearDiagnostics,
-  };
-}
-
-function removeDiagnosticsBridge(): void {
-  delete (Zotero as unknown as Record<string, unknown>).Citegeist;
-}
 
 interface PluginData {
   id: string;
@@ -73,13 +65,42 @@ let rootURI: string;
 // cache (and a minimal/late window can't crash startup).
 let cacheReady = false;
 
+/**
+ * Set at the top of `onShutdown` and never cleared: addon/bootstrap.js loads a
+ * fresh copy of the bundle on every `startup`, so a copy starts once and shuts
+ * down once.
+ *
+ * `onStartup` checks it after every await. A disable can land while startup
+ * waits on the cache, and Zotero's plugin-shutdown observers, which remove
+ * whatever the plugin has registered, run as soon as the synchronous part of
+ * `onShutdown` returns (plugins.js `_callMethod`: the bootstrap method at @8.0.4
+ * 250 and @10.0.2 258, the observers from 261 and 269). Anything startup
+ * registered after that would stay registered for a disabled plugin, and a menu
+ * left that way made the next copy's registration a refused duplicate.
+ */
+let shutdownStarted = false;
+
+/**
+ * True while `registerCitationColumn` runs. A shutdown that lands then leaves the
+ * columns to startup, which removes them once that call returns: removing them
+ * in the middle of it would leave the columns it registers afterwards in place.
+ */
+let columnsRegistering = false;
+
+/**
+ * The cache close under way or done. Startup's failure cleanup and `onShutdown`
+ * can both close the cache, and a disable can land while a failed startup is
+ * closing it, so both wait on the one close.
+ */
+let cacheClosing: Promise<void> | null = null;
+
 export async function onStartup(data: PluginData): Promise<void> {
   pluginID = data.id;
   rootURI = data.rootURI;
   cacheReady = false;
   setMenuPluginID(pluginID);
   setPluginVersion(data.version);
-  installDiagnosticsBridge();
+  installBridge(() => cacheReady);
   Zotero.debug(`[Citegeist] Starting v${data.version} (build ${__BUILD_ID__})`);
 
   // Initialize the plugin-owned SQLite cache and warm the in-memory mirror
@@ -92,10 +113,13 @@ export async function onStartup(data: PluginData): Promise<void> {
   let didMigrate = false;
   try {
     await initCache();
+    if (shutdownBegan("cache init")) return;
     didMigrate = await migrateFromExtraV1();
+    if (shutdownBegan("migration")) return;
     // Best-effort GC of orphan rows from prior installs / library snapshots.
     // Failure here must not block startup.
     await garbageCollectOrphans().catch((e) => logError("orphan GC", e));
+    if (shutdownBegan("orphan GC")) return;
     // One-time purge of the sync-breaking `openalex:author` item relations that
     // v2.x/early-3.0 wrote (Zotero's sync server rejects the custom predicate and
     // halts the whole library sync). Best-effort — must not block startup.
@@ -106,7 +130,11 @@ export async function onStartup(data: PluginData): Promise<void> {
     // Continue startup: read functions will return empty metrics; users still
     // see the UI and can refetch. Better than refusing to load entirely.
   }
+  // Nothing is registered yet, and onShutdown closes the cache.
+  if (shutdownBegan("cache startup")) return;
 
+  // Null unless init opened the database read-only (CG-DB03, CG-DB04).
+  const readOnlyCode = cacheInitFailed ? null : cacheWriteRefusalCode();
   if (cacheInitFailed) {
     showStartupAlert(
       "Citegeist: cache unavailable",
@@ -115,12 +143,16 @@ export async function onStartup(data: PluginData): Promise<void> {
         "If the problem persists, check that <profile>/citegeist.sqlite is " +
         "not locked or quarantined by antivirus.",
     );
+  } else if (readOnlyCode) {
+    // Once per launch. The pane and the diagnostic report keep the code in view
+    // for the rest of the session.
+    showCodedNotice(CACHE_READ_ONLY_HEADLINE, readOnlyCode);
   } else if (didMigrate) {
     // First successful migration of this profile. Surface a one-time
     // alert pointing to the safety-net backup file so users know exactly
     // where to find a verbatim copy of every pre-migration Extra field
     // if they want to audit or restore anything.
-    const backupPathRaw = Zotero.Prefs.get(PREF_LAST_BACKUP_PATH);
+    const backupPathRaw = getPref(PREF_LAST_BACKUP_PATH);
     const backupPath = typeof backupPathRaw === "string" ? backupPathRaw : undefined;
     const backupLine = backupPath
       ? `A snapshot of every Extra field Citegeist touched was saved to:\n\n${backupPath}\n\n` +
@@ -143,17 +175,7 @@ export async function onStartup(data: PluginData): Promise<void> {
 
   // Register preference pane so users can access settings. This is the only
   // cache-independent UI, so it registers even when the cache failed.
-  Zotero.PreferencePanes.register({
-    pluginID,
-    // Explicit id so the item pane's settings button can deep-link here via
-    // Zotero.Utilities.Internal.openPreferences(SETTINGS_PANE_ID).
-    id: SETTINGS_PANE_ID,
-    src: rootURI + "content/preferences.xhtml",
-    label: "Citegeist",
-    // rootURI (jar:), NOT chrome://citegeist/ — the latter is unregistered on
-    // some installs (Zotero 9: "No chrome package registered"), so the icon 404s.
-    image: rootURI + "content/icons/icon-16.svg",
-  });
+  registerSettingsPane();
 
   // Fail closed: with no cache, the synchronous column dataProvider and the
   // pane would surface broken/empty data. Register nothing cache-dependent —
@@ -164,12 +186,22 @@ export async function onStartup(data: PluginData): Promise<void> {
   }
 
   // Register the cache-dependent runtime UI. If Zotero rejects any of these
-  // registrations, fail closed: tear down what we opened (columns + cache) so
-  // we don't leave half-wired UI against a live cache, and tell the user.
+  // registrations, fail closed: tear down everything registered so far and close
+  // the cache, so no surface is left wired to a closed cache, and tell the user.
   // registerCitationColumn rolls back its own partial columns and rethrows.
   try {
     // Register the citation count column (global, not per-window)
-    await registerCitationColumn(pluginID);
+    columnsRegistering = true;
+    try {
+      await registerCitationColumn(pluginID);
+    } finally {
+      columnsRegistering = false;
+    }
+    if (shutdownBegan("column registration")) {
+      // onShutdown left the columns to this startup (see columnsRegistering).
+      bestEffort("startup stopped: unregisterCitationColumn", unregisterCitationColumn);
+      return;
+    }
 
     // Register the unified item pane section (impact + authors). Pass rootURI so
     // its icons load via jar: (chrome://citegeist/ is unregistered on some Z9
@@ -179,26 +211,28 @@ export async function onStartup(data: PluginData): Promise<void> {
     // Give the menu module the rootURI too, for its jar:-loaded icons.
     setMenuRootURI(rootURI);
 
-    // If the main window is already open, register menus now.
-    // onMainWindowLoad may not fire for windows that were open before startup.
-    const mainWin = Zotero.getMainWindow();
-    if (mainWin) {
+    // Wire every main window already open: onMainWindowLoad does not fire for a
+    // window opened before startup, and File > New Window can leave several
+    // open. registerMenus registers the MenuManager menus once per process and
+    // does nothing for later windows; the DOM fallback wires each window.
+    for (const mainWin of Zotero.getMainWindows()) {
       Zotero.debug("[Citegeist] Main window already open at startup — wiring FTL + menus");
-      // onMainWindowLoad does NOT fire for a window opened before startup, so
-      // inject the FTL here too. Without this the pane's l10nIDs (and the
-      // MenuManager labels) render blank — the confirmed empty-header /
-      // blank-sidenav / "right-click shows nothing" case on Zotero 9.
+      // Without the FTL the pane's l10nIDs (and the MenuManager labels) render
+      // blank: the confirmed empty-header / blank-sidenav / "right-click shows
+      // nothing" case on Zotero 9.
       ensureCitegeistFTL(mainWin);
       registerMenus(mainWin);
     }
   } catch (e) {
     logError("UI registration", e);
-    try {
-      unregisterCitationColumn();
-    } catch (cleanupErr) {
-      logError("UI registration cleanup (column)", cleanupErr);
-    }
-    await closeCache().catch((closeErr) => logError("UI registration cleanup (cache)", closeErr));
+    // A window that failed partway leaves every window before it wired, so the
+    // menus come down everywhere, not only where registration stopped.
+    unregisterAllMenus("UI registration cleanup", mainWindows("UI registration cleanup"));
+    bestEffort("UI registration cleanup (pane)", unregisterCitationPane);
+    bestEffort("UI registration cleanup (column)", unregisterCitationColumn);
+    await closeCacheOnce("UI registration cleanup (cache)");
+    // A plugin being disabled needs no "restart Zotero" alert.
+    if (shutdownBegan("UI registration cleanup")) return;
     showStartupAlert(
       "Citegeist: UI unavailable",
       "Zotero rejected one of the UI registrations Citegeist needs (the citation " +
@@ -223,7 +257,7 @@ export async function onStartup(data: PluginData): Promise<void> {
  */
 async function purgeAuthorRelationsOnce(): Promise<void> {
   try {
-    if (Zotero.Prefs.get(PREF_AUTHOR_RELATIONS_PURGED)) return;
+    if (getPref(PREF_AUTHOR_RELATIONS_PURGED)) return;
     const { cleaned, failures } = await purgeAllAuthorRelations();
     if (cleaned > 0) {
       Zotero.debug(`[Citegeist] Purged openalex:author relations from ${cleaned} item(s)`);
@@ -232,7 +266,7 @@ async function purgeAuthorRelationsOnce(): Promise<void> {
     // relation keeps the whole library's sync stuck, so a partial pass (a locked
     // item, a library that wouldn't enumerate) must retry on the next launch.
     if (failures === 0) {
-      Zotero.Prefs.set(PREF_AUTHOR_RELATIONS_PURGED, true);
+      setPref(PREF_AUTHOR_RELATIONS_PURGED, true);
     } else {
       Zotero.debug(`[Citegeist] Author-relation purge incomplete (${failures} left); will retry`);
     }
@@ -257,48 +291,127 @@ function showStartupAlert(title: string, body: string): void {
   }, 2000);
 }
 
+/**
+ * Register the settings pane. Zotero's `register` is async: it resolves the
+ * pane's URIs through the AddonManager before it adds the pane
+ * (preferencePanes.js @8.0.4 143-174, @9.0.6 and @10.0.2 134-165), and its
+ * plugin-shutdown observer removes only panes already added (@10.0.2 183-199).
+ * A disable that lands in between would leave the pane registered for a
+ * disabled plugin, so once registration settles, the pane comes back out if a
+ * shutdown began. A refusal, such as a pane ID already registered, is logged
+ * rather than left as an unhandled rejection.
+ */
+function registerSettingsPane(): void {
+  // Zotero's `register` resolves to the pane ID, and `unregister` takes it
+  // (preferencePanes.js @10.0.2 164, 172-175); the typings declare neither.
+  const panes = Zotero.PreferencePanes as typeof Zotero.PreferencePanes & {
+    unregister?(paneID: string): void;
+  };
+  let registration: unknown;
+  try {
+    registration = panes.register({
+      pluginID,
+      // Explicit id so the item pane's settings button can deep-link here via
+      // Zotero.Utilities.Internal.openPreferences(SETTINGS_PANE_ID).
+      id: SETTINGS_PANE_ID,
+      src: rootURI + "content/preferences.xhtml",
+      label: "Citegeist",
+      // rootURI (jar:), NOT chrome://citegeist/ — the latter is unregistered on
+      // some installs (Zotero 9: "No chrome package registered"), so the icon 404s.
+      image: rootURI + "content/icons/icon-16.svg",
+    });
+  } catch (e) {
+    logError("settings pane", e);
+    return;
+  }
+  void Promise.resolve(registration).then(
+    (paneID) => {
+      if (shutdownStarted && typeof paneID === "string") {
+        bestEffort("settings pane unregister", () => panes.unregister?.(paneID));
+      }
+    },
+    (e: unknown) => logError("settings pane", e),
+  );
+}
+
+/** Whether a shutdown began; if one did, notes the stage where startup stops. */
+function shutdownBegan(stage: string): boolean {
+  if (!shutdownStarted) return false;
+  Zotero.debug(`[Citegeist] Shutdown began during startup (${stage}); startup stops here`);
+  return true;
+}
+
+/** Run `step`, logging a throw under `context` rather than letting it skip the steps after it. */
+function bestEffort(context: string, step: () => void): void {
+  try {
+    step();
+  } catch (e) {
+    logError(context, e);
+  }
+}
+
+/** Every open main window, or none when Zotero cannot list them. */
+function mainWindows(context: string): Window[] {
+  try {
+    return Zotero.getMainWindows();
+  } catch (e) {
+    logError(`${context} getMainWindows`, e);
+    return [];
+  }
+}
+
+/** Close the cache, or wait on the close already under way (see `cacheClosing`). */
+function closeCacheOnce(context: string): Promise<void> {
+  cacheClosing ??= closeCache().catch((e) => logError(context, e));
+  return cacheClosing;
+}
+
+/**
+ * Take Citegeist's menus down everywhere: in each of `windows`, the DOM
+ * fallback's entries and listeners and the entries MenuManager rendered, then
+ * the process-global MenuManager registration. Each step is best-effort, so a
+ * window that throws does not keep the others' menus, and the global teardown
+ * runs however many windows could be read. `context` prefixes the diagnostic
+ * labels.
+ */
+function unregisterAllMenus(context: string, windows: readonly Window[]): void {
+  for (const win of windows) {
+    // Zotero 7 DOM fallback: delete with registerViaDOM (U9)
+    bestEffort(`${context} unregisterMenus`, () => unregisterMenus(win));
+    bestEffort(`${context} removeRenderedMenus`, () => removeRenderedMenus(win));
+  }
+  bestEffort(`${context} unregisterGlobalMenus`, unregisterGlobalMenus);
+}
+
 export async function onShutdown(_data: PluginData): Promise<void> {
+  shutdownStarted = true;
   Zotero.debug("[Citegeist] Shutting down");
   cacheReady = false;
-  removeDiagnosticsBridge();
+  removeBridge();
 
-  const win = Zotero.getMainWindow() as Window | null;
-  // Each UI-teardown step is best-effort: a throw in any one of them must not
-  // strand the open SQLite handle. closeCache() runs unconditionally last.
-  try {
-    if (win) unregisterMenus(win);
-  } catch (e) {
-    logError("shutdown unregisterMenus", e);
+  // Everything before the first await runs before Zotero unregisters
+  // Citegeist's translations. bootstrap.js does not wait for this promise, and
+  // Zotero runs its plugin-shutdown observers and then unregisterLocales as
+  // soon as the bootstrap `shutdown` returns (plugins.js `onDisabled`, @8.0.4
+  // 720-721, @9.0.6 771-772, @10.0.2 916-917; an upgrade or uninstall calls the
+  // no-op `uninstall` in between, @10.0.2 862-866 and 925-929). So the
+  // translation link and every entry that uses Citegeist's translations leave
+  // each window here, and each step is best-effort: a throw in any one of them
+  // must not strand the open SQLite handle, which closes last.
+  const windows = mainWindows("shutdown");
+  unregisterAllMenus("shutdown", windows);
+  for (const win of windows) {
+    bestEffort("shutdown removeCitegeistFTL", () => removeCitegeistFTL(win));
   }
-  // Global MenuManager teardown is process-scoped, not window-scoped: run it
-  // unconditionally, independent of whether getMainWindow() returned a window.
-  // (unregisterMenus above only clears per-window DOM nodes.)
-  try {
-    unregisterGlobalMenus();
-  } catch (e) {
-    logError("shutdown unregisterGlobalMenus", e);
+  if (columnsRegistering) {
+    Zotero.debug("[Citegeist] Columns still registering; startup removes them when it stops");
+  } else {
+    bestEffort("shutdown unregisterCitationColumn", unregisterCitationColumn);
   }
-  try {
-    unregisterCitationColumn();
-  } catch (e) {
-    logError("shutdown unregisterCitationColumn", e);
-  }
-  try {
-    unregisterCitationPane();
-  } catch (e) {
-    logError("shutdown unregisterCitationPane", e);
-  }
-  try {
-    clearSourceStatsCache();
-  } catch (e) {
-    logError("shutdown clearSourceStatsCache", e);
-  }
-  try {
-    clearAuthorProfileCache();
-  } catch (e) {
-    logError("shutdown clearAuthorProfileCache", e);
-  }
-  await closeCache().catch((e) => logError("cache close", e));
+  bestEffort("shutdown unregisterCitationPane", unregisterCitationPane);
+  bestEffort("shutdown clearSourceStatsCache", clearSourceStatsCache);
+  bestEffort("shutdown clearAuthorProfileCache", clearAuthorProfileCache);
+  await closeCacheOnce("cache close");
 
   Zotero.debug("[Citegeist] Shutdown complete");
 }
@@ -307,18 +420,60 @@ export async function onShutdown(_data: PluginData): Promise<void> {
  * Attach Citegeist's FTL to a window so the item-pane section's l10nIDs
  * (citegeist-pane-*) and the MenuManager menu labels (citegeist-menu-*) resolve
  * to visible text. Uses the bare filename against Zotero's auto-registered
- * Fluent source (see FTL_FILE). `insertFTLIfNeeded` is idempotent — the "IfNeeded"
- * check skips a duplicate link — so calling it on both startup and every window
- * load is safe. Typings lack MozXULElement, hence the cast.
+ * Fluent source (see FTL_FILE). Typings lack MozXULElement, hence the cast.
+ *
+ * Always a new link: one already there is removed first. `insertFTLIfNeeded`
+ * adds nothing when the link exists, and only a new link makes the window drop
+ * the translations it cached (see `removeCitegeistFTL`). This copy's shutdown
+ * removes its link, but a copy of v2.0.5 or earlier leaves its own behind, so an
+ * in-place upgrade from one would otherwise run on whatever the window cached
+ * from the old copy, or while no source served Citegeist's translations: a
+ * broken right-click menu and unlabelled entries. Calling this on both startup
+ * and a window load is safe; the window keeps exactly one link.
  */
 function ensureCitegeistFTL(win: Window): void {
   try {
     const mozXUL = (win as unknown as { MozXULElement?: { insertFTLIfNeeded(f: string): void } })
       .MozXULElement;
-    mozXUL?.insertFTLIfNeeded(FTL_FILE);
+    if (!mozXUL) return;
+    bestEffort("ensureCitegeistFTL remove old link", () => removeCitegeistFTL(win));
+    mozXUL.insertFTLIfNeeded(FTL_FILE);
   } catch (e) {
     logError("ensureCitegeistFTL", e);
   }
+}
+
+/**
+ * Remove the localization link `ensureCitegeistFTL` added to `win`: an XHTML
+ * `<link rel="localization">` with the bare file name as its `href`
+ * (`MozXULElement.insertFTLIfNeeded`, customElements.js@esr140 587-621).
+ *
+ * The link must go before Zotero unregisters Citegeist's translations. A string
+ * resource ID is a required resource (L10nRegistry.cpp@esr140 196-201), so a
+ * window that still lists `citegeist.ftl` once no source serves it gets no
+ * translations built at all, and every `translateFragment` in it rejects with
+ * no reason (DOMLocalization.cpp@esr140 272-276): Zotero's right-click menu never
+ * builds and new text renders blank until Zotero restarts. Removing the link
+ * drops the resource from the window's localization (HTMLLinkElement.cpp@esr140
+ * 122-131, Document.cpp@esr140 4601-4619). Zotero's sample plugin removes its link
+ * the same way when it shuts down (zotero/make-it-red@70f709d, src-2.0
+ * bootstrap.js 34-38 and make-it-red.js 63-78).
+ *
+ * Removing it is also what lets a re-enable repair the window. A window caches
+ * the translations it built, and only a change to its own resource list clears
+ * that cache (fluent-fallback localization.rs@esr140 64-78 and 93-95, through
+ * localization-ffi lib.rs@esr140 487-500): Zotero registering the source again
+ * tells no window (l10nregistry-ffi registry.rs@esr140 302-336). A link left in
+ * place keeps whatever the window cached while the source was gone, and the next
+ * startup's `insertFTLIfNeeded` finds the link and adds nothing, so the menu
+ * stayed broken and Citegeist's entries unlabelled after a re-enable (seen with
+ * v2.0.5 on Zotero 10.0.4). With the link removed here, the next startup inserts
+ * a new one, which clears the cache (HTMLLinkElement.cpp@esr140 97-101,
+ * Document.cpp@esr140 4565-4585).
+ */
+function removeCitegeistFTL(win: Window): void {
+  const links = win.document.querySelectorAll(`link[rel="localization"][href="${FTL_FILE}"]`);
+  for (const link of Array.from(links)) link.remove();
 }
 
 export function onMainWindowLoad(win: Window): void {
@@ -339,9 +494,8 @@ export function onMainWindowLoad(win: Window): void {
 export function onMainWindowUnload(win: Window): void {
   Zotero.debug("[Citegeist] Main window unloading");
 
-  // Remove the FTL localization link (inserted by insertFTLIfNeeded, keyed by
-  // its bare href).
-  win.document.querySelector(`link[href="${FTL_FILE}"]`)?.remove();
+  bestEffort("window unload removeCitegeistFTL", () => removeCitegeistFTL(win));
 
+  // Zotero 7 DOM fallback: delete with registerViaDOM (U9)
   unregisterMenus(win);
 }

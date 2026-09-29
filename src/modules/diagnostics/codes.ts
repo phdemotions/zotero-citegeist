@@ -90,6 +90,18 @@ export const DIAGNOSTIC_CODES = {
     message:
       "Citegeist's local database couldn't be opened. Restart Zotero; if it persists, quit Zotero and check that citegeist.sqlite in your data folder isn't quarantined by antivirus.",
   },
+  "CG-DB03": {
+    code: "CG-DB03",
+    area: "DB",
+    message:
+      "Citegeist's local database was written by a newer version of Citegeist, so this version shows what's already saved but won't change the file. Update Citegeist to start saving new citation data again.",
+  },
+  "CG-DB04": {
+    code: "CG-DB04",
+    area: "DB",
+    message:
+      "Citegeist's local database carries a version stamp no Citegeist release writes, so the file may be damaged. This version shows what's already saved but won't change it. Quit Zotero, move citegeist.sqlite out of your Zotero data folder and restart: confirmed title matches come back from each item's Extra field, and citation data is fetched again. If this code comes back, report it on GitHub.",
+  },
   "CG-MATCH01": {
     code: "CG-MATCH01",
     area: "MATCH",
@@ -114,6 +126,12 @@ export const DIAGNOSTIC_CODES = {
     code: "CG-UI01",
     area: "UI",
     message: "Something went wrong drawing this panel. Switch items and back, or restart Zotero.",
+  },
+  "CG-UI02": {
+    code: "CG-UI02",
+    area: "UI",
+    message:
+      "Citegeist couldn't read which collections or libraries are selected. Instead of guessing, it hid its collection menu items, or opened the citation browser with no default collection, so items added there go to My Library. Updating Citegeist usually fixes this; if it doesn't, report this code on GitHub.",
   },
   "CG-BUG01": {
     code: "CG-BUG01",

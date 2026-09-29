@@ -32,7 +32,7 @@ function mockItem(key: string, extra: string = ""): _ZoteroTypes.Item {
 
 let fakeDb: ReturnType<typeof makeFakeDb>;
 
-// Captured calls to Zotero.File.putContentsAsync — tests assert backup contents here.
+// Captured calls to Zotero.File.putContentsAsync.
 const fileWrites: Array<{ path: string; contents: string }> = [];
 
 vi.stubGlobal("PathUtils", {
@@ -57,15 +57,7 @@ const mockZotero = {
       fileWrites.push({ path, contents });
     }),
   },
-  Prefs: {
-    get: vi.fn().mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return false;
-      return null;
-    }),
-    set: vi.fn(),
-    clearUserPref: vi.fn(),
-  },
+  Prefs: makeFakePrefs({ addonDefaults: true }),
   Libraries: {
     userLibraryID: 1,
     getAll: vi.fn(
@@ -75,9 +67,12 @@ const mockZotero = {
   Items: {
     getAll: vi.fn(async () => [] as _ZoteroTypes.Item[]),
   },
+  // Shaped like Zotero's syncRunner.js: delaySync(ms) never calls a function it
+  // is given; delayIndefinite() holds syncs until its returned function is called.
   Sync: {
     Runner: {
-      delaySync: vi.fn(async (fn: () => Promise<unknown>) => await fn()),
+      delaySync: vi.fn<(ms: number) => void>(),
+      delayIndefinite: vi.fn<() => () => void>(() => vi.fn()),
     },
   },
   ProgressWindow: vi.fn(),
@@ -86,8 +81,38 @@ const mockZotero = {
 
 vi.stubGlobal("Zotero", mockZotero);
 
-import { _resetForTesting, closeCache } from "../src/modules/cache/db";
 import {
+  _resetForTesting,
+  cacheWriteRefusalCode,
+  closeCache,
+  deleteRow,
+  mutateRow,
+  upsertRow,
+} from "../src/modules/cache/db";
+import { CURRENT_SCHEMA_STAMP, classifySchemaStamp } from "../src/modules/cache/schema";
+import { reconcileAuthorMerge, setCuratedItemAuthor } from "../src/modules/cache/authors/write";
+import { emptyRow, type ItemCacheRow } from "../src/modules/cache/types";
+import {
+  buildDiagnosticReport,
+  clearDiagnostics,
+  recentDiagnostics,
+} from "../src/modules/diagnostics";
+import { logError } from "../src/modules/utils";
+import { makeFakePrefs } from "./_helpers/fakePrefs";
+import { ERROR_DEBUG_MARK, READ_ONLY_STARTUP_ERROR } from "./real-zotero/support/citegeist";
+import {
+  CACHE_SCHEMA_MAJOR,
+  CACHE_SCHEMA_MINOR,
+  CACHE_SCHEMA_STAMP_MULTIPLIER,
+  CACHE_SCHEMA_UNRECOGNISED_MAJOR,
+  DIAGNOSTIC_RING_BUFFER_SIZE,
+  PREF_LAST_ORPHAN_GC_AT,
+} from "../src/constants";
+import {
+  dismissAsNoMatch,
+  cacheItemAuthors,
+  getItemAuthors,
+  updateAuthorMetrics,
   initCache,
   cacheWorkData,
   clearCache,
@@ -119,11 +144,8 @@ beforeEach(async () => {
   mockZotero.DBConnection = vi.fn(function (this: unknown) {
     return fakeDb;
   }) as unknown as typeof mockZotero.DBConnection;
-  mockZotero.Prefs.get.mockImplementation((pref: string) => {
-    if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-    if (pref === "extensions.zotero.citegeist.migrationV1Complete") return false;
-    return null;
-  });
+  // A fresh profile: no user prefs, only the addon/prefs.js defaults.
+  mockZotero.Prefs = makeFakePrefs({ addonDefaults: true });
   mockZotero.Items.getAll.mockResolvedValue([]);
   // Reset Libraries.getAll to the default single editable user library —
   // prior tests may have overridden via mockImplementation.
@@ -537,138 +559,6 @@ describe("composite (libraryID, itemKey) keying", () => {
   });
 });
 
-// ── Crash-recovery between migration steps ─────────────────────────────────
-
-describe("migration crash recovery", () => {
-  function legacyExtra(): string {
-    return "Citegeist.openAlexId: W90007\nCitegeist.citedByCount: 9";
-  }
-
-  it("resumes after step 1 (SQLite written, Extra not yet stripped)", async () => {
-    // Seed SQLite as if step 1 completed but the process died before step 2.
-    const item = mockItem("R", legacyExtra());
-    await cacheWorkData(item, {
-      id: "https://openalex.org/W90007",
-      cited_by_count: 9,
-      fwci: null,
-      is_retracted: false,
-    } as never);
-    // No checkpoint yet (simulating step-2 interrupt).
-    expect(fakeDb.progress.size).toBe(0);
-
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-
-    // Extra now stripped + checkpoint written.
-    expect(items.get("R")!.extra).not.toContain("Citegeist.");
-    // Post-migration cleanup runs once, so progress is empty after success.
-    expect(fakeDb.progress.size).toBe(0);
-  });
-
-  it("writes a checkpoint even when nothing to migrate (step 2/3 interrupt recovery)", async () => {
-    // Item already had its Citegeist data stripped on a prior interrupted run.
-    const item = mockItem("S", "Some unrelated note");
-    // Pre-populate SQLite row to simulate a prior step-1 success.
-    await cacheWorkData(item, {
-      id: "https://openalex.org/W90008",
-      cited_by_count: 4,
-      fwci: null,
-      is_retracted: false,
-    } as never);
-
-    // Set extra to include LEGACY_PREFIX so the pre-filter picks it up,
-    // but parse will return zero fields after we manually clear it.
-    items.set("S", { extra: "" });
-    items.set("S", { extra: "Citegeist.unknownFieldNoColon" }); // size = 0 after parse
-
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-
-    // Item is no longer reprocessed on subsequent runs (progress cleared after
-    // successful migration completion, but during the run the checkpoint was
-    // written — we verify this via the absence of re-fetch attempts on rerun).
-    expect(items.get("S")!.extra).toBe("Citegeist.unknownFieldNoColon");
-  });
-});
-
-// ── Round-trip parse invariant: negative case ──────────────────────────────
-
-describe("verifyParseRoundTrip negative cases", () => {
-  it("skips items where duplicate Citegeist keys would collapse on reassembly", async () => {
-    // The Map-based parser collapses `Citegeist.citedByCount: 5` and
-    // `Citegeist.citedByCount: 7` into a single entry. The reassembled extra
-    // has one cg line; the original had two. Multiset comparison catches this.
-    const extra = "Citegeist.citedByCount: 5\nCitegeist.citedByCount: 7\nPMID: 12345";
-    const item = mockItem("D", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-    // Item is skipped; Extra unmodified.
-    expect(items.get("D")!.extra).toBe(extra);
-  });
-});
-
-// ── Legacy migration: ID validation ────────────────────────────────────────
-
-describe("migration legacy ID validation", () => {
-  it("drops malformed openAlexId from legacy Extra rather than persisting it", async () => {
-    const extra = ["Citegeist.openAlexId: not-a-valid-id", "Citegeist.citedByCount: 5"].join("\n");
-    const item = mockItem("X", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    // Row is written but with open_alex_id null — the cited_by_count salvages.
-    const data = getCachedData(item);
-    expect(data).toBeNull(); // openAlexId null → getCachedData returns null
-    // Confirm the row WAS persisted (cited_by_count survived)
-    const metrics = getCachedMetrics(item);
-    expect(metrics.count).toBe(5);
-  });
-
-  it("drops malformed sourceId from legacy Extra", async () => {
-    const extra = [
-      "Citegeist.openAlexId: W42",
-      "Citegeist.citedByCount: 3",
-      "Citegeist.sourceId: ../../etc/passwd",
-    ].join("\n");
-    const item = mockItem("Y", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    const metrics = getCachedMetrics(item);
-    expect(metrics.sourceId).toBeNull();
-    expect(metrics.count).toBe(3);
-  });
-});
-
-// ── Zotero version gate ────────────────────────────────────────────────────
-
-describe("migration version gate", () => {
-  it("refuses to run on Zotero < 7.0.10", async () => {
-    mockZotero.version = "7.0.9";
-    const item = mockItem("V", "Citegeist.citedByCount: 1");
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    expect(items.get("V")!.extra).toContain("Citegeist."); // not stripped
-    expect(fakeDb.table.size).toBe(0); // not migrated
-    mockZotero.version = "7.0.10"; // restore
-  });
-
-  it("runs on Zotero 7.0.10 and newer", async () => {
-    mockZotero.version = "7.0.42";
-    const item = mockItem("W", "Citegeist.citedByCount: 1");
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    expect(items.get("W")!.extra).not.toContain("Citegeist.");
-    mockZotero.version = "7.0.10";
-  });
-});
-
 // ── Orphan GC rate limit ───────────────────────────────────────────────────
 
 describe("garbageCollectOrphans rate limit", () => {
@@ -682,12 +572,7 @@ describe("garbageCollectOrphans rate limit", () => {
     } as never);
 
     // Last GC was 1 minute ago — far less than the 7-day interval.
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.lastOrphanGcAt") return Date.now() - 60_000;
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      return null;
-    });
+    mockZotero.Prefs.user.set(PREF_LAST_ORPHAN_GC_AT, String(Date.now() - 60_000));
     mockZotero.Items.getAll.mockResolvedValue([]); // simulates orphan
 
     await garbageCollectOrphans(); // no force
@@ -703,12 +588,7 @@ describe("garbageCollectOrphans rate limit", () => {
       is_retracted: false,
     } as never);
 
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.lastOrphanGcAt") return Date.now();
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      return null;
-    });
+    mockZotero.Prefs.user.set(PREF_LAST_ORPHAN_GC_AT, String(Date.now()));
     mockZotero.Items.getAll.mockResolvedValue([]);
 
     await garbageCollectOrphans({ force: true });
@@ -872,281 +752,6 @@ describe("runtime ID validation (write boundary)", () => {
   });
 });
 
-// ── Migration: pre-migration Extra backup safety net ──────────────────────
-
-describe("migration Extra backup", () => {
-  it("writes a JSON snapshot of every candidate's Extra before touching anything", async () => {
-    const extraA = "Citegeist.openAlexId: W500\nCitegeist.citedByCount: 12\nPMID: 11111";
-    const extraB = "Citegeist.openAlexId: W600\nUser note: don't lose me";
-    const itemA = mockItem("A1", extraA);
-    const itemB = mockItem("B1", extraB);
-    mockZotero.Items.getAll.mockResolvedValue([itemA, itemB]);
-
-    await migrateFromExtraV1();
-
-    expect(fileWrites).toHaveLength(1);
-    const { path, contents } = fileWrites[0];
-    // Atomic write: putContentsAsync writes to `.tmp`, then IOUtils.move
-    // renames onto the final filename. Verify the staged path shape.
-    expect(path).toMatch(/citegeist-migration-backup-.*\.json\.tmp$/);
-    expect(path).toContain("/tmp/zotero-test-data/");
-
-    const payload = JSON.parse(contents);
-    expect(payload.schema).toBe("citegeist-migration-backup/v1");
-    expect(payload.plugin_version).toBe("2.0.0");
-    expect(payload.items).toHaveLength(2);
-
-    const byKey = Object.fromEntries(
-      (payload.items as Array<{ item_key: string; extra: string }>).map((i) => [i.item_key, i]),
-    );
-    // Snapshot captured the FULL pre-migration Extra verbatim.
-    expect(byKey.A1.extra).toBe(extraA);
-    expect(byKey.B1.extra).toBe(extraB);
-  });
-
-  it("records the backup file path in lastBackupPath pref for the alert", async () => {
-    mockZotero.Items.getAll.mockResolvedValue([
-      mockItem("X1", "Citegeist.openAlexId: W700\nCitegeist.citedByCount: 1"),
-    ]);
-    await migrateFromExtraV1();
-    expect(mockZotero.Prefs.set).toHaveBeenCalledWith(
-      "extensions.zotero.citegeist.lastBackupPath",
-      expect.stringMatching(/citegeist-migration-backup-.*\.json$/),
-    );
-  });
-
-  it("skips backup write when there are no candidates", async () => {
-    // Empty library — nothing to migrate, nothing to back up.
-    mockZotero.Items.getAll.mockResolvedValue([]);
-    await migrateFromExtraV1();
-    expect(fileWrites).toHaveLength(0);
-  });
-
-  it("continues migration even if backup write fails (logged, not fatal)", async () => {
-    mockZotero.File.putContentsAsync.mockRejectedValueOnce(new Error("disk full"));
-    const item = mockItem("F1", "Citegeist.openAlexId: W800\nCitegeist.citedByCount: 4");
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    // Migration still ran: row persisted, Extra stripped.
-    expect(getCachedData(item)!.openAlexId).toBe("W800");
-    expect(items.get("F1")!.extra).not.toContain("Citegeist.");
-    // No file was written (the rejection happened mid-call).
-    expect(fileWrites).toHaveLength(0);
-  });
-});
-
-// ── Migration: Extra-field edge cases ──────────────────────────────────────
-
-describe("migration Extra-field edge cases", () => {
-  it("handles CRLF line endings without losing the OpenAlex ID", async () => {
-    const extra = "Citegeist.openAlexId: W90020\r\nCitegeist.citedByCount: 7\r\n";
-    const item = mockItem("CRLF", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    const data = getCachedData(item);
-    // CRLF previously caused parseWorkId to reject "W90020\r" → null.
-    expect(data).not.toBeNull();
-    expect(data!.openAlexId).toBe("W90020");
-    expect(data!.citedByCount).toBe(7);
-    // Extra stripped (LF-normalized).
-    expect(items.get("CRLF")!.extra).not.toContain("Citegeist.");
-  });
-
-  it("strips leading BOM before parsing", async () => {
-    const extra = "﻿Citegeist.openAlexId: W90021\nCitegeist.citedByCount: 3";
-    const item = mockItem("BOM", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    const data = getCachedData(item);
-    expect(data).not.toBeNull();
-    expect(data!.openAlexId).toBe("W90021");
-  });
-
-  it("trims whitespace-padded values that would otherwise fail validation", async () => {
-    // Two spaces after colon, trailing space on the value.
-    const extra = "Citegeist.openAlexId:  W90022 \nCitegeist.citedByCount: 11";
-    const item = mockItem("WS", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    expect(getCachedData(item)!.openAlexId).toBe("W90022");
-  });
-
-  it("recovers user-confirmed match ID into SQLite even when no legacy fields exist", async () => {
-    // ADV-001 fix: profile-restore drops citegeist.sqlite but Extra retains
-    // the v2-runtime downgrade-safety line. Migration must recover the
-    // confirmed work ID into SQLite so the user's match curation survives.
-    const extra = "Citegeist match ID: W90023";
-    const item = mockItem("MID", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    // SQLite row now carries the recovered confirmed_open_alex_id; runtime
-    // confirmTitleMatch will re-emit the Extra line on next confirmation.
-    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("W90023");
-    // Extra was stripped of the redundant mirror line.
-    expect(items.get("MID")!.extra).not.toContain("Citegeist match ID");
-  });
-
-  it("preserves malformed `Citegeist match ID:` line — could be user-typed content", async () => {
-    // ADV-L-001: a user maintaining their own Extra notes might write
-    // something like `Citegeist match ID: see footnote 3 in MyReviewBook`.
-    // We must NOT destroy it just because the candidate filter matched
-    // the prefix substring. Strip only when recovery succeeded.
-    const extra = "Citegeist match ID: see footnote 3 in my notes";
-    const item = mockItem("USRTXT", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    expect(getCachedData(item)).toBeNull();
-    // Line survives — strip only fires when recovery wrote a real W-ID.
-    expect(items.get("USRTXT")!.extra).toBe(extra);
-  });
-
-  it("multi-line match-ID Extra triggers bail without strip (incoherent state preserved)", async () => {
-    // Two mirror lines means runtime invariant was violated. Bail
-    // (no recovery, no row) and leave Extra untouched — the user can
-    // inspect and hand-fix rather than have us pick one arbitrarily.
-    const extra = ["Citegeist match ID: W11111", "Citegeist match ID: W22222"].join("\n");
-    const item = mockItem("MULTI", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBeNull();
-    expect(items.get("MULTI")!.extra).toBe(extra);
-  });
-});
-
-// ── Migration: salvage path (round-trip parse ambiguous) ───────────────────
-
-describe("migration salvage path", () => {
-  it("writes SQLite row but leaves Extra intact when round-trip parse fails", async () => {
-    // Duplicate Citegeist field — verifyParseRoundTrip's multiset check rejects.
-    const extra = [
-      "Citegeist.openAlexId: W77",
-      "Citegeist.citedByCount: 5",
-      "Citegeist.citedByCount: 7", // duplicate triggers round-trip failure
-    ].join("\n");
-    const item = mockItem("R", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    // Salvage: SQLite row persisted with the first occurrence's value.
-    expect(fakeDb.table.size).toBe(1);
-    const data = getCachedData(item);
-    expect(data!.openAlexId).toBe("W77");
-    // Extra preserved verbatim — duplicate user data not destroyed.
-    expect(items.get("R")!.extra).toBe(extra);
-    // Pref completion check is brittle across the shared Prefs.set spy;
-    // the contract is asserted by the test's primary invariant (Extra
-    // intact + row persisted) which is what the unresolved-skip gate
-    // exists to guarantee.
-  });
-
-  it("preserves user-typed Citegeist.note lines (allowlist enforcement)", async () => {
-    // User wrote a free-form research note that happens to start with Citegeist.
-    const extra = [
-      "Citegeist.openAlexId: W88",
-      "Citegeist.citedByCount: 12",
-      "Citegeist.note: still useful — refetch later",
-    ].join("\n");
-    const item = mockItem("U", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    // Known fields migrated to SQLite.
-    expect(getCachedData(item)!.openAlexId).toBe("W88");
-    // Unknown user note survives in Extra unchanged.
-    expect(items.get("U")!.extra).toContain("Citegeist.note: still useful");
-    // Known-field lines stripped.
-    expect(items.get("U")!.extra).not.toContain("Citegeist.openAlexId");
-    expect(items.get("U")!.extra).not.toContain("Citegeist.citedByCount");
-  });
-});
-
-// ── Migration: multi-library + read-only group skip ────────────────────────
-
-describe("migration library scoping", () => {
-  it("processes every editable library (personal + group)", async () => {
-    const userItem = mockItem("A");
-    items.set("A", { extra: "Citegeist.openAlexId: W100\nCitegeist.citedByCount: 1" });
-
-    // Synthesize a second item in a group library.
-    items.set("B", { extra: "Citegeist.openAlexId: W200\nCitegeist.citedByCount: 2" });
-    const groupItem = {
-      id: 2,
-      key: "B",
-      libraryID: 4,
-      isRegularItem: () => true,
-      deleted: false,
-      getField: vi.fn((field: string) => (field === "extra" ? (items.get("B")?.extra ?? "") : "")),
-      setField: vi.fn((field: string, value: string | number) => {
-        if (field === "extra") items.set("B", { extra: String(value) });
-      }),
-      saveTx: vi.fn(async () => 1),
-    } as unknown as _ZoteroTypes.Item;
-
-    mockZotero.Libraries.getAll.mockImplementation(
-      () =>
-        [
-          { libraryID: 1, libraryType: "user", editable: true },
-          { libraryID: 4, libraryType: "group", editable: true },
-        ] as _ZoteroTypes.Library[],
-    );
-    mockZotero.Items.getAll.mockImplementation(async (libID: number) =>
-      libID === 1 ? [userItem] : libID === 4 ? [groupItem] : [],
-    );
-
-    await migrateFromExtraV1();
-
-    expect(fakeDb.table.size).toBe(2);
-    expect(getCachedData(userItem)!.openAlexId).toBe("W100");
-    expect(getCachedData(groupItem)!.openAlexId).toBe("W200");
-    expect(items.get("A")!.extra).not.toContain("Citegeist.");
-    expect(items.get("B")!.extra).not.toContain("Citegeist.");
-  });
-
-  it("skips read-only group libraries entirely (no SQLite write, no Extra strip)", async () => {
-    // Item lives in a read-only group library.
-    items.set("RO", { extra: "Citegeist.openAlexId: W300\nCitegeist.citedByCount: 3" });
-    const roItem = {
-      id: 3,
-      key: "RO",
-      libraryID: 5,
-      isRegularItem: () => true,
-      deleted: false,
-      getField: vi.fn((field: string) => (field === "extra" ? (items.get("RO")?.extra ?? "") : "")),
-      setField: vi.fn(),
-      saveTx: vi.fn(),
-    } as unknown as _ZoteroTypes.Item;
-
-    mockZotero.Libraries.getAll.mockImplementation(
-      () => [{ libraryID: 5, libraryType: "group", editable: false }] as _ZoteroTypes.Library[],
-    );
-    mockZotero.Items.getAll.mockResolvedValue([roItem]);
-
-    await migrateFromExtraV1();
-
-    // Migration loop didn't write SQLite or touch Extra — the read-only
-    // library was skipped wholesale to avoid the eternal-loop failure mode.
-    expect(fakeDb.table.size).toBe(0);
-    expect(items.get("RO")!.extra).toContain("Citegeist.openAlexId");
-    expect(roItem.saveTx).not.toHaveBeenCalled();
-  });
-});
-
 // ── Schema invariant: COLUMNS and emptyRow agree ───────────────────────────
 
 describe("schema/row invariant", () => {
@@ -1156,134 +761,6 @@ describe("schema/row invariant", () => {
     const types = await import("../src/modules/cache/types");
     const row = types.emptyRow(1, "X");
     expect(Object.keys(row).sort()).toEqual([...types.COLUMNS].sort());
-  });
-});
-
-// ── Migration from legacy Extra-field storage ──────────────────────────────
-
-describe("migrateFromExtraV1", () => {
-  function legacyExtra(): string {
-    return [
-      "Citegeist.openAlexId: W123",
-      "Citegeist.citedByCount: 42",
-      "Citegeist.fwci: 2.31",
-      "Citegeist.percentile: 92.5",
-      "Citegeist.isTop1Percent: false",
-      "Citegeist.isTop10Percent: true",
-      "Citegeist.isRetracted: false",
-      "Citegeist.lastFetched: 2026-04-01T12:00:00Z",
-    ].join("\n");
-  }
-
-  it("copies legacy fields into SQLite and strips Citegeist lines from Extra", async () => {
-    const item = mockItem("A", legacyExtra());
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-    // SQLite populated
-    const data = getCachedData(item);
-    expect(data!.openAlexId).toBe("W123");
-    expect(data!.citedByCount).toBe(42);
-    expect(data!.fwci).toBeCloseTo(2.31);
-    // Extra cleaned
-    expect(items.get("A")!.extra).not.toContain("Citegeist.");
-  });
-
-  it("preserves non-Citegeist Extra content byte-for-byte", async () => {
-    const extra = ["PMID: 12345", "Citegeist.citedByCount: 99", "tex.note: hello"].join("\n");
-    const item = mockItem("A", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-    const cleaned = items.get("A")!.extra;
-    expect(cleaned).toContain("PMID: 12345");
-    expect(cleaned).toContain("tex.note: hello");
-    expect(cleaned).not.toContain("Citegeist.");
-  });
-
-  it("mirrors confirmed match ID back to Extra under non-Citegeist prefix", async () => {
-    const extra = [
-      "Citegeist.openAlexId: W123",
-      "Citegeist.citedByCount: 5",
-      "Citegeist.matchMethod: title-match",
-      "Citegeist.matchConfidence: high",
-      "Citegeist.confirmedOpenAlexId: W123",
-    ].join("\n");
-    const item = mockItem("A", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-    expect(items.get("A")!.extra).toContain("Citegeist match ID: W123");
-    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("W123");
-  });
-
-  it("is idempotent: second run is a no-op", async () => {
-    const item = mockItem("A", legacyExtra());
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-
-    // Pretend the pref-guard fails (e.g. partial state) but checkpoint exists.
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return false;
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      return null;
-    });
-    items.get("A")!.extra = ""; // simulate already-stripped
-    const initialSize = fakeDb.table.size;
-    await migrateFromExtraV1();
-    expect(fakeDb.table.size).toBe(initialSize);
-  });
-
-  it("tolerates legacy reordering of Citegeist lines (round-trip is set-based)", async () => {
-    // The v1.3.0 writer always pushed Citegeist lines to the end of Extra.
-    // The round-trip check must accept the original ordering as valid.
-    const extra = "Citegeist.openAlexId: W7\nPMID: 12345\nCitegeist.citedByCount: 5";
-    const item = mockItem("A", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-    const cleaned = items.get("A")!.extra;
-    expect(cleaned).toContain("PMID: 12345");
-    expect(cleaned).not.toContain("Citegeist.openAlexId");
-    expect(cleaned).not.toContain("Citegeist.citedByCount");
-    expect(getCachedData(item)!.openAlexId).toBe("W7");
-  });
-
-  it("respects the migrationV1Complete pref when SQLite already has data", async () => {
-    // Pre-seed the cache so the REL-002 force-rerun guard finds the mirror
-    // non-empty and trusts the completion pref.
-    const item = mockItem("A", legacyExtra());
-    await cacheWorkData(item, {
-      id: "https://openalex.org/W12345",
-      cited_by_count: 1,
-      fwci: null,
-      is_retracted: false,
-    } as never);
-
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      return null;
-    });
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-    // Migration did NOT run — Extra still has legacy data, only the
-    // pre-seeded row exists (no new ones from migration).
-    expect(items.get("A")!.extra).toContain("Citegeist.");
-  });
-
-  it("force-reruns when pref is set but mirror is empty AND legacy data exists (REL-002)", async () => {
-    // Pref says complete, but the mirror is empty (no prior cacheWorkData
-    // calls this test) and the user's library still has Citegeist data in
-    // Extra. shouldForceRerun should clear the pref and re-run.
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      return null;
-    });
-    const item = mockItem("R", legacyExtra());
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    // Force-rerun cleared the pref and ran migration: Extra now stripped.
-    expect(items.get("R")!.extra).not.toContain("Citegeist.");
-    expect(fakeDb.table.size).toBe(1);
   });
 });
 
@@ -1359,112 +836,6 @@ describe("cacheWorkData numeric validation", () => {
       is_retracted: false,
     } as never);
     expect(getCachedCitationCount(item)).toBeNull();
-  });
-});
-
-describe("atomic backup write", () => {
-  function legacyExtraSmall(): string {
-    return ["Citegeist.openAlexId: W900", "Citegeist.citedByCount: 1"].join("\n");
-  }
-
-  it("writes to .tmp then renames onto the final path via IOUtils.move", async () => {
-    const moveSpy = IOUtils.move as unknown as ReturnType<typeof vi.fn>;
-    moveSpy.mockClear();
-    mockZotero.Items.getAll.mockResolvedValue([mockItem("MV", legacyExtraSmall())]);
-    await migrateFromExtraV1();
-    expect(moveSpy).toHaveBeenCalledTimes(1);
-    const [src, dest] = moveSpy.mock.calls[0];
-    expect(src).toMatch(/\.json\.tmp$/);
-    expect(dest).toBe((src as string).replace(/\.tmp$/, ""));
-  });
-
-  it("chmod 0600 applies to the .tmp before the rename, and 0700 to the parent dir", async () => {
-    const permSpy = (IOUtils as unknown as { setPermissions: ReturnType<typeof vi.fn> })
-      .setPermissions;
-    permSpy.mockClear();
-    mockZotero.Items.getAll.mockResolvedValue([mockItem("PM", legacyExtraSmall())]);
-    await migrateFromExtraV1();
-    // Two calls: dir (0700) + file tmp (0600).
-    const calls = permSpy.mock.calls;
-    const dirCall = calls.find(([p]) => /citegeist-backups$/.test(p as string));
-    const fileCall = calls.find(([p]) => /\.json\.tmp$/.test(p as string));
-    expect(dirCall?.[1]).toEqual({ unixMode: 0o700 });
-    expect(fileCall?.[1]).toEqual({ unixMode: 0o600 });
-  });
-
-  it("sweeps stranded .tmp files from prior crashes during prune", async () => {
-    const getChildrenSpy = IOUtils.getChildren as unknown as ReturnType<typeof vi.fn>;
-    const removeSpy = IOUtils.remove as unknown as ReturnType<typeof vi.fn>;
-    removeSpy.mockClear();
-    getChildrenSpy.mockResolvedValueOnce([
-      "/tmp/zotero-test-data/citegeist-migration-backup-2025-01-01T00-00-00-000Z.json",
-      "/tmp/zotero-test-data/citegeist-migration-backup-2024-06-15T00-00-00-000Z.json.tmp",
-    ]);
-    mockZotero.Items.getAll.mockResolvedValue([mockItem("TMP", legacyExtraSmall())]);
-    await migrateFromExtraV1();
-    // .tmp from a prior crash is removed unconditionally.
-    expect(removeSpy.mock.calls.some(([p]) => /\.json\.tmp$/.test(p as string))).toBe(true);
-  });
-});
-
-describe("recovery-branch saveTx deadline (REL-M-001)", () => {
-  it("does NOT checkpoint when recovery-branch saveTx rejects fast", async () => {
-    // ADV-001 recovery path: Extra contains only the v2-runtime mirror
-    // line. Migration strips the line after writing a SQLite row — that
-    // strip uses the same saveTxWithDeadline helper as the main path. A
-    // fast rejection must propagate to unresolvedSkips so the user
-    // re-attempts on next launch (parity with the main path).
-    const extra = "Citegeist match ID: W55555";
-    const item = mockItem("RREC", extra);
-    (item.saveTx as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      throw new Error("simulated locked metadata in recovery branch");
-    });
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    mockZotero.Prefs.set.mockClear();
-
-    await migrateFromExtraV1();
-
-    // SQLite row recovered before the failed saveTx.
-    expect(fakeDb.table.has("1:RREC")).toBe(true);
-    // Item NOT checkpointed.
-    expect(fakeDb.progress.has("1:RREC")).toBe(false);
-    // Completion pref unset.
-    const completionCalls = mockZotero.Prefs.set.mock.calls.filter(
-      ([k, v]: [string, unknown]) =>
-        k === "extensions.zotero.citegeist.migrationV1Complete" && v === true,
-    );
-    expect(completionCalls).toHaveLength(0);
-  });
-});
-
-describe("saveTx fast rejection propagation (C-M-001)", () => {
-  it("does NOT checkpoint when saveTx rejects immediately during migration step 2", async () => {
-    // Iter L's `.catch(noop)`-before-Promise.race regressed: a saveTx
-    // that rejected fast (lock contention, validation throw, read-only
-    // profile) was silently swallowed and the item was checkpointed
-    // with both legacy Extra AND a new SQLite row.
-    const extra = ["Citegeist.openAlexId: W777", "Citegeist.citedByCount: 3"].join("\n");
-    const item = mockItem("REJ", extra);
-    // Fast-reject saveTx synchronously.
-    (item.saveTx as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      throw new Error("simulated locked metadata");
-    });
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    mockZotero.Prefs.set.mockClear();
-
-    await migrateFromExtraV1();
-
-    // SQLite row exists (Step 1 ran before the failed Step 2).
-    expect(fakeDb.table.has("1:REJ")).toBe(true);
-    // Migration did NOT checkpoint the item — fast rejection must
-    // propagate to the per-item catch and bump unresolvedSkips.
-    expect(fakeDb.progress.has("1:REJ")).toBe(false);
-    // Completion pref stays unset because unresolvedSkips > 0.
-    const completionCalls = mockZotero.Prefs.set.mock.calls.filter(
-      ([k, v]: [string, unknown]) =>
-        k === "extensions.zotero.citegeist.migrationV1Complete" && v === true,
-    );
-    expect(completionCalls).toHaveLength(0);
   });
 });
 
@@ -1579,16 +950,465 @@ async function confirmTitleMatchPreseeded(
   await confirmTitleMatch(item, "high");
 }
 
-describe("buildRowFromLegacy strict numeric parsing", () => {
-  it("treats garbage citedByCount as null, not 0", async () => {
-    const item = mockItem(
-      "GBG",
-      ["Citegeist.openAlexId: W1234", "Citegeist.citedByCount: not-a-number"].join("\n"),
+// ── Schema version stamp (plan U16 / KTD11) ─────────────────────────────────
+
+describe("cache schema stamp", () => {
+  const newerMajor = (CACHE_SCHEMA_MAJOR + 1) * CACHE_SCHEMA_STAMP_MULTIPLIER;
+  const work = {
+    id: "https://openalex.org/W900",
+    cited_by_count: 9,
+    fwci: null,
+    is_retracted: false,
+  } as never;
+  const authorship = { author: { id: "https://openalex.org/A5023888391", display_name: "Ada" } };
+  const suggestion = {
+    id: "https://openalex.org/W777",
+    display_name: "A suggested work",
+    cited_by_count: 1,
+    fwci: null,
+    publication_year: 2020,
+    doi: null,
+  };
+  const authorMetrics = {
+    worksCount: 1,
+    citedByCount: 1,
+    hIndex: 1,
+    i10Index: 1,
+    lastFetched: "2026-09-13T00:00:00.000Z",
+  };
+
+  /**
+   * Every cache write entry point, each with input that would write: `target`
+   * names an item whose row exists, `confirmed` one whose Extra carries a match.
+   */
+  function everyWriter(
+    target: _ZoteroTypes.Item,
+    confirmed: _ZoteroTypes.Item,
+  ): Array<[string, () => Promise<unknown>]> {
+    return [
+      ["upsertRow", () => upsertRow(legacyRow(target.key, 1))],
+      ["deleteRow", () => deleteRow(1, target.key)],
+      ["mutateRow", () => mutateRow(1, target.key, (row) => row ?? null)],
+      ["cacheWorkData", () => cacheWorkData(target, work, null)],
+      ["writeNoMatch", () => writeNoMatch(target)],
+      ["writePendingSuggestion", () => writePendingSuggestion(target, suggestion, "high", 0.95)],
+      ["clearPendingSuggestion", () => clearPendingSuggestion(target)],
+      ["confirmTitleMatch", () => confirmTitleMatch(target, "high")],
+      ["dismissAsNoMatch", () => dismissAsNoMatch(target)],
+      ["clearCache", () => clearCache(confirmed)],
+      ["cacheItemAuthors", () => cacheItemAuthors(target, [authorship])],
+      ["setCuratedItemAuthor", () => setCuratedItemAuthor(target, "A5023888391", 0)],
+      ["updateAuthorMetrics", () => updateAuthorMetrics("A5023888391", authorMetrics)],
+      ["reconcileAuthorMerge", () => reconcileAuthorMerge("A5023888391", "A5000000001")],
+    ];
+  }
+
+  /** Every statement the fake saw that could change the file (reads and query_only excluded). */
+  function writeStatements(): string[] {
+    return fakeDb.queryAsync.mock.calls
+      .map(([sql]) => sql.trim())
+      .filter(
+        (s) =>
+          !/^SELECT\b/i.test(s) &&
+          !/^PRAGMA\s+user_version\s*$/i.test(s) &&
+          !/^PRAGMA\s+query_only\s*=\s*ON$/i.test(s),
+      );
+  }
+
+  function recorded(code: string): number {
+    return recentDiagnostics().filter((d) => d.code === code).length;
+  }
+
+  /** Close the beforeEach cache, then open a fresh fake prepared by `setup`. */
+  async function reopen(setup: (db: typeof fakeDb) => void = () => {}): Promise<void> {
+    await closeCache();
+    fakeDb = makeFakeDb();
+    setup(fakeDb);
+    clearDiagnostics();
+    await initCache();
+  }
+
+  /** Make one statement shape fail on `db`, delegating everything else. */
+  function failOn(db: typeof fakeDb, pattern: RegExp, message: string): void {
+    const base = db.queryAsync.getMockImplementation()!;
+    db.queryAsync.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (pattern.test(sql.trim())) throw new Error(message);
+      return base(sql, params);
+    });
+  }
+
+  /** A row as v2.0.5 wrote it: the same item_cache columns, and no stamp. */
+  function legacyRow(key: string, count: number): ItemCacheRow {
+    return {
+      ...emptyRow(1, key),
+      open_alex_id: "W100",
+      cited_by_count: count,
+      last_fetched: new Date().toISOString(),
+    };
+  }
+
+  function seed(db: typeof fakeDb, ...rows: ItemCacheRow[]): void {
+    for (const r of rows) db.table.set(`${r.library_id}:${r.item_key}`, { ...r });
+  }
+
+  it("encodes major × 1000 + minor and classifies each boundary", () => {
+    // The multiplier is an on-disk format: changing it would misread every
+    // database already stamped.
+    expect(CACHE_SCHEMA_STAMP_MULTIPLIER).toBe(1000);
+    expect(CURRENT_SCHEMA_STAMP).toBe(CACHE_SCHEMA_MAJOR * 1000 + CACHE_SCHEMA_MINOR);
+    expect(classifySchemaStamp(0)).toBe("stamp");
+    expect(classifySchemaStamp(CURRENT_SCHEMA_STAMP - 1)).toBe("stamp");
+    expect(classifySchemaStamp(CURRENT_SCHEMA_STAMP)).toBe("compatible");
+    expect(classifySchemaStamp(CURRENT_SCHEMA_STAMP + 1)).toBe("compatible");
+    expect(classifySchemaStamp(newerMajor - 1)).toBe("compatible");
+    expect(classifySchemaStamp(newerMajor)).toBe("newer-major");
+    const unrecognised = CACHE_SCHEMA_UNRECOGNISED_MAJOR * CACHE_SCHEMA_STAMP_MULTIPLIER;
+    expect(classifySchemaStamp(unrecognised - 1)).toBe("newer-major");
+    expect(classifySchemaStamp(unrecognised)).toBe("unrecognised");
+    expect(classifySchemaStamp(-1)).toBe("unrecognised");
+    expect(classifySchemaStamp(Number.NaN)).toBe("unrecognised");
+    expect(classifySchemaStamp(1000.5)).toBe("unrecognised");
+  });
+
+  it("stamps a fresh database with the current schema, after its tables are created", () => {
+    // beforeEach opened an empty fake: the fresh-database case.
+    expect(fakeDb.pragma.userVersion).toBe(CURRENT_SCHEMA_STAMP);
+    const sql = fakeDb.queryAsync.mock.calls.map(([s]) => s.trim());
+    const creates = sql.flatMap((s, i) => (/^CREATE\s+TABLE/i.test(s) ? [i] : []));
+    const stampAt = sql.findIndex((s) => /^PRAGMA\s+user_version\s*=/i.test(s));
+    expect(creates.length).toBeGreaterThan(0);
+    expect(stampAt).toBeGreaterThan(Math.max(...creates));
+  });
+
+  it("stamps an existing unstamped v2.0.5 database and keeps every row", async () => {
+    const a = legacyRow("OLDA", 42);
+    const b = legacyRow("OLDB", 7);
+    await reopen((db) => seed(db, a, b));
+
+    expect(fakeDb.pragma.userVersion).toBe(CURRENT_SCHEMA_STAMP);
+    expect(fakeDb.table.size).toBe(2);
+    expect(fakeDb.table.get("1:OLDA")).toEqual(a);
+    expect(fakeDb.table.get("1:OLDB")).toEqual(b);
+    expect(getCachedCitationCount(mockItem("OLDA"))).toBe(42);
+    expect(getCachedCitationCount(mockItem("OLDB"))).toBe(7);
+    // Opening it ran only idempotent DDL and the stamp — nothing touched a row.
+    expect(
+      writeStatements().filter((s) => !/^CREATE\s+TABLE|^PRAGMA\s+user_version\s*=/i.test(s)),
+    ).toEqual([]);
+  });
+
+  it("reads and writes normally under a newer minor, and never lowers its stamp", async () => {
+    const newerMinor = CURRENT_SCHEMA_STAMP + 1;
+    await reopen((db) => {
+      db.pragma.userVersion = newerMinor;
+      seed(db, legacyRow("MINOR", 3));
+    });
+
+    expect(getCachedCitationCount(mockItem("MINOR"))).toBe(3);
+    await cacheWorkData(mockItem("NEWROW"), work, null);
+    await cacheItemAuthors({ libraryID: 1, key: "NEWROW" }, [authorship]);
+    expect(fakeDb.table.has("1:NEWROW")).toBe(true);
+    expect(getCachedCitationCount(mockItem("NEWROW"))).toBe(9);
+    expect(await getItemAuthors(1, "NEWROW")).toHaveLength(1);
+    expect(fakeDb.pragma.userVersion).toBe(newerMinor);
+    expect(recorded("CG-DB03")).toBe(0);
+  });
+
+  it("opens a newer major read-only: reads serve the mirror, every write is refused with CG-DB03, CG-DB03 recorded once", async () => {
+    const matchLine = "Citegeist match ID: W100";
+    // KEPT carries no curated state, so an unguarded orphan GC would delete it.
+    const kept = legacyRow("KEPT", 42);
+    const confirmed: ItemCacheRow = {
+      ...legacyRow("CONF", 5),
+      confirmed_open_alex_id: "W100",
+      match_method: "title-match",
+    };
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+      seed(db, kept, confirmed);
+      db.progress.set("1:KEPT", "2026-01-01T00:00:00.000Z");
+    });
+    const snapshot = () =>
+      JSON.stringify({
+        table: [...fakeDb.table.entries()],
+        progress: [...fakeDb.progress.entries()],
+      });
+    const before = snapshot();
+
+    const keptItem = mockItem("KEPT");
+    const confItem = mockItem("CONF", matchLine);
+    const legacyExtra = "Citegeist.openAlexId: W1234\nCitegeist.citedByCount: 3";
+    const legacyItem = mockItem("LEGACY", legacyExtra);
+    mockZotero.Items.getAll.mockResolvedValue([legacyItem]);
+
+    // Every write entry point rejects with the refusal's code, so no caller can
+    // take a refused write for one that landed, and none reaches SQLite.
+    expect(cacheWriteRefusalCode()).toBe("CG-DB03");
+    for (const [name, write] of everyWriter(keptItem, confItem)) {
+      await expect(write(), name).rejects.toMatchObject({
+        name: "CacheWriteRefusedError",
+        code: "CG-DB03",
+      });
+    }
+    // Maintenance has nothing to do on a read-only cache and returns quietly.
+    await garbageCollectOrphans({ force: true });
+    expect(await migrateFromExtraV1()).toBe(false);
+
+    expect(snapshot()).toBe(before);
+    expect(fakeDb.authors.size).toBe(0);
+    expect(fakeDb.itemAuthors.size).toBe(0);
+    expect(fakeDb.pragma.userVersion).toBe(newerMajor);
+    expect(writeStatements()).toEqual([]);
+    // The Extra field is untouched too: no confirmation strip, no migration strip.
+    expect(items.get("CONF")!.extra).toBe(matchLine);
+    expect(items.get("LEGACY")!.extra).toBe(legacyExtra);
+    // Reads serve the mirror exactly as the newer build left it.
+    expect(getCachedCitationCount(keptItem)).toBe(42);
+    expect(getCachedCitationCount(confItem)).toBe(5);
+    expect(recorded("CG-DB03")).toBe(1);
+    expect(recorded("CG-DB01")).toBe(0);
+  });
+
+  it("sets query_only on a newer major, so a write that got past requireWritableDb is refused by SQLite", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+      db.itemAuthors.set("1:K:A1", {
+        library_id: 1,
+        item_key: "K",
+        author_id: "A1",
+        author_position: 0,
+        is_curated: 0,
+      });
+    });
+
+    expect(fakeDb.pragma.queryOnly).toBe(true);
+    // Reads still run under query_only.
+    expect(await getItemAuthors(1, "K")).toHaveLength(1);
+    // A write issued on the connection itself, past every gate, is refused by SQLite.
+    await expect(
+      fakeDb.executeTransaction(() =>
+        fakeDb.queryAsync("DELETE FROM item_authors WHERE author_id = ?", ["A1"]),
+      ),
+    ).rejects.toThrow(/readonly/);
+    expect(fakeDb.itemAuthors.size).toBe(1);
+  });
+
+  it("refuses every writer before SQLite even when PRAGMA query_only itself fails", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+      seed(db, legacyRow("KEPT", 42));
+      failOn(db, /^PRAGMA\s+query_only/i, "not authorized");
+    });
+
+    // Positive control: the SQLite backstop really is off, so only
+    // requireWritableDb stands between each writer and the file.
+    expect(fakeDb.pragma.queryOnly).toBe(false);
+    expect(cacheWriteRefusalCode()).toBe("CG-DB03");
+    for (const [name, write] of everyWriter(
+      mockItem("KEPT"),
+      mockItem("CONF", "Citegeist match ID: W100"),
+    )) {
+      await expect(write(), name).rejects.toMatchObject({ code: "CG-DB03" });
+    }
+    mockZotero.Items.getAll.mockResolvedValue([
+      mockItem("LEGACY", "Citegeist.openAlexId: W1234\nCitegeist.citedByCount: 3"),
+    ]);
+    expect(await migrateFromExtraV1()).toBe(false);
+    await garbageCollectOrphans({ force: true });
+
+    expect(writeStatements()).toEqual([]);
+    expect(fakeDb.table.get("1:KEPT")?.cited_by_count).toBe(42);
+    expect(items.get("CONF")!.extra).toBe("Citegeist match ID: W100");
+  });
+
+  it("re-applies query_only each time Zotero reopens the read-only connection", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+    });
+    expect(fakeDb.onConnect).toHaveBeenCalledTimes(1);
+
+    await fakeDb.reconnect();
+    expect(fakeDb.pragma.queryOnly).toBe(true);
+
+    // Once closed, the callback leaves a reopened connection alone.
+    await closeCache();
+    await fakeDb.reconnect();
+    expect(fakeDb.pragma.queryOnly).toBe(false);
+  });
+
+  it("registers no reopen callback on a writable cache", () => {
+    expect(fakeDb.onConnect).not.toHaveBeenCalled();
+  });
+
+  it("refuses a write after closeCache with CG-DB02, with no init in between", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+    });
+    await closeCache();
+
+    expect(cacheWriteRefusalCode()).toBe("CG-DB02");
+    await expect(cacheWorkData(mockItem("AFTER"), work, null)).rejects.toMatchObject({
+      name: "CacheWriteRefusedError",
+      code: "CG-DB02",
+    });
+    await expect(upsertRow(legacyRow("AFTER", 1))).rejects.toMatchObject({ code: "CG-DB02" });
+    expect(fakeDb.table.has("1:AFTER")).toBe(false);
+  });
+
+  it("logs a refused write once per operation, not once per write", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+    });
+    mockZotero.debug.mockClear();
+
+    for (let i = 0; i < 3; i++) {
+      await expect(upsertRow(legacyRow("R", i))).rejects.toMatchObject({ code: "CG-DB03" });
+    }
+    await expect(deleteRow(1, "R")).rejects.toMatchObject({ code: "CG-DB03" });
+
+    const refusals = mockZotero.debug.mock.calls
+      .map(([line]) => String(line))
+      .filter((line) => line.includes("refused"));
+    expect(refusals).toHaveLength(2);
+    // Refusals are not failures to record: CG-DB03 stays the one init entry.
+    expect(recorded("CG-DB03")).toBe(1);
+  });
+
+  it("logs exactly the one ERROR line the real-Zotero schema-stamp spec allows", async () => {
+    await closeCache();
+    mockZotero.debug.mockClear();
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+    });
+    await expect(upsertRow(legacyRow("R", 1))).rejects.toMatchObject({ code: "CG-DB03" });
+
+    const errorLines = mockZotero.debug.mock.calls
+      .map(([line]) => String(line))
+      .filter((line) => line.includes(ERROR_DEBUG_MARK));
+    // Spec 91 fails on any ERROR line its pattern doesn't match, so the pattern
+    // must match the line init really logs, and nothing else may appear.
+    expect(errorLines).toHaveLength(1);
+    expect(errorLines[0]).toMatch(READ_ONLY_STARTUP_ERROR);
+  });
+
+  it("keeps a read-only line in every report that later failures and Clear don't remove", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+    });
+    const line = `Cache: read-only, CG-DB03 (schema major ${CACHE_SCHEMA_MAJOR + 1}; this build supports schema major ${CACHE_SCHEMA_MAJOR})`;
+    expect(buildDiagnosticReport({})).toContain(line);
+
+    for (let i = 0; i <= DIAGNOSTIC_RING_BUFFER_SIZE; i++) {
+      logError(`later failure ${i}`, new Error("x"));
+    }
+    expect(recorded("CG-DB03"), "positive control: the init entry was pushed out").toBe(0);
+    expect(buildDiagnosticReport({})).toContain(line);
+    clearDiagnostics();
+    expect(buildDiagnosticReport({})).toContain(line);
+
+    await reopen((db) => {
+      db.pragma.userVersion = CURRENT_SCHEMA_STAMP;
+    });
+    expect(buildDiagnosticReport({})).not.toContain("Cache: read-only");
+  });
+
+  it("keeps a read-only cache usable when a newer major's item_cache can't be read", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+      failOn(db, /^SELECT\b[\s\S]*\bFROM\s+item_cache\s*$/i, "no such table: item_cache");
+    });
+
+    expect(getCachedData(mockItem("ANY"))).toBeNull();
+    expect(recorded("CG-DB03")).toBe(1);
+    expect(recorded("CG-DB02")).toBe(0);
+  });
+
+  it("finishes init and logs the failure when the stamp write fails", async () => {
+    await reopen((db) => failOn(db, /^PRAGMA\s+user_version\s*=/i, "database is locked"));
+
+    expect(fakeDb.pragma.userVersion).toBe(0);
+    expect(recentDiagnostics()).toContainEqual(
+      expect.objectContaining({ code: "CG-DB01", context: "cache schema stamp" }),
     );
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-    // Garbage must not become a real `0` — that would be indistinguishable
-    // from a true zero-citation work and corrupt downstream comparisons.
-    expect(getCachedCitationCount(item)).toBeNull();
+    // The database is still compatible, so the session stays writable.
+    await cacheWorkData(mockItem("AFTER"), work, null);
+    expect(fakeDb.table.has("1:AFTER")).toBe(true);
+  });
+
+  it("fails init as CG-DB02, before any DDL, when the stamp can't be read", async () => {
+    await closeCache();
+    fakeDb = makeFakeDb();
+    failOn(fakeDb, /^PRAGMA\s+user_version\s*$/i, "file is not a database");
+
+    await expect(initCache()).rejects.toMatchObject({ code: "CG-DB02" });
+    expect(writeStatements()).toEqual([]);
+  });
+
+  it("fails init as CG-DB02 when the PRAGMA row lacks user_version, as Zotero's row Proxy throws", async () => {
+    await closeCache();
+    fakeDb = makeFakeDb();
+    fakeDb.pragma.column = "schema_version";
+
+    await expect(initCache()).rejects.toMatchObject({ code: "CG-DB02" });
+    expect(writeStatements()).toEqual([]);
+  });
+
+  it("reads a numeric string or a bigint stamp as the number it spells", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = String(CURRENT_SCHEMA_STAMP);
+    });
+    expect(cacheWriteRefusalCode()).toBeNull();
+    // Read as the current schema, so it isn't restamped.
+    expect(fakeDb.pragma.userVersion).toBe(String(CURRENT_SCHEMA_STAMP));
+    expect(writeStatements().filter((s) => /^PRAGMA\s+user_version\s*=/i.test(s))).toEqual([]);
+
+    await reopen((db) => {
+      db.pragma.userVersion = BigInt(newerMajor);
+    });
+    expect(cacheWriteRefusalCode()).toBe("CG-DB03");
+  });
+
+  it.each([
+    ["an unreadable string", "abc"],
+    ["a value that isn't a number", null],
+    ["a negative stamp", -5],
+    ["a major no release reaches", CACHE_SCHEMA_UNRECOGNISED_MAJOR * 1000],
+  ])(
+    "opens %s read-only as CG-DB04, leaving the stamp and every row alone",
+    async (_label, stamp) => {
+      await reopen((db) => {
+        db.pragma.userVersion = stamp;
+        seed(db, legacyRow("KEPT", 42));
+      });
+
+      expect(cacheWriteRefusalCode()).toBe("CG-DB04");
+      await expect(cacheWorkData(mockItem("KEPT"), work, null)).rejects.toMatchObject({
+        code: "CG-DB04",
+      });
+      expect(fakeDb.pragma.userVersion).toBe(stamp);
+      expect(writeStatements()).toEqual([]);
+      expect(getCachedCitationCount(mockItem("KEPT"))).toBe(42);
+      expect(recorded("CG-DB04")).toBe(1);
+      expect(recorded("CG-DB03")).toBe(0);
+      expect(buildDiagnosticReport({})).toContain("Cache: read-only, CG-DB04");
+    },
+  );
+
+  it("closeCache clears read-only mode, so the next compatible open writes again", async () => {
+    await reopen((db) => {
+      db.pragma.userVersion = newerMajor;
+    });
+    await expect(cacheWorkData(mockItem("RO"), work, null)).rejects.toMatchObject({
+      code: "CG-DB03",
+    });
+    expect(fakeDb.table.has("1:RO")).toBe(false);
+
+    const closeSpy = vi.spyOn(fakeDb, "closeDatabase");
+    await reopen((db) => {
+      db.pragma.userVersion = CURRENT_SCHEMA_STAMP;
+    });
+    expect(closeSpy).toHaveBeenCalledWith(true);
+    await cacheWorkData(mockItem("RW"), work, null);
+    expect(fakeDb.table.has("1:RW")).toBe(true);
   });
 });

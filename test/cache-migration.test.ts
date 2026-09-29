@@ -1,6 +1,18 @@
 /**
- * Migration-focused tests for the SQLite-backed cache module.
+ * The one-time import of confirmed title matches from Extra
+ * (src/modules/cache/migration.ts), and the orphan-GC preferences.
+ *
+ * The v2.0.0 migration never ran on any library: it passed its loop to
+ * `Zotero.Sync.Runner.delaySync`, which takes milliseconds and never calls a
+ * function, and the harness's mock called it anyway (BUG-MIGRATION). What
+ * replaces it only imports (plan, Decisions item 8). Each block below holds one
+ * rule of that: what it imports and from which lines; that no item's Extra
+ * changes; that a decision the cache already holds wins; that it runs once per
+ * profile, whatever the v2.0.x done flag says, and never scans again; that a
+ * pass cut short runs again; and that sync is held through Zotero's
+ * `delayIndefinite`.
  */
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fakeDb,
@@ -11,491 +23,112 @@ import {
   resetCacheHarness,
 } from "./_helpers/cacheHarness";
 
-import { _resetForTesting } from "../src/modules/cache/db";
+import { _resetForTesting, closeCache, upsertRow } from "../src/modules/cache/db";
 import {
   cacheWorkData,
+  dismissAsNoMatch,
+  garbageCollectOrphans,
   getCachedCitationCount,
   getCachedData,
-  getCachedMetrics,
+  getPendingSuggestion,
   getTitleMatchMeta,
   initCache,
   isCacheStale,
   migrateFromExtraV1,
+  writePendingSuggestion,
 } from "../src/modules/cache";
+import { emptyRow } from "../src/modules/cache/types";
+import { clearDiagnostics, recentDiagnostics } from "../src/modules/diagnostics";
+import {
+  CACHE_SCHEMA_MAJOR,
+  CACHE_SCHEMA_STAMP_MULTIPLIER,
+  PREF_EXTRA_MATCH_IMPORT_COMPLETE,
+  PREF_LAST_BACKUP_PATH,
+  PREF_LAST_ORPHAN_GC_AT,
+  PREF_MIGRATION_COMPLETE,
+} from "../src/constants";
+import { ZOTERO_PREF_BRANCH } from "./_helpers/fakePrefs";
+
+/** The Debug Output lines the real-Zotero specs 92 and 93 count. */
+const STARTED = "[Citegeist] migration started";
+const COMPLETE = "[Citegeist] migration complete";
+
+const doubled = (name: string): string => ZOTERO_PREF_BRANCH + name;
+
+/** A library as `Zotero.Libraries.getAll` returns one, with the item loader the import calls. */
+function library(libraryID: number, libraryType = "user", editable = true) {
+  return {
+    libraryID,
+    libraryType,
+    editable,
+    waitForDataLoad: vi.fn(async (_objectType: string) => {}),
+  };
+}
+type FakeLibrary = ReturnType<typeof library>;
+
+/** Serve each library from `Zotero.Libraries.getAll`, and its items from `Zotero.Items.getAll`. */
+function useLibraries(...entries: Array<[FakeLibrary, _ZoteroTypes.Item[]]>): void {
+  mockZotero.Libraries.getAll.mockImplementation(
+    () => entries.map(([lib]) => lib) as unknown as _ZoteroTypes.Library[],
+  );
+  mockZotero.Items.getAll.mockImplementation(
+    async (libraryID: number) => entries.find(([lib]) => lib.libraryID === libraryID)?.[1] ?? [],
+  );
+}
+
+/** My Library, holding `libraryItems`. */
+function useItems(...libraryItems: _ZoteroTypes.Item[]): FakeLibrary {
+  const mine = library(1);
+  useLibraries([mine, libraryItems]);
+  return mine;
+}
+
+/** The harness's `mockItem` in any library, trashed or not a regular item on request. */
+function libraryItem(
+  libraryID: number,
+  key: string,
+  extra: string,
+  options: { deleted?: boolean; regular?: boolean } = {},
+): _ZoteroTypes.Item {
+  const item = mockItem(key, extra) as unknown as Record<string, unknown>;
+  item.libraryID = libraryID;
+  item.deleted = options.deleted ?? false;
+  item.isRegularItem = () => options.regular ?? true;
+  return item as unknown as _ZoteroTypes.Item;
+}
+
+const importDone = () => mockZotero.Prefs.user.get(PREF_EXTRA_MATCH_IMPORT_COMPLETE);
+
+const debugLines = (): string[] => mockZotero.debug.mock.calls.map(([line]) => String(line));
+const linesStartingWith = (mark: string): string[] =>
+  debugLines().filter((line) => line.startsWith(mark));
+
+/** The release function the nth `delayIndefinite` call returned. */
+function syncRelease(n = 0) {
+  return mockZotero.Sync.Runner.delayIndefinite.mock.results[n]?.value as
+    | ReturnType<typeof vi.fn>
+    | undefined;
+}
 
 beforeEach(async () => {
   await resetCacheHarness(initCache, _resetForTesting);
+  mockZotero.debug.mockClear();
+  // Reset, not clear: a "once" result a test queued, and a regression never
+  // consumed, must not leak into the next test.
+  mockZotero.Libraries.getAll.mockReset();
+  mockZotero.Items.getAll.mockReset();
+  mockZotero.Sync.Runner.delaySync.mockReset();
+  mockZotero.Sync.Runner.delayIndefinite.mockReset();
+  useItems();
+  clearDiagnostics();
 });
 
-// ── Crash-recovery between migration steps ─────────────────────────────────
+// ── What the import copies ─────────────────────────────────────────────────
 
-describe("migration crash recovery", () => {
-  function legacyExtra(): string {
-    return "Citegeist.openAlexId: W90007\nCitegeist.citedByCount: 9";
-  }
-
-  it("resumes after step 1 (SQLite written, Extra not yet stripped)", async () => {
-    // Seed SQLite as if step 1 completed but the process died before step 2.
-    const item = mockItem("R", legacyExtra());
-    await cacheWorkData(item, {
-      id: "https://openalex.org/W90007",
-      cited_by_count: 9,
-      fwci: null,
-      is_retracted: false,
-    } as never);
-    // No checkpoint yet (simulating step-2 interrupt).
-    expect(fakeDb.progress.size).toBe(0);
-
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-
-    // Extra now stripped + checkpoint written.
-    expect(items.get("R")!.extra).not.toContain("Citegeist.");
-    // Post-migration cleanup runs once, so progress is empty after success.
-    expect(fakeDb.progress.size).toBe(0);
-  });
-
-  it("writes a checkpoint even when nothing to migrate (step 2/3 interrupt recovery)", async () => {
-    // Item already had its Citegeist data stripped on a prior interrupted run.
-    const item = mockItem("S", "Some unrelated note");
-    // Pre-populate SQLite row to simulate a prior step-1 success.
-    await cacheWorkData(item, {
-      id: "https://openalex.org/W90008",
-      cited_by_count: 4,
-      fwci: null,
-      is_retracted: false,
-    } as never);
-
-    // Set extra to include LEGACY_PREFIX so the pre-filter picks it up,
-    // but parse will return zero fields after we manually clear it.
-    items.set("S", { extra: "" });
-    items.set("S", { extra: "Citegeist.unknownFieldNoColon" }); // size = 0 after parse
-
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-
-    // Item is no longer reprocessed on subsequent runs (progress cleared after
-    // successful migration completion, but during the run the checkpoint was
-    // written — we verify this via the absence of re-fetch attempts on rerun).
-    expect(items.get("S")!.extra).toBe("Citegeist.unknownFieldNoColon");
-  });
-});
-
-// ── Round-trip parse invariant: negative case ──────────────────────────────
-
-describe("verifyParseRoundTrip negative cases", () => {
-  it("skips items where duplicate Citegeist keys would collapse on reassembly", async () => {
-    // The Map-based parser collapses `Citegeist.citedByCount: 5` and
-    // `Citegeist.citedByCount: 7` into a single entry. The reassembled extra
-    // has one cg line; the original had two. Multiset comparison catches this.
-    const extra = "Citegeist.citedByCount: 5\nCitegeist.citedByCount: 7\nPMID: 12345";
-    const item = mockItem("D", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-    // Item is skipped; Extra unmodified.
-    expect(items.get("D")!.extra).toBe(extra);
-  });
-});
-
-// ── Legacy migration: ID validation ────────────────────────────────────────
-
-describe("migration legacy ID validation", () => {
-  it("drops malformed openAlexId from legacy Extra rather than persisting it", async () => {
-    const extra = ["Citegeist.openAlexId: not-a-valid-id", "Citegeist.citedByCount: 5"].join("\n");
-    const item = mockItem("X", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    // Row is written but with open_alex_id null — the cited_by_count salvages.
-    const data = getCachedData(item);
-    expect(data).toBeNull(); // openAlexId null → getCachedData returns null
-    // Confirm the row WAS persisted (cited_by_count survived)
-    const metrics = getCachedMetrics(item);
-    expect(metrics.count).toBe(5);
-  });
-
-  it("does not keep last_fetched on a row whose openAlexId was dropped (no hung pane)", async () => {
-    // A legacy row with a surviving lastFetched but a malformed openAlexId would,
-    // if last_fetched persisted, read as fresh (isCacheStale=false) while
-    // getCachedData returns null (keyed on open_alex_id) — a row that never
-    // refetches yet shows no data, which strands the item pane on its spinner.
-    // The migration must null last_fetched when there's no work id, so the pane
-    // treats it as stale and refetches instead of hanging.
+describe("what the import copies into the cache", () => {
+  it("imports a v1.3.x confirmed title match with its method and tier, and none of its metrics", async () => {
     const extra = [
-      "Citegeist.openAlexId: not-a-valid-id",
-      "Citegeist.citedByCount: 5",
-      "Citegeist.lastFetched: 2099-01-01T00:00:00.000Z",
-    ].join("\n");
-    const item = mockItem("XF", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    expect(getCachedData(item)).toBeNull(); // no work id → no readable data
-    expect(isCacheStale(item)).toBe(true); // and NOT masquerading as fresh
-  });
-
-  it("drops malformed sourceId from legacy Extra", async () => {
-    const extra = [
-      "Citegeist.openAlexId: W42",
-      "Citegeist.citedByCount: 3",
-      "Citegeist.sourceId: ../../etc/passwd",
-    ].join("\n");
-    const item = mockItem("Y", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    const metrics = getCachedMetrics(item);
-    expect(metrics.sourceId).toBeNull();
-    expect(metrics.count).toBe(3);
-  });
-});
-
-// ── Zotero version gate ────────────────────────────────────────────────────
-
-describe("migration version gate", () => {
-  it("refuses to run on Zotero < 7.0.10", async () => {
-    mockZotero.version = "7.0.9";
-    const item = mockItem("V", "Citegeist.citedByCount: 1");
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    expect(items.get("V")!.extra).toContain("Citegeist."); // not stripped
-    expect(fakeDb.table.size).toBe(0); // not migrated
-    mockZotero.version = "7.0.10"; // restore
-  });
-
-  it("runs on Zotero 7.0.10 and newer", async () => {
-    mockZotero.version = "7.0.42";
-    const item = mockItem("W", "Citegeist.citedByCount: 1");
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    expect(items.get("W")!.extra).not.toContain("Citegeist.");
-    mockZotero.version = "7.0.10";
-  });
-});
-
-// ── Migration: pre-migration Extra backup safety net ──────────────────────
-
-describe("migration Extra backup", () => {
-  it("writes a JSON snapshot of every candidate's Extra before touching anything", async () => {
-    const extraA = "Citegeist.openAlexId: W500\nCitegeist.citedByCount: 12\nPMID: 11111";
-    const extraB = "Citegeist.openAlexId: W600\nUser note: don't lose me";
-    const itemA = mockItem("A1", extraA);
-    const itemB = mockItem("B1", extraB);
-    mockZotero.Items.getAll.mockResolvedValue([itemA, itemB]);
-
-    await migrateFromExtraV1();
-
-    expect(fileWrites).toHaveLength(1);
-    const { path, contents } = fileWrites[0];
-    // Atomic write: putContentsAsync writes to `.tmp`, then IOUtils.move
-    // renames onto the final filename. Verify the staged path shape.
-    expect(path).toMatch(/citegeist-migration-backup-.*\.json\.tmp$/);
-    expect(path).toContain("/tmp/zotero-test-data/");
-
-    const payload = JSON.parse(contents);
-    expect(payload.schema).toBe("citegeist-migration-backup/v1");
-    expect(payload.plugin_version).toBe("2.0.0");
-    expect(payload.items).toHaveLength(2);
-
-    const byKey = Object.fromEntries(
-      (payload.items as Array<{ item_key: string; extra: string }>).map((i) => [i.item_key, i]),
-    );
-    // Snapshot captured the FULL pre-migration Extra verbatim.
-    expect(byKey.A1.extra).toBe(extraA);
-    expect(byKey.B1.extra).toBe(extraB);
-  });
-
-  it("records the backup file path in lastBackupPath pref for the alert", async () => {
-    mockZotero.Items.getAll.mockResolvedValue([
-      mockItem("X1", "Citegeist.openAlexId: W700\nCitegeist.citedByCount: 1"),
-    ]);
-    await migrateFromExtraV1();
-    expect(mockZotero.Prefs.set).toHaveBeenCalledWith(
-      "extensions.zotero.citegeist.lastBackupPath",
-      expect.stringMatching(/citegeist-migration-backup-.*\.json$/),
-    );
-  });
-
-  it("skips backup write when there are no candidates", async () => {
-    // Empty library — nothing to migrate, nothing to back up.
-    mockZotero.Items.getAll.mockResolvedValue([]);
-    const touched = await migrateFromExtraV1();
-    expect(touched).toBe(false);
-    expect(fileWrites).toHaveLength(0);
-  });
-
-  it("continues migration even if backup write fails (logged, not fatal)", async () => {
-    mockZotero.File.putContentsAsync.mockRejectedValueOnce(new Error("disk full"));
-    const item = mockItem("F1", "Citegeist.openAlexId: W800\nCitegeist.citedByCount: 4");
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    // Migration still ran: row persisted, Extra stripped.
-    expect(getCachedData(item)!.openAlexId).toBe("W800");
-    expect(items.get("F1")!.extra).not.toContain("Citegeist.");
-    // No file was written (the rejection happened mid-call).
-    expect(fileWrites).toHaveLength(0);
-  });
-});
-
-// ── Migration: Extra-field edge cases ──────────────────────────────────────
-
-describe("migration Extra-field edge cases", () => {
-  it("handles CRLF line endings without losing the OpenAlex ID", async () => {
-    const extra = "Citegeist.openAlexId: W90020\r\nCitegeist.citedByCount: 7\r\n";
-    const item = mockItem("CRLF", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    const data = getCachedData(item);
-    // CRLF previously caused parseWorkId to reject "W90020\r" → null.
-    expect(data).not.toBeNull();
-    expect(data!.openAlexId).toBe("W90020");
-    expect(data!.citedByCount).toBe(7);
-    // Extra stripped (LF-normalized).
-    expect(items.get("CRLF")!.extra).not.toContain("Citegeist.");
-  });
-
-  it("strips leading BOM before parsing", async () => {
-    const extra = "﻿Citegeist.openAlexId: W90021\nCitegeist.citedByCount: 3";
-    const item = mockItem("BOM", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    const data = getCachedData(item);
-    expect(data).not.toBeNull();
-    expect(data!.openAlexId).toBe("W90021");
-  });
-
-  it("trims whitespace-padded values that would otherwise fail validation", async () => {
-    // Two spaces after colon, trailing space on the value.
-    const extra = "Citegeist.openAlexId:  W90022 \nCitegeist.citedByCount: 11";
-    const item = mockItem("WS", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    expect(getCachedData(item)!.openAlexId).toBe("W90022");
-  });
-
-  it("recovers user-confirmed match ID into SQLite even when no legacy fields exist", async () => {
-    // ADV-001 fix: profile-restore drops citegeist.sqlite but Extra retains
-    // the v2-runtime downgrade-safety line. Migration must recover the
-    // confirmed work ID into SQLite so the user's match curation survives.
-    const extra = "Citegeist match ID: W90023";
-    const item = mockItem("MID", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    // SQLite row now carries the recovered confirmed_open_alex_id; runtime
-    // confirmTitleMatch will re-emit the Extra line on next confirmation.
-    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("W90023");
-    // Extra was stripped of the redundant mirror line.
-    expect(items.get("MID")!.extra).not.toContain("Citegeist match ID");
-    expect(item.saveTx).toHaveBeenCalledWith({ skipDateModifiedUpdate: true });
-  });
-
-  it("does not treat malformed `Citegeist match ID:` notes as migration candidates", async () => {
-    // ADV-L-001: a user maintaining their own Extra notes might write
-    // something like `Citegeist match ID: see footnote 3 in MyReviewBook`.
-    // We must not let a prefix-only note trigger migration backup,
-    // user-facing migration alerts, or Extra rewriting.
-    const extra = "Citegeist match ID: see footnote 3 in my notes";
-    const item = mockItem("USRTXT", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    const touched = await migrateFromExtraV1();
-
-    expect(touched).toBe(false);
-    expect(getCachedData(item)).toBeNull();
-    expect(fakeDb.table.size).toBe(0);
-    expect(fileWrites).toHaveLength(0);
-    expect(item.saveTx).not.toHaveBeenCalled();
-    // Line survives — strip only fires when recovery wrote a real W-ID.
-    expect(items.get("USRTXT")!.extra).toBe(extra);
-  });
-
-  it("does not treat unknown `Citegeist.*` notes as migration candidates", async () => {
-    const extra = "Citegeist.note: still useful for my review";
-    const item = mockItem("USRNOTE", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    const touched = await migrateFromExtraV1();
-
-    expect(touched).toBe(false);
-    expect(fakeDb.table.size).toBe(0);
-    expect(fileWrites).toHaveLength(0);
-    expect(items.get("USRNOTE")!.extra).toBe(extra);
-  });
-
-  it("preserves malformed match-ID user notes while stripping legacy fields", async () => {
-    const extra = [
-      "Citegeist.openAlexId: W90024",
-      "Citegeist.citedByCount: 1",
-      "Citegeist match ID: see footnote 3 in my notes",
-    ].join("\n");
-    const item = mockItem("USRTXT2", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    expect(getCachedData(item)!.openAlexId).toBe("W90024");
-    expect(items.get("USRTXT2")!.extra).toBe("Citegeist match ID: see footnote 3 in my notes");
-  });
-
-  it("multi-line match-ID Extra triggers bail without strip (incoherent state preserved)", async () => {
-    // Two mirror lines means runtime invariant was violated. Bail
-    // (no recovery, no row) and leave Extra untouched — the user can
-    // inspect and hand-fix rather than have us pick one arbitrarily.
-    const extra = ["Citegeist match ID: W11111", "Citegeist match ID: W22222"].join("\n");
-    const item = mockItem("MULTI", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBeNull();
-    expect(items.get("MULTI")!.extra).toBe(extra);
-  });
-});
-
-// ── Migration: salvage path (round-trip parse ambiguous) ───────────────────
-
-describe("migration salvage path", () => {
-  it("writes SQLite row but leaves Extra intact when round-trip parse fails", async () => {
-    // Duplicate Citegeist field — verifyParseRoundTrip's multiset check rejects.
-    const extra = [
-      "Citegeist.openAlexId: W77",
-      "Citegeist.citedByCount: 5",
-      "Citegeist.citedByCount: 7", // duplicate triggers round-trip failure
-    ].join("\n");
-    const item = mockItem("R", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    // Salvage: SQLite row persisted with the first occurrence's value.
-    expect(fakeDb.table.size).toBe(1);
-    const data = getCachedData(item);
-    expect(data!.openAlexId).toBe("W77");
-    // Extra preserved verbatim — duplicate user data not destroyed.
-    expect(items.get("R")!.extra).toBe(extra);
-    // Pref completion check is brittle across the shared Prefs.set spy;
-    // the contract is asserted by the test's primary invariant (Extra
-    // intact + row persisted) which is what the unresolved-skip gate
-    // exists to guarantee.
-  });
-
-  it("preserves user-typed Citegeist.note lines (allowlist enforcement)", async () => {
-    // User wrote a free-form research note that happens to start with Citegeist.
-    const extra = [
-      "Citegeist.openAlexId: W88",
-      "Citegeist.citedByCount: 12",
-      "Citegeist.note: still useful — refetch later",
-    ].join("\n");
-    const item = mockItem("U", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-
-    await migrateFromExtraV1();
-
-    // Known fields migrated to SQLite.
-    expect(getCachedData(item)!.openAlexId).toBe("W88");
-    // Unknown user note survives in Extra unchanged.
-    expect(items.get("U")!.extra).toContain("Citegeist.note: still useful");
-    // Known-field lines stripped.
-    expect(items.get("U")!.extra).not.toContain("Citegeist.openAlexId");
-    expect(items.get("U")!.extra).not.toContain("Citegeist.citedByCount");
-  });
-});
-
-// ── Migration: multi-library + read-only group skip ────────────────────────
-
-describe("migration library scoping", () => {
-  it("processes every editable library (personal + group)", async () => {
-    const userItem = mockItem("A");
-    items.set("A", { extra: "Citegeist.openAlexId: W100\nCitegeist.citedByCount: 1" });
-
-    // Synthesize a second item in a group library.
-    items.set("B", { extra: "Citegeist.openAlexId: W200\nCitegeist.citedByCount: 2" });
-    const groupItem = {
-      id: 2,
-      key: "B",
-      libraryID: 4,
-      isRegularItem: () => true,
-      deleted: false,
-      getField: vi.fn((field: string) => (field === "extra" ? (items.get("B")?.extra ?? "") : "")),
-      setField: vi.fn((field: string, value: string | number) => {
-        if (field === "extra") items.set("B", { extra: String(value) });
-      }),
-      saveTx: vi.fn(async () => 1),
-    } as unknown as _ZoteroTypes.Item;
-
-    mockZotero.Libraries.getAll.mockImplementation(
-      () =>
-        [
-          { libraryID: 1, libraryType: "user", editable: true },
-          { libraryID: 4, libraryType: "group", editable: true },
-        ] as _ZoteroTypes.Library[],
-    );
-    mockZotero.Items.getAll.mockImplementation(async (libID: number) =>
-      libID === 1 ? [userItem] : libID === 4 ? [groupItem] : [],
-    );
-
-    await migrateFromExtraV1();
-
-    expect(fakeDb.table.size).toBe(2);
-    expect(getCachedData(userItem)!.openAlexId).toBe("W100");
-    expect(getCachedData(groupItem)!.openAlexId).toBe("W200");
-    expect(items.get("A")!.extra).not.toContain("Citegeist.");
-    expect(userItem.saveTx).toHaveBeenCalledWith({ skipDateModifiedUpdate: true });
-    expect(items.get("B")!.extra).not.toContain("Citegeist.");
-    expect(groupItem.saveTx).toHaveBeenCalledWith({ skipDateModifiedUpdate: true });
-  });
-
-  it("skips read-only group libraries entirely (no SQLite write, no Extra strip)", async () => {
-    // Item lives in a read-only group library.
-    items.set("RO", { extra: "Citegeist.openAlexId: W300\nCitegeist.citedByCount: 3" });
-    const roItem = {
-      id: 3,
-      key: "RO",
-      libraryID: 5,
-      isRegularItem: () => true,
-      deleted: false,
-      getField: vi.fn((field: string) => (field === "extra" ? (items.get("RO")?.extra ?? "") : "")),
-      setField: vi.fn(),
-      saveTx: vi.fn(),
-    } as unknown as _ZoteroTypes.Item;
-
-    mockZotero.Libraries.getAll.mockImplementation(
-      () => [{ libraryID: 5, libraryType: "group", editable: false }] as _ZoteroTypes.Library[],
-    );
-    mockZotero.Items.getAll.mockResolvedValue([roItem]);
-
-    await migrateFromExtraV1();
-
-    // Migration loop didn't write SQLite or touch Extra — the read-only
-    // library was skipped wholesale to avoid the eternal-loop failure mode.
-    expect(fakeDb.table.size).toBe(0);
-    expect(items.get("RO")!.extra).toContain("Citegeist.openAlexId");
-    expect(roItem.saveTx).not.toHaveBeenCalled();
-  });
-});
-
-// ── Migration from legacy Extra-field storage ──────────────────────────────
-
-describe("migrateFromExtraV1", () => {
-  function legacyExtra(): string {
-    return [
+      "Read for chapter 3",
       "Citegeist.openAlexId: W123",
       "Citegeist.citedByCount: 42",
       "Citegeist.fwci: 2.31",
@@ -503,254 +136,685 @@ describe("migrateFromExtraV1", () => {
       "Citegeist.isTop1Percent: false",
       "Citegeist.isTop10Percent: true",
       "Citegeist.isRetracted: false",
-      "Citegeist.lastFetched: 2026-04-01T12:00:00Z",
-    ].join("\n");
-  }
-
-  it("copies legacy fields into SQLite and strips Citegeist lines from Extra", async () => {
-    const item = mockItem("A", legacyExtra());
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    const touched = await migrateFromExtraV1();
-    expect(touched).toBe(true);
-    // SQLite populated
-    const data = getCachedData(item);
-    expect(data!.openAlexId).toBe("W123");
-    expect(data!.citedByCount).toBe(42);
-    expect(data!.fwci).toBeCloseTo(2.31);
-    // Extra cleaned
-    expect(items.get("A")!.extra).not.toContain("Citegeist.");
-    expect(item.saveTx).toHaveBeenCalledWith({ skipDateModifiedUpdate: true });
-  });
-
-  it("preserves non-Citegeist Extra content byte-for-byte", async () => {
-    const extra = ["PMID: 12345", "Citegeist.citedByCount: 99", "tex.note: hello"].join("\n");
-    const item = mockItem("A", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-    const cleaned = items.get("A")!.extra;
-    expect(cleaned).toContain("PMID: 12345");
-    expect(cleaned).toContain("tex.note: hello");
-    expect(cleaned).not.toContain("Citegeist.");
-  });
-
-  it("mirrors confirmed match ID back to Extra under non-Citegeist prefix", async () => {
-    const extra = [
-      "Citegeist.openAlexId: W123",
-      "Citegeist.citedByCount: 5",
+      "Citegeist.lastFetched: 2026-04-01T12:00:00.000Z",
+      "Citegeist.sourceId: S77",
       "Citegeist.matchMethod: title-match",
       "Citegeist.matchConfidence: high",
       "Citegeist.confirmedOpenAlexId: W123",
     ].join("\n");
     const item = mockItem("A", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-    expect(items.get("A")!.extra).toContain("Citegeist match ID: W123");
-    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("W123");
-  });
+    useItems(item);
 
-  it("is idempotent: second run is a no-op", async () => {
-    const item = mockItem("A", legacyExtra());
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
+    expect(await migrateFromExtraV1()).toBe(false);
 
-    // Pretend the pref-guard fails (e.g. partial state) but checkpoint exists.
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return false;
-      if (pref === "extensions.zotero.citegeist.cacheLifetimeDays") return 7;
-      return null;
+    expect(getTitleMatchMeta(item)).toEqual({
+      noMatch: false,
+      noMatchTimestamp: null,
+      matchMethod: "title-match",
+      matchConfidence: "high",
+      confirmedOpenAlexId: "W123",
     });
-    items.get("A")!.extra = ""; // simulate already-stripped
-    const initialSize = fakeDb.table.size;
-    await migrateFromExtraV1();
-    expect(fakeDb.table.size).toBe(initialSize);
+    // No metrics: the next lookup fetches them for the confirmed work.
+    expect(getCachedData(item)).toBeNull();
+    expect(getCachedCitationCount(item)).toBeNull();
+    expect(isCacheStale(item)).toBe(true);
+    expect(fakeDb.table.get("1:A")).toMatchObject({
+      open_alex_id: null,
+      cited_by_count: null,
+      source_id: null,
+      last_fetched: null,
+    });
   });
 
-  it("tolerates legacy reordering of Citegeist lines (round-trip is set-based)", async () => {
-    // The v1.3.0 writer always pushed Citegeist lines to the end of Extra.
-    // The round-trip check must accept the original ordering as valid.
-    const extra = "Citegeist.openAlexId: W7\nPMID: 12345\nCitegeist.citedByCount: 5";
-    const item = mockItem("A", extra);
-    mockZotero.Items.getAll.mockResolvedValue([item]);
+  it("imports the `Citegeist match ID:` line v2.0.0 and later write on a confirm", async () => {
+    const item = mockItem("MID", "Citegeist match ID: W90023");
+    useItems(item);
+
     await migrateFromExtraV1();
-    const cleaned = items.get("A")!.extra;
-    expect(cleaned).toContain("PMID: 12345");
-    expect(cleaned).not.toContain("Citegeist.openAlexId");
-    expect(cleaned).not.toContain("Citegeist.citedByCount");
-    expect(getCachedData(item)!.openAlexId).toBe("W7");
+
+    expect(getTitleMatchMeta(item)).toMatchObject({
+      confirmedOpenAlexId: "W90023",
+      matchMethod: "title-match",
+      matchConfidence: null,
+    });
   });
 
-  it("respects the migrationV1Complete pref when SQLite already has data", async () => {
-    // Pre-seed the cache so the REL-002 force-rerun guard finds the mirror
-    // non-empty and trusts the completion pref.
-    const item = mockItem("A", legacyExtra());
+  it("leaves metrics, suggestions and no-match lines in Extra: an item with no confirmed match gets no row", async () => {
+    const extra = [
+      "Citegeist.openAlexId: W5",
+      "Citegeist.citedByCount: 9",
+      "Citegeist.lastFetched: 2026-04-01T12:00:00.000Z",
+      "Citegeist.pendingSuggestionId: W6",
+      "Citegeist.pendingSuggestionTitle: A near miss",
+      "Citegeist.noMatch: true",
+      "Citegeist.noMatchTimestamp: 2026-04-02T12:00:00.000Z",
+      "Citegeist.matchMethod: title-match",
+      "Citegeist.matchConfidence: medium",
+    ].join("\n");
+    useItems(mockItem("MET", extra));
+
+    await migrateFromExtraV1();
+
+    expect(fakeDb.table.size).toBe(0);
+    expect(importDone()).toBe(true);
+    expect(linesStartingWith(COMPLETE)[0]).toContain("with Citegeist lines 1, matches imported 0");
+  });
+
+  it("takes the `Citegeist match ID:` line over v1.x's confirmed id, which it replaced", async () => {
+    const extra = [
+      "Citegeist.matchConfidence: high",
+      "Citegeist.confirmedOpenAlexId: W1",
+      "Citegeist match ID: W2",
+    ].join("\n");
+    const item = mockItem("BOTH", extra);
+    useItems(item);
+
+    await migrateFromExtraV1();
+
+    // v1.x's tier described W1, so it does not travel to W2.
+    expect(getTitleMatchMeta(item)).toMatchObject({
+      confirmedOpenAlexId: "W2",
+      matchConfidence: null,
+    });
+  });
+
+  it("keeps v1.x's tier when both lines name the same work, and a repeated line is no conflict", async () => {
+    const extra = [
+      "Citegeist.matchConfidence: medium",
+      "Citegeist.confirmedOpenAlexId: W3",
+      "Citegeist match ID: W3",
+      "Citegeist match ID: W3",
+    ].join("\n");
+    const item = mockItem("SAME", extra);
+    useItems(item);
+
+    await migrateFromExtraV1();
+
+    expect(getTitleMatchMeta(item)).toMatchObject({
+      confirmedOpenAlexId: "W3",
+      matchConfidence: "medium",
+    });
+  });
+
+  it.each([
+    ["two `Citegeist match ID:` lines", "Citegeist match ID: W11111\nCitegeist match ID: W22222"],
+    [
+      "two v1.x confirmed ids",
+      "Citegeist.confirmedOpenAlexId: W11111\nCitegeist.confirmedOpenAlexId: W22222",
+    ],
+  ])(
+    "leaves an item whose %s name different works for the user, and still finishes",
+    async (_name, extra) => {
+      const item = mockItem("TWO", extra);
+      useItems(item);
+
+      await migrateFromExtraV1();
+
+      expect(fakeDb.table.size).toBe(0);
+      expect(items.get("TWO")!.extra).toBe(extra);
+      expect(importDone()).toBe(true);
+      expect(linesStartingWith(COMPLETE)[0]).toContain("naming two works 1");
+    },
+  );
+
+  it("ignores lines that are the user's own text", async () => {
+    const extra = [
+      "Citegeist match ID: see footnote 3 in my notes",
+      "Citegeist.note: still useful for my review",
+      "Citegeist.confirmedOpenAlexId: not-a-work-id",
+      "Citegeist.confirmedOpenAlexId:W46",
+      "  Citegeist.confirmedOpenAlexId: W47",
+      "citegeist.confirmedOpenAlexId: W48",
+    ].join("\n");
+    useItems(mockItem("USER", extra));
+
+    await migrateFromExtraV1();
+
+    expect(fakeDb.table.size).toBe(0);
+  });
+
+  it("reads Extra saved with a byte-order mark, CRLF or CR line ends, and padded values", async () => {
+    const crlf = mockItem(
+      "CRLF",
+      "﻿Citegeist.confirmedOpenAlexId:  W90021 \r\nCitegeist.matchConfidence: medium\r\nPMID: 1",
+    );
+    const cr = mockItem("CR", "Read later\rCitegeist match ID: W90022\r");
+    useItems(crlf, cr);
+
+    await migrateFromExtraV1();
+
+    expect(getTitleMatchMeta(crlf)).toMatchObject({
+      confirmedOpenAlexId: "W90021",
+      matchConfidence: "medium",
+    });
+    expect(getTitleMatchMeta(cr).confirmedOpenAlexId).toBe("W90022");
+  });
+
+  it("reads every library but feeds, read-only groups too, loading each library's items first", async () => {
+    const mine = library(1);
+    const group = library(4, "group");
+    const readOnly = library(5, "group", false);
+    const feed = library(6, "feed");
+    const confirmed = (libraryID: number, key: string, id: string) =>
+      libraryItem(libraryID, key, `Citegeist.confirmedOpenAlexId: ${id}`);
+    const inMine = confirmed(1, "MINE", "W1");
+    const inGroup = confirmed(4, "GROUP", "W4");
+    const inReadOnly = confirmed(5, "READONLY", "W5");
+    const inFeed = confirmed(6, "FEED", "W6");
+    useLibraries([mine, [inMine]], [group, [inGroup]], [readOnly, [inReadOnly]], [feed, [inFeed]]);
+
+    await migrateFromExtraV1();
+
+    expect(getTitleMatchMeta(inMine).confirmedOpenAlexId).toBe("W1");
+    expect(getTitleMatchMeta(inGroup).confirmedOpenAlexId).toBe("W4");
+    // A cache row only: nothing is written to the read-only library.
+    expect(getTitleMatchMeta(inReadOnly).confirmedOpenAlexId).toBe("W5");
+    expect(fakeDb.table.has("6:FEED")).toBe(false);
+    expect(feed.waitForDataLoad).not.toHaveBeenCalled();
+    const readCalls = mockZotero.Items.getAll.mock.calls.map(([libraryID]) => libraryID);
+    expect(readCalls).toEqual([1, 4, 5]);
+    for (const [index, lib] of [mine, group, readOnly].entries()) {
+      expect(lib.waitForDataLoad).toHaveBeenCalledWith("item");
+      expect(lib.waitForDataLoad.mock.invocationCallOrder[0]).toBeLessThan(
+        mockZotero.Items.getAll.mock.invocationCallOrder[index],
+      );
+    }
+  });
+
+  it("skips trashed items, notes and attachments", async () => {
+    useItems(
+      libraryItem(1, "TRASHED", "Citegeist.confirmedOpenAlexId: W1", { deleted: true }),
+      libraryItem(1, "NOTE", "Citegeist match ID: W2", { regular: false }),
+    );
+
+    await migrateFromExtraV1();
+
+    expect(fakeDb.table.size).toBe(0);
+    expect(importDone()).toBe(true);
+  });
+});
+
+// ── No item changes ────────────────────────────────────────────────────────
+
+describe("Extra is never written", () => {
+  it("leaves every item's Extra byte for byte, saves no item and writes no backup file", async () => {
+    const extras: Record<string, string> = {
+      V1: [
+        "Read for chapter 3",
+        "Citegeist.openAlexId: W123",
+        "Citegeist.citedByCount: 42",
+        "Citegeist.matchConfidence: high",
+        "Citegeist.confirmedOpenAlexId: W123",
+      ].join("\n"),
+      MID: "tex.citekey: smith2019\nCitegeist match ID: W456",
+      METRICS: "Citegeist.openAlexId: W789\nCitegeist.citedByCount: 5\nCitegeist.note: my reminder",
+      CRLF: "﻿Citegeist.confirmedOpenAlexId: W321\r\nPMID: 123\r\n",
+      TWO: "Citegeist match ID: W11111\nCitegeist match ID: W22222",
+    };
+    const all = Object.entries(extras).map(([key, extra]) => mockItem(key, extra));
+    useItems(...all);
+
+    await migrateFromExtraV1();
+
+    expect(fakeDb.table.size, "positive control: the import wrote its rows").toBe(3);
+    for (const [key, extra] of Object.entries(extras)) {
+      expect(items.get(key)!.extra, key).toBe(extra);
+    }
+    for (const item of all) {
+      expect(item.setField, item.key).not.toHaveBeenCalled();
+      expect(item.saveTx, item.key).not.toHaveBeenCalled();
+    }
+    expect(fileWrites).toEqual([]);
+    expect(mockZotero.Prefs.user.has(PREF_LAST_BACKUP_PATH)).toBe(false);
+  });
+
+  it("migration.ts calls nothing that writes an item's fields or a file", () => {
+    const source = readFileSync(
+      new URL("../src/modules/cache/migration.ts", import.meta.url),
+      "utf8",
+    )
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    for (const writer of [
+      /\.setField\s*\(/,
+      /\.saveTx\s*\(/,
+      /\bsaveItemGuarded\s*\(/,
+      /\bclearCache\s*\(/,
+      /\bconfirmTitleMatch\s*\(/,
+      /\bputContentsAsync\s*\(/,
+      /\bIOUtils\b/,
+    ]) {
+      expect(source, String(writer)).not.toMatch(writer);
+    }
+  });
+});
+
+// ── Curated wins ───────────────────────────────────────────────────────────
+
+describe("a decision the cache already holds wins", () => {
+  const legacyConfirmation = "Citegeist.matchConfidence: high\nCitegeist.confirmedOpenAlexId: W1";
+
+  it("keeps a confirmation the cache holds, even of another work", async () => {
+    await upsertRow({
+      ...emptyRow(1, "CONF"),
+      confirmed_open_alex_id: "W2",
+      match_method: "title-match",
+      match_confidence: "medium",
+    });
+    const before = { ...fakeDb.table.get("1:CONF") };
+    const item = mockItem("CONF", legacyConfirmation);
+    useItems(item);
+
+    await migrateFromExtraV1();
+
+    expect(fakeDb.table.get("1:CONF")).toEqual(before);
+    expect(getTitleMatchMeta(item)).toMatchObject({
+      confirmedOpenAlexId: "W2",
+      matchConfidence: "medium",
+    });
+    expect(linesStartingWith(COMPLETE)[0]).toContain("matches imported 0, kept as cached 1");
+  });
+
+  it("keeps a no-match, which may be the user's 'Not this paper'", async () => {
+    const item = mockItem("DISMISSED", legacyConfirmation);
+    await dismissAsNoMatch(item);
+    const before = { ...fakeDb.table.get("1:DISMISSED") };
+    useItems(item);
+
+    await migrateFromExtraV1();
+
+    expect(fakeDb.table.get("1:DISMISSED")).toEqual(before);
+    expect(getTitleMatchMeta(item)).toMatchObject({ noMatch: true, confirmedOpenAlexId: null });
+  });
+
+  it("keeps metrics a later lookup fetched for another work", async () => {
+    const item = mockItem("OTHER", legacyConfirmation);
     await cacheWorkData(item, {
-      id: "https://openalex.org/W12345",
+      id: "https://openalex.org/W3",
+      cited_by_count: 8,
+      fwci: null,
+      is_retracted: false,
+    });
+    const before = { ...fakeDb.table.get("1:OTHER") };
+    useItems(item);
+
+    await migrateFromExtraV1();
+
+    expect(fakeDb.table.get("1:OTHER")).toEqual(before);
+    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBeNull();
+  });
+
+  it("confirms over a pending suggestion, clearing it as a confirm in the pane does", async () => {
+    const item = mockItem("PENDING", legacyConfirmation);
+    await writePendingSuggestion(
+      item,
+      {
+        id: "https://openalex.org/W9",
+        display_name: "Another paper",
+        cited_by_count: 2,
+        fwci: null,
+        publication_year: 2020,
+        doi: null,
+      },
+      "medium",
+      0.8,
+    );
+    useItems(item);
+
+    await migrateFromExtraV1();
+
+    expect(getTitleMatchMeta(item)).toMatchObject({
+      confirmedOpenAlexId: "W1",
+      matchConfidence: "high",
+    });
+    expect(getPendingSuggestion(item)).toBeNull();
+  });
+
+  it("confirms over metrics for the same work, and keeps them", async () => {
+    const item = mockItem("SAMEWORK", legacyConfirmation);
+    await cacheWorkData(item, {
+      id: "https://openalex.org/W1",
+      cited_by_count: 8,
+      fwci: null,
+      is_retracted: false,
+    });
+    useItems(item);
+
+    await migrateFromExtraV1();
+
+    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("W1");
+    expect(getCachedCitationCount(item)).toBe(8);
+  });
+});
+
+// ── Once per profile ───────────────────────────────────────────────────────
+
+describe("the import runs once per profile", () => {
+  it("runs on a v2.0.x profile, whose done flag the migration that never ran had set", async () => {
+    // Every v2.0.x profile: migrationV1Complete under the doubled name (and, once
+    // U18 copied it forward, under the real one), and a cache the runtime filled
+    // since, which is what made the old guard trust the flag.
+    mockZotero.Prefs.user.set(doubled(PREF_MIGRATION_COMPLETE), true);
+    mockZotero.Prefs.user.set(PREF_MIGRATION_COMPLETE, true);
+    const fetched = mockItem("FETCHED");
+    await cacheWorkData(fetched, {
+      id: "https://openalex.org/W5",
       cited_by_count: 1,
       fwci: null,
       is_retracted: false,
-    } as never);
-
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      return null;
     });
-    mockZotero.Items.getAll.mockResolvedValue([item]);
+    const legacy = mockItem("LEGACY", "Citegeist.confirmedOpenAlexId: W6");
+    useItems(fetched, legacy);
 
     await migrateFromExtraV1();
-    // Migration did NOT run — Extra still has legacy data, only the
-    // pre-seeded row exists (no new ones from migration).
-    expect(items.get("A")!.extra).toContain("Citegeist.");
+
+    expect(getTitleMatchMeta(legacy).confirmedOpenAlexId).toBe("W6");
+    expect(importDone()).toBe(true);
   });
 
-  it("force-reruns when pref is set but mirror is empty AND legacy data exists (REL-002)", async () => {
-    // Pref says complete, but the mirror is empty (no prior cacheWorkData
-    // calls this test) and the user's library still has Citegeist data in
-    // Extra. shouldForceRerun should clear the pref and re-run.
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      return null;
-    });
-    const item = mockItem("R", legacyExtra());
-    mockZotero.Items.getAll.mockResolvedValue([item]);
+  it("does not scan again once a pass has read every library", async () => {
+    const first = mockItem("FIRST", "Citegeist.confirmedOpenAlexId: W1");
+    useItems(first);
+    await migrateFromExtraV1();
+    expect(importDone(), "positive control: the first pass finished").toBe(true);
+
+    // The next launch, with a confirmation a scan would import.
+    await closeCache();
+    await initCache();
+    const later = mockItem("LATER", "Citegeist.confirmedOpenAlexId: W2");
+    const mine = useItems(first, later);
+    mockZotero.Libraries.getAll.mockClear();
+    mockZotero.Items.getAll.mockClear();
+    mockZotero.Sync.Runner.delayIndefinite.mockClear();
+    mockZotero.debug.mockClear();
 
     await migrateFromExtraV1();
 
-    // Force-rerun cleared the pref and ran migration: Extra now stripped.
-    expect(items.get("R")!.extra).not.toContain("Citegeist.");
-    expect(fakeDb.table.size).toBe(1);
+    expect(mockZotero.Libraries.getAll).not.toHaveBeenCalled();
+    expect(mockZotero.Items.getAll).not.toHaveBeenCalled();
+    expect(mine.waitForDataLoad).not.toHaveBeenCalled();
+    expect(mockZotero.Sync.Runner.delayIndefinite).not.toHaveBeenCalled();
+    expect(getTitleMatchMeta(later).confirmedOpenAlexId).toBeNull();
+    expect(debugLines().filter((line) => line.startsWith("[Citegeist] migration"))).toEqual([]);
   });
 
-  it("force-reruns when pref is set but mirror is empty AND only a confirmed match mirror exists", async () => {
-    mockZotero.Prefs.get.mockImplementation((pref: string) => {
-      if (pref === "extensions.zotero.citegeist.migrationV1Complete") return true;
-      return null;
-    });
-    const item = mockItem("CMID", "Citegeist match ID: W90909");
-    mockZotero.Items.getAll.mockResolvedValue([item]);
+  it("finishes a pass that finds nothing, and sets its flag", async () => {
+    useItems(mockItem("PLAIN", "An ordinary note"));
 
     await migrateFromExtraV1();
 
-    expect(getTitleMatchMeta(item).confirmedOpenAlexId).toBe("W90909");
-    expect(items.get("CMID")!.extra).not.toContain("Citegeist match ID");
+    expect(importDone()).toBe(true);
+    expect(linesStartingWith(STARTED)).toHaveLength(1);
+    expect(linesStartingWith(COMPLETE)).toHaveLength(1);
+  });
+
+  it("sets the v2.0.x done flag under both names too, so a copy downgraded to v2.0.x starts no migration", async () => {
+    // v2.0.5 reads the full name without `global`, which lands on the doubled name.
+    const readByV205 = () => mockZotero.Prefs.get(PREF_MIGRATION_COMPLETE);
+    expect(readByV205(), "positive control: no flag before the pass").toBeUndefined();
+
+    await migrateFromExtraV1();
+
+    expect(mockZotero.Prefs.user.get(PREF_MIGRATION_COMPLETE)).toBe(true);
+    expect(readByV205()).toBe(true);
+  });
+
+  it("does nothing on a read-only cache, leaving the import to a launch that can write", async () => {
+    await closeCache();
+    fakeDb.pragma.userVersion = (CACHE_SCHEMA_MAJOR + 1) * CACHE_SCHEMA_STAMP_MULTIPLIER;
+    await initCache();
+    useItems(mockItem("RO", "Citegeist.confirmedOpenAlexId: W1"));
+    mockZotero.Libraries.getAll.mockClear();
+
+    expect(await migrateFromExtraV1()).toBe(false);
+
+    expect(mockZotero.Libraries.getAll).not.toHaveBeenCalled();
+    expect(fakeDb.table.size).toBe(0);
+    expect(importDone()).toBeUndefined();
+  });
+
+  it("records a preference it can't read and resolves, so startup goes on", async () => {
+    mockZotero.Prefs.get.mockImplementationOnce(() => {
+      throw new Error("prefs.js is locked");
+    });
+
+    await expect(migrateFromExtraV1()).resolves.toBe(false);
+
+    expect(recentDiagnostics().map((d) => d.context)).toContain("migration");
+    expect(mockZotero.Libraries.getAll).not.toHaveBeenCalled();
   });
 });
 
-describe("atomic backup write", () => {
-  function legacyExtraSmall(): string {
-    return ["Citegeist.openAlexId: W900", "Citegeist.citedByCount: 1"].join("\n");
+// ── Cut short ──────────────────────────────────────────────────────────────
+
+describe("a pass cut short runs again at the next launch", () => {
+  it("keeps what it imported when the cache closes mid-pass, and imports the rest next launch", async () => {
+    const first = mockItem("FIRST", "Citegeist.confirmedOpenAlexId: W1");
+    const second = mockItem("SECOND", "Citegeist match ID: W2");
+    let closing: Promise<void> | undefined;
+    // Citegeist is disabled while the pass reads the second item.
+    (second.getField as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      closing = closeCache();
+      return items.get("SECOND")!.extra;
+    });
+    useItems(first, second);
+
+    await migrateFromExtraV1();
+    await closing;
+
+    expect(fakeDb.table.has("1:FIRST")).toBe(true);
+    expect(fakeDb.table.has("1:SECOND")).toBe(false);
+    expect(importDone()).toBeUndefined();
+    expect(mockZotero.Prefs.user.has(PREF_MIGRATION_COMPLETE)).toBe(false);
+    expect(syncRelease()).toHaveBeenCalledTimes(1);
+    expect(linesStartingWith("[Citegeist] migration stopped by the cache closed")).toHaveLength(1);
+    expect(recentDiagnostics(), "a shutdown is not a failure").toEqual([]);
+
+    await initCache();
+    await migrateFromExtraV1();
+
+    expect(getTitleMatchMeta(first).confirmedOpenAlexId).toBe("W1");
+    expect(getTitleMatchMeta(second).confirmedOpenAlexId).toBe("W2");
+    expect(importDone()).toBe(true);
+    expect(linesStartingWith(COMPLETE)[0]).toContain("matches imported 1, kept as cached 1");
+  });
+
+  it("stops reading once the cache closes, loading no further library, even with nothing left to write", async () => {
+    const mine = library(1);
+    const group = library(4, "group");
+    let closing: Promise<void> | undefined;
+    // Citegeist is disabled while the pass loads My Library.
+    mine.waitForDataLoad.mockImplementationOnce(async () => {
+      closing = closeCache();
+    });
+    useLibraries(
+      [mine, [mockItem("PLAIN", "An ordinary note")]],
+      [group, [libraryItem(4, "GROUP", "Citegeist.confirmedOpenAlexId: W4")]],
+    );
+
+    await migrateFromExtraV1();
+    await closing;
+
+    expect(group.waitForDataLoad).not.toHaveBeenCalled();
+    expect(importDone()).toBeUndefined();
+    expect(syncRelease()).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops at a write that fails, records it, and leaves the next launch to finish", async () => {
+    useItems(
+      mockItem("A", "Citegeist.confirmedOpenAlexId: W1"),
+      mockItem("B", "Citegeist.confirmedOpenAlexId: W2"),
+    );
+    const base = fakeDb.queryAsync.getMockImplementation()!;
+    fakeDb.queryAsync.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (/^INSERT\s+OR\s+REPLACE\s+INTO\s+item_cache/i.test(sql.trim()) && params?.[1] === "A") {
+        throw new Error("database is locked");
+      }
+      return base(sql, params);
+    });
+
+    await migrateFromExtraV1();
+
+    expect(fakeDb.table.size, "the pass stopped at the failed write").toBe(0);
+    expect(importDone()).toBeUndefined();
+    expect(recentDiagnostics().map((d) => d.code)).toEqual(["CG-DB01"]);
+    expect(syncRelease()).toHaveBeenCalledTimes(1);
+
+    fakeDb.queryAsync.mockImplementation(base);
+    await migrateFromExtraV1();
+
+    expect(fakeDb.table.size).toBe(2);
+    expect(importDone()).toBe(true);
+  });
+
+  it("reads the other libraries when one fails to load, and leaves the pass unfinished", async () => {
+    const mine = library(1);
+    const group = library(4, "group");
+    group.waitForDataLoad.mockRejectedValueOnce(new Error("group library unavailable"));
+    const inGroup = libraryItem(4, "GROUP", "Citegeist.confirmedOpenAlexId: W4");
+    const inMine = mockItem("MINE", "Citegeist.confirmedOpenAlexId: W1");
+    useLibraries([group, [inGroup]], [mine, [inMine]]);
+
+    await migrateFromExtraV1();
+
+    expect(getTitleMatchMeta(inMine).confirmedOpenAlexId).toBe("W1");
+    expect(getTitleMatchMeta(inGroup).confirmedOpenAlexId).toBeNull();
+    expect(importDone()).toBeUndefined();
+    expect(recentDiagnostics().map((d) => d.context)).toContain("migration: read library 4");
+
+    await migrateFromExtraV1();
+
+    expect(getTitleMatchMeta(inGroup).confirmedOpenAlexId).toBe("W4");
+    expect(importDone()).toBe(true);
+  });
+
+  it("skips an item Zotero can't read and still finishes, so it never scans every launch", async () => {
+    const unreadable = mockItem("UNREAD", "Citegeist.confirmedOpenAlexId: W1");
+    (unreadable.getField as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error("Item data not loaded");
+    });
+    const readable = mockItem("READ", "Citegeist.confirmedOpenAlexId: W2");
+    useItems(unreadable, readable);
+
+    await migrateFromExtraV1();
+
+    expect(getTitleMatchMeta(readable).confirmedOpenAlexId).toBe("W2");
+    expect(importDone()).toBe(true);
+    expect(linesStartingWith(COMPLETE)[0]).toContain("unreadable 1");
+  });
+});
+
+// ── Sync ───────────────────────────────────────────────────────────────────
+
+describe("sync waits while a pass runs", () => {
+  it("holds sync with Zotero's delayIndefinite for the whole pass, and releases it once", async () => {
+    let heldAt = -1;
+    let releasedAt = -1;
+    const release = vi.fn(() => {
+      releasedAt = fakeDb.statements.length;
+    });
+    mockZotero.Sync.Runner.delayIndefinite.mockImplementationOnce(() => {
+      heldAt = fakeDb.statements.length;
+      return release;
+    });
+    useItems(
+      mockItem("A", "Citegeist.confirmedOpenAlexId: W1"),
+      mockItem("B", "Citegeist match ID: W2"),
+    );
+
+    await migrateFromExtraV1();
+
+    const writes = fakeDb.statements
+      .map((statement, index) => ({ statement, index }))
+      .filter(({ statement }) => /^INSERT/i.test(statement.sql.trim()))
+      .map(({ index }) => index);
+    expect(writes, "positive control: the pass imported both").toHaveLength(2);
+    for (const index of writes) {
+      expect(index).toBeGreaterThanOrEqual(heldAt);
+      expect(index).toBeLessThan(releasedAt);
+    }
+    expect(heldAt).toBeGreaterThanOrEqual(0);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(mockZotero.Sync.Runner.delaySync).not.toHaveBeenCalled();
+  });
+
+  it("releases the hold when a pass fails", async () => {
+    mockZotero.Items.getAll.mockRejectedValueOnce(new Error("items unavailable"));
+
+    await migrateFromExtraV1();
+
+    expect(syncRelease()).toHaveBeenCalledTimes(1);
+    expect(importDone()).toBeUndefined();
+  });
+
+  it("the harness's delaySync is Zotero's: it never runs a function it is given", async () => {
+    let ran = false;
+    // The call BUG-MIGRATION shipped, against the harness's Zotero.
+    const delaySync = mockZotero.Sync.Runner.delaySync as unknown as (fn: () => unknown) => unknown;
+    await delaySync(async () => {
+      ran = true;
+    });
+    expect(ran).toBe(false);
+  });
+});
+
+// ── U18: orphan-GC time, under its real name ───────────────────────────────
+
+describe("orphan-GC prefs (U18)", () => {
+  async function cachedItem(key: string, workId: string): Promise<_ZoteroTypes.Item> {
+    const item = mockItem(key);
+    await cacheWorkData(item, {
+      id: `https://openalex.org/${workId}`,
+      cited_by_count: 1,
+      fwci: null,
+      is_retracted: false,
+    });
+    return item;
   }
 
-  it("writes to .tmp then renames onto the final path via IOUtils.move", async () => {
-    const moveSpy = IOUtils.move as unknown as ReturnType<typeof vi.fn>;
-    moveSpy.mockClear();
-    mockZotero.Items.getAll.mockResolvedValue([mockItem("MV", legacyExtraSmall())]);
-    await migrateFromExtraV1();
-    expect(moveSpy).toHaveBeenCalledTimes(1);
-    const [src, dest] = moveSpy.mock.calls[0];
-    expect(src).toMatch(/\.json\.tmp$/);
-    expect(dest).toBe((src as string).replace(/\.tmp$/, ""));
+  it("records the orphan-GC time so a second run inside the interval skips", async () => {
+    mockZotero.Items.getAll.mockResolvedValue([]); // every cached row is an orphan
+    const first = await cachedItem("G1", "W90013");
+    await garbageCollectOrphans({ force: true });
+    expect(getCachedData(first)).toBeNull();
+
+    const second = await cachedItem("G2", "W90014");
+    await garbageCollectOrphans();
+
+    expect(getCachedData(second), "GC ran again inside its interval").not.toBeNull();
+    expect(mockZotero.Prefs.user.get(PREF_LAST_ORPHAN_GC_AT)).toMatch(/^\d+$/);
   });
 
-  it("chmod 0600 applies to the .tmp before the rename, and 0700 to the parent dir", async () => {
-    const permSpy = (IOUtils as unknown as { setPermissions: ReturnType<typeof vi.fn> })
-      .setPermissions;
-    permSpy.mockClear();
-    mockZotero.Items.getAll.mockResolvedValue([mockItem("PM", legacyExtraSmall())]);
-    await migrateFromExtraV1();
-    // Two calls: dir (0700) + file tmp (0600).
-    const calls = permSpy.mock.calls;
-    const dirCall = calls.find(([p]) => /citegeist-backups$/.test(p as string));
-    const fileCall = calls.find(([p]) => /\.json\.tmp$/.test(p as string));
-    expect(dirCall?.[1]).toEqual({ unixMode: 0o700 });
-    expect(fileCall?.[1]).toEqual({ unixMode: 0o600 });
+  it("ignores the wrapped integer earlier builds left under the doubled name", async () => {
+    mockZotero.Items.getAll.mockResolvedValue([]);
+    mockZotero.Prefs.user.set(doubled(PREF_LAST_ORPHAN_GC_AT), Date.now() | 0);
+    const orphan = await cachedItem("G3", "W90015");
+
+    await garbageCollectOrphans();
+
+    expect(getCachedData(orphan)).toBeNull();
+    expect(mockZotero.Prefs.user.get(PREF_LAST_ORPHAN_GC_AT)).toMatch(/^\d+$/);
   });
 
-  it("sweeps stranded .tmp files from prior crashes during prune", async () => {
-    const getChildrenSpy = IOUtils.getChildren as unknown as ReturnType<typeof vi.fn>;
-    const removeSpy = IOUtils.remove as unknown as ReturnType<typeof vi.fn>;
-    removeSpy.mockClear();
-    getChildrenSpy.mockResolvedValueOnce([
-      "/tmp/zotero-test-data/citegeist-migration-backup-2025-01-01T00-00-00-000Z.json",
-      "/tmp/zotero-test-data/citegeist-migration-backup-2024-06-15T00-00-00-000Z.json.tmp",
-    ]);
-    mockZotero.Items.getAll.mockResolvedValue([mockItem("TMP", legacyExtraSmall())]);
-    await migrateFromExtraV1();
-    // .tmp from a prior crash is removed unconditionally.
-    expect(removeSpy.mock.calls.some(([p]) => /\.json\.tmp$/.test(p as string))).toBe(true);
+  it("records the time of a GC that found no orphans, so the next run inside the interval skips", async () => {
+    mockZotero.Items.getAll.mockResolvedValue([]); // every cached row is an orphan
+    await garbageCollectOrphans(); // nothing cached yet, so nothing to remove
+    expect(mockZotero.Prefs.user.get(PREF_LAST_ORPHAN_GC_AT)).toMatch(/^\d+$/);
+
+    const orphan = await cachedItem("G4", "W90016");
+    await garbageCollectOrphans();
+
+    expect(getCachedData(orphan), "GC ran again inside its interval").not.toBeNull();
   });
-});
 
-describe("recovery-branch saveTx deadline (REL-M-001)", () => {
-  it("does NOT checkpoint when recovery-branch saveTx rejects fast", async () => {
-    // ADV-001 recovery path: Extra contains only the v2-runtime mirror
-    // line. Migration strips the line after writing a SQLite row — that
-    // strip uses the same saveTxWithDeadline helper as the main path. A
-    // fast rejection must propagate to unresolvedSkips so the user
-    // re-attempts on next launch (parity with the main path).
-    const extra = "Citegeist match ID: W55555";
-    const item = mockItem("RREC", extra);
-    (item.saveTx as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      throw new Error("simulated locked metadata in recovery branch");
-    });
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    mockZotero.Prefs.set.mockClear();
+  it("runs the GC when the recorded time is later than now", async () => {
+    mockZotero.Items.getAll.mockResolvedValue([]);
+    const nextYear = Date.now() + 365 * 24 * 60 * 60 * 1000;
+    mockZotero.Prefs.user.set(PREF_LAST_ORPHAN_GC_AT, String(nextYear));
+    const orphan = await cachedItem("G5", "W90017");
 
-    await migrateFromExtraV1();
+    await garbageCollectOrphans();
 
-    // SQLite row recovered before the failed saveTx.
-    expect(fakeDb.table.has("1:RREC")).toBe(true);
-    // Item NOT checkpointed.
-    expect(fakeDb.progress.has("1:RREC")).toBe(false);
-    // Completion pref unset.
-    const completionCalls = mockZotero.Prefs.set.mock.calls.filter(
-      ([k, v]: [string, unknown]) =>
-        k === "extensions.zotero.citegeist.migrationV1Complete" && v === true,
-    );
-    expect(completionCalls).toHaveLength(0);
-  });
-});
-
-describe("saveTx fast rejection propagation (C-M-001)", () => {
-  it("does NOT checkpoint when saveTx rejects immediately during migration step 2", async () => {
-    // Iter L's `.catch(noop)`-before-Promise.race regressed: a saveTx
-    // that rejected fast (lock contention, validation throw, read-only
-    // profile) was silently swallowed and the item was checkpointed
-    // with both legacy Extra AND a new SQLite row.
-    const extra = ["Citegeist.openAlexId: W777", "Citegeist.citedByCount: 3"].join("\n");
-    const item = mockItem("REJ", extra);
-    // Fast-reject saveTx synchronously.
-    (item.saveTx as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      throw new Error("simulated locked metadata");
-    });
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    mockZotero.Prefs.set.mockClear();
-
-    await migrateFromExtraV1();
-
-    // SQLite row exists (Step 1 ran before the failed Step 2).
-    expect(fakeDb.table.has("1:REJ")).toBe(true);
-    // Migration did NOT checkpoint the item — fast rejection must
-    // propagate to the per-item catch and bump unresolvedSkips.
-    expect(fakeDb.progress.has("1:REJ")).toBe(false);
-    // Completion pref stays unset because unresolvedSkips > 0.
-    const completionCalls = mockZotero.Prefs.set.mock.calls.filter(
-      ([k, v]: [string, unknown]) =>
-        k === "extensions.zotero.citegeist.migrationV1Complete" && v === true,
-    );
-    expect(completionCalls).toHaveLength(0);
-  });
-});
-
-describe("buildRowFromLegacy strict numeric parsing", () => {
-  it("treats garbage citedByCount as null, not 0", async () => {
-    const item = mockItem(
-      "GBG",
-      ["Citegeist.openAlexId: W1234", "Citegeist.citedByCount: not-a-number"].join("\n"),
-    );
-    mockZotero.Items.getAll.mockResolvedValue([item]);
-    await migrateFromExtraV1();
-    // Garbage must not become a real `0` — that would be indistinguishable
-    // from a true zero-citation work and corrupt downstream comparisons.
-    expect(getCachedCitationCount(item)).toBeNull();
+    expect(getCachedData(orphan)).toBeNull();
   });
 });

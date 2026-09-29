@@ -70,8 +70,10 @@ declare namespace _ZoteroTypes {
 
   interface ProgressWindow {
     changeHeadline(text: string): void;
+    addDescription(text: string): void;
     show(): void;
     startCloseTimer(ms: number): void;
+    close(): void;
     ItemProgress: new (icon: string, text: string) => ProgressWindowItem;
   }
 
@@ -86,6 +88,110 @@ declare namespace _ZoteroTypes {
      *  invalidates row caches and reruns column dataProviders. */
     refresh?(): Promise<void>;
     invalidate?(): void;
+  }
+
+  /**
+   * A collection-tree row (`Zotero.CollectionTreeRow`). Deliberately opaque:
+   * `src/modules/host/selection.ts` checks every field it reads (`type`, then
+   * `ref`, whose shape depends on the type), because the host object differs
+   * across Zotero versions and a declared shape would invite reads that skip
+   * those checks.
+   */
+  type CollectionTreeRow = unknown;
+
+  /**
+   * The selection fields of a `Zotero.MenuManager` context on the library
+   * targets. Zotero 8 and 9 supply `collectionTreeRow`. Zotero 10 adds
+   * `collectionTreeRows`, the full selection, and turns `collectionTreeRow` into
+   * a getter that throws on a multi-row selection and otherwise logs a
+   * removed-API warning, on release and beta builds alike, so it may be read
+   * only when `collectionTreeRows` is absent.
+   */
+  interface MenuSelectionContext {
+    readonly collectionTreeRows?: readonly CollectionTreeRow[];
+    readonly collectionTreeRow?: CollectionTreeRow | null;
+    /** The menu element the context belongs to; its document's window is the right-clicked window. */
+    readonly menuElem?: Element | null;
+  }
+
+  /**
+   * The context `Zotero.MenuManager` hands `onShowing` and `onCommand`.
+   *
+   * Zotero 10 builds it by copying property descriptors, so `collectionTreeRow`
+   * arrives as the getter that throws: spreading, serializing or
+   * `Object.assign`-ing a context reads it. Pass the context itself, and read its
+   * selection only through `src/modules/host/selection.ts`.
+   */
+  interface MenuManagerContext extends MenuSelectionContext {
+    /** Selected items in the right-clicked pane, on the `main/library/item` target. */
+    readonly items?: readonly Item[];
+    setVisible(visible: boolean): void;
+    setEnabled(enabled: boolean): void;
+  }
+
+  /** One entry of a `Zotero.MenuManager` menu tree. */
+  interface MenuManagerMenuData {
+    menuType: "menuitem" | "submenu" | "separator";
+    /** The FTL message the label comes from. MenuManager has no `label` field and drops one silently. */
+    l10nID?: string;
+    icon?: string;
+    onShowing?: (event: Event, context: MenuManagerContext) => void;
+    onCommand?: (event: Event, context: MenuManagerContext) => void;
+    menus?: MenuManagerMenuData[];
+  }
+
+  interface MenuManagerOptions {
+    menuID: string;
+    pluginID: string;
+    target: string;
+    menus: MenuManagerMenuData[];
+  }
+
+  /** `Zotero.MenuManager` (Zotero 8 and later), limited to what Citegeist calls. */
+  interface MenuManager {
+    /**
+     * The key Zotero stores the menu under, `CSS.escape(`${pluginID}-${menuID}`)`,
+     * not the menu ID; or `false` when Zotero refuses the registration: an
+     * invalid option, or a key already registered (pluginAPIBase.mjs `register`
+     * 118-126, `_validate` 177-194 and `_namespacedMainKey` 312-320, identical at
+     * 8.0.4, 9.0.6 and 10.0.2).
+     */
+    registerMenu(options: MenuManagerOptions): string | false;
+    /**
+     * Remove the menu stored under `key`, the value `registerMenu` returned. Any
+     * other string, the bare menu ID included, matches nothing: Zotero returns
+     * `false` and logs "Can't remove unknown option" (pluginAPIBase.mjs 163-170).
+     */
+    unregisterMenu(key: string): boolean;
+    /**
+     * Zotero's internal menu registry, a PluginAPIBase subclass. Not a public
+     * API: MenuManager offers no query, so Citegeist reads it only to ask whether
+     * a key is registered. `options` lists every registration, each with `menuID`
+     * set to its key (pluginAPIBase.mjs `options` 94-96, `_validate` 192).
+     */
+    readonly _menuManager?: {
+      readonly options?: readonly { readonly menuID?: unknown }[];
+    };
+  }
+
+  /**
+   * A main window's Zotero pane (`window.ZoteroPane`), limited to what Citegeist
+   * reads. Read the selection only through `src/modules/host/selection.ts`
+   * (`test/selection-guard-invariants.test.ts` enforces it): Zotero 10's singular
+   * collection-tree getters throw on a multi-row selection and otherwise log a
+   * removed-API warning, on release and beta builds alike.
+   */
+  interface ZoteroPane {
+    getSelectedItems(asIDs?: boolean): Item[];
+    /** The selected collection; `false`/`undefined` when the row is not a collection. Singular: see above. */
+    getSelectedCollection(): Collection | false | null | undefined;
+    /** Zotero 10+: every selected collection, in selection order. */
+    getSelectedCollections?(): Collection[];
+    /** The focused collection-tree row, or a falsy value when none. Singular: see above. */
+    getCollectionTreeRow?(): CollectionTreeRow | false | 0 | null | undefined;
+    /** Zotero 10+: every selected collection-tree row, in tree order. Safe with any selection. */
+    getCollectionTreeRows?(): CollectionTreeRow[];
+    itemsView?: ItemsView;
   }
 
   // Item pane section registration types
@@ -177,12 +283,28 @@ declare namespace _ZoteroTypes {
    * Auto-creates `<profile>/<name>.sqlite` on first use.
    *
    * We deliberately expose only the surface Citegeist uses. Zotero's real
-   * `DBConnection` has more (transactions, table introspection); add them
-   * here when a caller actually needs them.
+   * `DBConnection` has more (table introspection); add them here when a caller
+   * actually needs them.
    */
   interface DBConnection {
     queryAsync<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+    /**
+     * Run `func` in a transaction: resolves with its result after COMMIT, and
+     * rejects with its error after ROLLBACK. A call made while another
+     * transaction is open on the connection waits for it, and rejects with a
+     * timeout error after `waitTimeout` ms (default 30000), so a transaction
+     * must never open another on the same connection. Zotero 10 counts each
+     * commit, and its idle vacuum keeps the live file when the count moved.
+     */
+    executeTransaction<T>(func: () => Promise<T>, options?: { waitTimeout?: number }): Promise<T>;
     closeDatabase(permanent?: boolean): Promise<void>;
+    /**
+     * Run `callback` each time Zotero (re)opens the underlying connection, after
+     * the connection is usable. Zotero 9.0.6+ closes and reopens a plugin
+     * database around its idle backup, which drops per-connection PRAGMAs such
+     * as `query_only`. Absent on older Zotero builds.
+     */
+    onConnect?(callback: () => unknown): void;
   }
 
   interface Library {
@@ -201,13 +323,8 @@ declare const Zotero: {
   locale?: string;
   debug(msg: string, level?: number): void;
   log(msg: string): void;
-  getActiveZoteroPane(): {
-    getSelectedItems(asIDs?: boolean): _ZoteroTypes.Item[];
-    getSelectedCollection(): _ZoteroTypes.Collection | null;
-    /** Returns the library ID of the currently selected library or collection. */
-    getSelectedLibraryID?(): number | undefined;
-    itemsView?: _ZoteroTypes.ItemsView;
-  };
+  /** The most recent main window's pane, or `null` when no main window is open. */
+  getActiveZoteroPane(): _ZoteroTypes.ZoteroPane | null;
   Item: new (itemType: string) => _ZoteroTypes.Item;
   Items: {
     get(id: number): _ZoteroTypes.Item | false;
@@ -232,7 +349,22 @@ declare const Zotero: {
   };
   Sync: {
     Runner: {
-      delaySync<T>(fn: () => Promise<T>): Promise<T>;
+      /**
+       * Push syncs back until `ms` milliseconds from now. Returns nothing and
+       * never calls a function: passed one, it sets an invalid date that holds
+       * nothing (syncRunner.js 8.0.4 lines 1037-1039, 9.0.6 lines 1066-1068,
+       * 10.0.2 lines 1081-1083). To hold sync around a batch, use
+       * {@link delayIndefinite}.
+       */
+      delaySync(ms: number): void;
+      /**
+       * Hold every sync that starts from now on until the returned function is
+       * called; call it in a `finally`. A held sync waits before it contacts the
+       * server, and a sync already past that point runs on (syncRunner.js
+       * 7.0.10 lines 1045-1052, 8.0.4 lines 1047-1052, 9.0.6 lines 1076-1081,
+       * 10.0.2 lines 1091-1096; the wait, 10.0.2 lines 167-171).
+       */
+      delayIndefinite(): () => void;
     };
   };
   Collections: {
@@ -264,7 +396,11 @@ declare const Zotero: {
       getResponseHeader(header: string): string | null;
     }>;
   };
-  ProgressWindow: new (options?: { closeOnClick?: boolean }) => _ZoteroTypes.ProgressWindow;
+  ProgressWindow: new (options?: {
+    /** Window the notification opens in; Zotero falls back to the main window. */
+    window?: Window | null;
+    closeOnClick?: boolean;
+  }) => _ZoteroTypes.ProgressWindow;
   Search: new () => _ZoteroTypes.Search;
   ItemTreeManager: {
     registerColumn(options: _ZoteroTypes.RegisterColumnOptions): Promise<string>;
@@ -278,6 +414,8 @@ declare const Zotero: {
     registerSection(options: _ZoteroTypes.RegisterSectionOptions): void;
     unregisterSection(paneID: string): void;
   };
+  /** Absent on Zotero 7. */
+  MenuManager?: _ZoteroTypes.MenuManager;
   PreferencePanes: {
     register(options: {
       pluginID: string;
@@ -289,12 +427,13 @@ declare const Zotero: {
   };
   launchURL(url: string): void;
   getMainWindow(): Window;
+  /** Every open main window; File > New Window opens more than one. */
+  getMainWindows(): Window[];
   [key: string]: unknown;
 };
 
 declare const ZoteroPane: {
   getSelectedItems(asIDs?: boolean): _ZoteroTypes.Item[];
-  getSelectedCollection(): _ZoteroTypes.Collection | null;
   itemsView?: _ZoteroTypes.ItemsView;
 };
 

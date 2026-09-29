@@ -22,11 +22,13 @@ import {
   normalizePMID,
   normalizeArxivId,
   normalizeISBN,
+  OpenAlexUnavailableError,
   type OpenAlexWork,
 } from "./openalex";
 import {
   cacheItemAuthors,
   cacheWorkData,
+  cacheWriteRefusalCode,
   isCacheStale,
   getCachedData,
   getCachedOpenAlexId,
@@ -38,6 +40,7 @@ import {
 } from "./cache";
 import { searchByMetadata, type TitleMatchResult } from "./titleSearch";
 import {
+  CacheWriteRefusedError,
   OpenAlexNetworkError,
   OpenAlexBudgetError,
   OpenAlexAuthError,
@@ -56,6 +59,12 @@ import { BULK_FETCH_DELAY_MS, NO_MATCH_RETRY_DAYS } from "../constants";
  * ALWAYS resolves to a rendered state: an unhandled throw used to escape into
  * the pane's `onAsyncRender`, which has no error boundary, leaving the spinner
  * up forever with nothing for the user to report.
+ *
+ * `"cache-unwritable"` means the cache refuses writes (read-only CG-DB03 or
+ * CG-DB04, closed CG-DB02). Found up front, nothing was requested: a lookup
+ * whose result can't be kept still spends the user's OpenAlex budget. Found
+ * mid-item, because the cache closed during a lookup, nothing was saved. The
+ * result's `code` says which refusal it was.
  */
 export type FetchError =
   | "no-identifier"
@@ -63,6 +72,7 @@ export type FetchError =
   | "network"
   | "invalid-item"
   | "no-match"
+  | "cache-unwritable"
   | "unexpected";
 
 /**
@@ -85,6 +95,13 @@ export type FetchResult =
        * bug report something to quote.
        */
       code?: DiagnosticCode;
+      /**
+       * The error the fetch caught, when it caught one. A caller that records a
+       * failure itself ({@link FetchOptions.callerRecordsStops}) logs this, so
+       * the entry keeps what the error says: the HTTP status (401 or 403) and
+       * which lookup it was.
+       */
+      cause?: unknown;
     }
   | { status: "suggestion"; candidate: OpenAlexWork; tier: "high" | "medium"; confidence: number };
 
@@ -225,29 +242,151 @@ export async function resolveWorkForItem(item: _ZoteroTypes.Item): Promise<OpenA
   return fetchWorkByIdentifier(identifier);
 }
 
-/**
- * Fetch citation data for a single Zotero item and cache it.
- * Returns the work data on success so callers can use it without a second API call.
- */
+/** How far one fetch may go to find an item's work, and what it records. */
+export interface FetchOptions {
+  /**
+   * True to use identifier lookups only. An item with no identifier, or one
+   * OpenAlex does not know, then returns `no-identifier` or `not-found` instead
+   * of falling back to the metered title search, and records no no-match that
+   * would hold off a later search. Fetches the user starts leave it unset. The
+   * columns' background queue sets it, so it spends only free lookups.
+   */
+  identifierLookupsOnly?: boolean;
+  /**
+   * True when the caller records, once for its whole pass, the failures that
+   * stop background lookups ({@link BackgroundStop}): a rejected API key
+   * (CG-API01), a spent budget (CG-API42), no connection (CG-NET01) and an
+   * OpenAlex that stayed overloaded through every retry (CG-API50). This call
+   * then records none of them and returns each with its code and `cause`. The
+   * columns' background fetcher sets it: its lookups run side by side, and one
+   * entry per row would fill the diagnostics buffer with a single outage. Any
+   * other failure is still recorded here. Unset, this call records everything.
+   */
+  callerRecordsStops?: boolean;
+}
+
 /**
  * Fetch + cache one item's metrics. NEVER throws: every failure resolves to a
  * `{ status: "error" }` result. The pane's `onAsyncRender` awaits this with no
  * error boundary of its own, so a throw here leaves the loading spinner up
  * permanently — the user sees an app that hung, with nothing to report.
  */
-export async function fetchAndCacheItem(item: _ZoteroTypes.Item): Promise<FetchResult> {
+export async function fetchAndCacheItem(
+  item: _ZoteroTypes.Item,
+  options: FetchOptions = {},
+): Promise<FetchResult> {
   try {
-    return await fetchAndCacheItemInner(item);
+    return await fetchAndCacheItemInner(item, options);
   } catch (e) {
-    logError(`fetchAndCacheItem(${item.id})`, e);
-    return { status: "error", error: "unexpected", code: codeForError(e) };
+    // A write refused mid-item (the cache closed during the lookup) is the same
+    // stop as one found up front: a code a batch stops on, and no diagnostic,
+    // because the write gate already logged the refusal.
+    if (e instanceof CacheWriteRefusedError) {
+      return { status: "error", error: "cache-unwritable", code: e.code, cause: e };
+    }
+    logFailure(options, `fetchAndCacheItem(${item.id})`, e);
+    return { status: "error", error: "unexpected", code: codeForError(e), cause: e };
   }
 }
 
-async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchResult> {
+/**
+ * Record a failed fetch, unless the caller records it itself: a failure that
+ * stops background lookups, from a caller that set
+ * {@link FetchOptions.callerRecordsStops}.
+ */
+function logFailure(options: FetchOptions, context: string, e: unknown): void {
+  if (options.callerRecordsStops === true && stopsBackgroundLookups(e)) return;
+  logError(context, e);
+}
+
+/** Whether a caught error is one that would fail every later request the same way for now. */
+function stopsBackgroundLookups(e: unknown): boolean {
+  return (
+    e instanceof OpenAlexAuthError ||
+    e instanceof OpenAlexBudgetError ||
+    e instanceof OpenAlexNetworkError ||
+    e instanceof OpenAlexUnavailableError
+  );
+}
+
+/** The result for a lookup that could not reach OpenAlex. */
+function networkResult(
+  options: FetchOptions,
+  context: string,
+  e: OpenAlexNetworkError,
+): FetchResult {
+  logFailure(options, context, e);
+  return { status: "error", error: "network", code: "CG-NET01", cause: e };
+}
+
+/**
+ * Why a fetch result stops a pass over many items: every later fetch would fail
+ * the same way. OpenAlex rejected the API key (CG-API01), the daily budget is
+ * spent (CG-API42), or the cache refuses writes.
+ */
+export type FetchStop = "auth" | "budget" | "cache-unwritable";
+
+/** The {@link FetchStop} a result carries, or null when a pass can go on. */
+export function fetchStopFor(result: FetchResult): FetchStop | null {
+  if (result.status !== "error") return null;
+  if (result.code === "CG-API42") return "budget";
+  if (result.code === "CG-API01") return "auth";
+  if (result.error === "cache-unwritable") return "cache-unwritable";
+  return null;
+}
+
+/**
+ * Why a result stops the columns' background lookups: a {@link FetchStop}, or
+ * `"transient"` when OpenAlex could not be reached (no connection, DNS, a
+ * timeout) or stayed overloaded through every retry (a 5xx, a rate-limit 429).
+ * A transient failure says nothing about the item, and the next lookups would
+ * most likely fail the same way until it passes, so the background caller
+ * pauses and tries the item again later rather than remembering it as looked
+ * up. A fetch the user starts treats it as a failure of that one item.
+ */
+export type BackgroundStop = FetchStop | "transient";
+
+/** The {@link BackgroundStop} a result carries, or null when background lookups can go on. */
+export function backgroundStopFor(result: FetchResult): BackgroundStop | null {
+  const stop = fetchStopFor(result);
+  if (stop !== null || result.status !== "error") return stop;
+  if (result.error === "network" || result.cause instanceof OpenAlexUnavailableError) {
+    return "transient";
+  }
+  return null;
+}
+
+/**
+ * The result for a fetch the cache can't keep, or null when it takes writes.
+ * Checked before any OpenAlex request, because a batch would otherwise spend a
+ * metered lookup per item on results that are thrown away.
+ *
+ * A saved "not on OpenAlex" still stands on a cache that refuses writes: it is
+ * read from the mirror with no request, and returned instead of the refusal, so
+ * the pane keeps saying what the cache already knows.
+ */
+function unwritableResult(item: _ZoteroTypes.Item): FetchResult | null {
+  const code = cacheWriteRefusalCode();
+  if (code === null) return null;
+  if (isNoMatchSuppressed(item, NO_MATCH_RETRY_DAYS)) return { status: "error", error: "no-match" };
+  return { status: "error", error: "cache-unwritable", code };
+}
+
+/** Record a failed write, unless it was refused: the write gate logs a refusal once itself. */
+function logUnlessRefused(context: string, e: unknown): void {
+  if (!(e instanceof CacheWriteRefusedError)) logError(context, e);
+}
+
+async function fetchAndCacheItemInner(
+  item: _ZoteroTypes.Item,
+  options: FetchOptions,
+): Promise<FetchResult> {
   if (!item.isRegularItem() || item.deleted) {
     return { status: "error", error: "invalid-item" };
   }
+
+  const unwritable = unwritableResult(item);
+  if (unwritable) return unwritable;
 
   // If researcher previously confirmed a title match, use the stored OpenAlex ID directly.
   const matchMeta = getTitleMatchMeta(item);
@@ -265,7 +404,7 @@ async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchRes
         // result that already persisted. No column repaint — authors have no
         // v1 column (KTD5); the pane reads them async.
         await cacheItemAuthors(item, work.authorships).catch((e) =>
-          logError("cacheItemAuthors(confirmed)", e),
+          logUnlessRefused("cacheItemAuthors(confirmed)", e),
         );
         return { status: "ok", work };
       }
@@ -274,8 +413,7 @@ async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchRes
         // Log the local rowid, never the OpenAlex work id: the id is a
         // resolvable pointer to the paper, and this context is recorded into the
         // shareable diagnostic report.
-        logError(`fetchAndCacheItem(confirmed, item ${item.id})`, e);
-        return { status: "error", error: "network", code: "CG-NET01" };
+        return networkResult(options, `fetchAndCacheItem(confirmed, item ${item.id})`, e);
       }
       throw e;
     }
@@ -285,8 +423,9 @@ async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchRes
   const identifier = extractIdentifier(item);
 
   if (!identifier) {
-    // No identifier — try title search (unless suppressed)
-    return attemptTitleSearch(item);
+    // No identifier: search by title, unless this fetch uses identifier lookups only.
+    if (options.identifierLookupsOnly) return { status: "error", error: "no-identifier" };
+    return attemptTitleSearch(item, options);
   }
 
   // Skip if cache is fresh
@@ -297,15 +436,15 @@ async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchRes
     work = await fetchWorkByIdentifier(identifier);
   } catch (e) {
     if (e instanceof OpenAlexNetworkError) {
-      logError(`fetchAndCacheItem(${item.id})`, e);
-      return { status: "error", error: "network", code: "CG-NET01" };
+      return networkResult(options, `fetchAndCacheItem(${item.id})`, e);
     }
     throw e;
   }
 
   if (!work) {
-    // Identifier found but not in OpenAlex — try title search as fallback
-    return attemptTitleSearch(item);
+    // OpenAlex does not know the identifier: search by title, unless this fetch uses identifier lookups only.
+    if (options.identifierLookupsOnly) return { status: "error", error: "not-found" };
+    return attemptTitleSearch(item, options);
   }
 
   // Fetch journal-level stats (best-effort — `null` on failure is fine).
@@ -313,15 +452,24 @@ async function fetchAndCacheItemInner(item: _ZoteroTypes.Item): Promise<FetchRes
   const sourceStats = sourceId ? await getSourceStats(sourceId) : null;
 
   await cacheWorkData(item, work, sourceStats);
-  await cacheItemAuthors(item, work.authorships).catch((e) => logError("cacheItemAuthors", e));
+  await cacheItemAuthors(item, work.authorships).catch((e) =>
+    logUnlessRefused("cacheItemAuthors", e),
+  );
   return { status: "ok", work };
 }
 
 /**
- * Attempt a title-based metadata search after direct lookup failed.
+ * Run the metered title search after a direct lookup found nothing.
  * Handles the no-match suppression window and writes the result to cache.
  */
-async function attemptTitleSearch(item: _ZoteroTypes.Item): Promise<FetchResult> {
+async function attemptTitleSearch(
+  item: _ZoteroTypes.Item,
+  options: FetchOptions,
+): Promise<FetchResult> {
+  // Title search is the metered path, so it refuses on its own account too.
+  const unwritable = unwritableResult(item);
+  if (unwritable) return unwritable;
+
   // Don't re-search if researcher dismissed or we already found no match recently
   if (isNoMatchSuppressed(item, NO_MATCH_RETRY_DAYS)) {
     return { status: "error", error: "no-match" };
@@ -332,8 +480,7 @@ async function attemptTitleSearch(item: _ZoteroTypes.Item): Promise<FetchResult>
     match = await searchByMetadata(item);
   } catch (e) {
     if (e instanceof OpenAlexNetworkError) {
-      logError(`attemptTitleSearch(${item.id})`, e);
-      return { status: "error", error: "network", code: "CG-NET01" };
+      return networkResult(options, `attemptTitleSearch(${item.id})`, e);
     }
     throw e;
   }
@@ -374,7 +521,7 @@ export interface FetchBatchResult {
   cached: number;
   /** Items with an unconfirmed title-match suggestion now pending. */
   suggestion: number;
-  /** Items the fetch attempt couldn't resolve (network / not-found / no-match). */
+  /** Items the fetch attempt couldn't resolve (network / no-match / unexpected). */
   errors: number;
   /**
    * Items skipped because the OpenAlex daily budget ran out mid-pass. Kept
@@ -392,6 +539,19 @@ export interface FetchBatchResult {
    * library. Kept distinct from `errors` for the same reason as `budgetStopped`.
    */
   authStopped: number;
+  /**
+   * Items skipped because the cache refuses writes (read-only CG-DB03 or
+   * CG-DB04, closed CG-DB02). Every later item would be refused the same way,
+   * so the pass stops at the first, and the summary can say nothing was saved
+   * rather than "N processed". Absent means none.
+   */
+  unwritableStopped?: number;
+  /**
+   * The refusal's code when the pass stopped because the cache refuses writes:
+   * CG-DB02 for a closed cache, CG-DB03 or CG-DB04 for a read-only one. The menu
+   * summary words the skip by it. Absent when the pass didn't stop that way.
+   */
+  code?: DiagnosticCode;
 }
 
 /**
@@ -418,6 +578,7 @@ export async function fetchAndCacheItems(
     errors: 0,
     budgetStopped: 0,
     authStopped: 0,
+    unwritableStopped: 0,
   };
 
   for (let i = 0; i < eligible.length; i++) {
@@ -425,23 +586,27 @@ export async function fetchAndCacheItems(
     try {
       const result = await fetchAndCacheItem(eligible[i]);
       status = result.status;
+      const stop = fetchStopFor(result);
+      if (stop !== null) {
+        // Every later item would fail the same way: a spent budget 429s, a
+        // rejected key rides every request, a refusing cache refuses them all.
+        // Stop rather than issue doomed requests, and count this item and the
+        // rest as skipped, not failed, so the summary names the cause instead of
+        // "N couldn't be matched".
+        const skipped = eligible.length - i;
+        if (stop === "budget") out.budgetStopped = skipped;
+        else if (stop === "auth") out.authStopped = skipped;
+        else {
+          out.unwritableStopped = skipped;
+          if (result.status === "error") out.code = result.code;
+        }
+        onItemDone?.(eligible[i].id, stop);
+        break;
+      }
       if (result.status === "ok") out.fresh++;
       else if (result.status === "cached") out.cached++;
       else if (result.status === "suggestion") out.suggestion++;
-      else if (result.status === "error" && result.code === "CG-API42") {
-        // Daily budget spent. Stop the pass rather than 429-ing every remaining
-        // item; count this one and all that follow as skipped, not failed.
-        out.budgetStopped = eligible.length - i;
-        onItemDone?.(eligible[i].id, "budget");
-        break;
-      } else if (result.status === "error" && result.code === "CG-API01") {
-        // Key rejected (401/403). It rides every request, so the next call
-        // fails identically — stop rather than issue N doomed requests, and let
-        // the summary say "check your key" instead of "N couldn't be matched".
-        out.authStopped = eligible.length - i;
-        onItemDone?.(eligible[i].id, "auth");
-        break;
-      } else out.errors++;
+      else out.errors++;
     } catch (e) {
       out.errors++;
       logError(`fetchAndCacheItems item ${eligible[i].id}`, e);
@@ -460,14 +625,11 @@ export async function fetchAndCacheItems(
 
 // ── Author identity backfill (U4) ────────────────────────────────────────────
 
-/** Outcome of resolving one item's author identity in the backfill pass. */
-export type AuthorResolveStatus =
-  | "resolved"
-  | "already"
-  | "unresolved"
-  | "budget"
-  | "auth"
-  | "error";
+/**
+ * Outcome of resolving one item's author identity in the backfill pass. A
+ * {@link FetchStop} stops the pass, by the same rule as a fetch pass.
+ */
+export type AuthorResolveStatus = FetchStop | "resolved" | "already" | "unresolved" | "error";
 
 /**
  * Ensure a single item's authors are resolved into the SQLite item_authors
@@ -479,6 +641,8 @@ export type AuthorResolveStatus =
  */
 export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<AuthorResolveStatus> {
   if (!item.isRegularItem() || item.deleted) return "unresolved";
+  // Identity that can't be saved isn't worth a lookup, not even a free one.
+  if (cacheWriteRefusalCode() !== null) return "cache-unwritable";
 
   try {
     // Read inside the try so a cache/DB read rejection returns "error" instead of
@@ -509,20 +673,18 @@ export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<Au
         const after = await getItemAuthors(item.libraryID, item.key);
         return after.length > 0 ? "resolved" : "unresolved";
       }
-      // fetchAndCacheItem is total, so a budget-exhausted title search comes
-      // back as an error result carrying CG-API42 rather than throwing. Without
-      // this the outer `catch (OpenAlexBudgetError)` never fires on this path,
-      // the pass keeps issuing one metered call per remaining item, and the stop
-      // is miscounted as "unresolved" instead of "budget".
-      if (r.status === "error" && r.code === "CG-API42") return "budget";
-      // Key rejected — same reasoning as budget: stop the pass, don't miscount
-      // an auth failure as a per-item no-match.
-      if (r.status === "error" && r.code === "CG-API01") return "auth";
+      // fetchAndCacheItem is total, so a spent budget, a rejected key or a cache
+      // that stopped taking writes comes back as an error result rather than a
+      // throw, and the outer catch never sees it. The shared classification
+      // stops the pass on each, as a fetch pass stops, instead of issuing one
+      // doomed call per remaining item and miscounting the stop as "unresolved".
+      const stop = fetchStopFor(r);
+      if (stop !== null) return stop;
       if (r.status === "cached") return "already";
       // A genuine failure (network, DB lock, auth, unexpected) is an ERROR, not
       // "no author match" — reporting infrastructure trouble as a clean
       // not-found sends the user looking at their library instead of the cause.
-      if (r.status === "error" && r.error !== "no-match" && r.error !== "no-identifier") {
+      if (r.status === "error" && r.error !== "no-match") {
         return "error";
       }
       return "unresolved";
@@ -536,6 +698,7 @@ export async function resolveAuthorsForItem(item: _ZoteroTypes.Item): Promise<Au
   } catch (e) {
     if (e instanceof OpenAlexBudgetError) return "budget";
     if (e instanceof OpenAlexAuthError) return "auth";
+    if (e instanceof CacheWriteRefusedError) return "cache-unwritable";
     logError(`resolveAuthorsForItem(${item.id})`, e);
     return "error";
   }
@@ -553,6 +716,10 @@ export interface AuthorBackfillResult {
   budgetStopped: number;
   /** Items skipped after OpenAlex rejected the API key (CG-API01) — see FetchBatchResult.authStopped. */
   authStopped: number;
+  /** Items skipped because the cache refuses writes — see FetchBatchResult.unwritableStopped. */
+  unwritableStopped: number;
+  /** The refusal's code when the pass stopped because the cache refuses writes — see FetchBatchResult.code. */
+  code?: DiagnosticCode;
   errors: number;
   cancelled: boolean;
 }
@@ -576,6 +743,7 @@ export async function resolveAuthorsForItems(
     unresolved: 0,
     budgetStopped: 0,
     authStopped: 0,
+    unwritableStopped: 0,
     errors: 0,
     cancelled: false,
   };
@@ -593,6 +761,12 @@ export async function resolveAuthorsForItems(
     }
     if (status === "auth") {
       out.authStopped = eligible.length - i;
+      break;
+    }
+    if (status === "cache-unwritable") {
+      out.unwritableStopped = eligible.length - i;
+      // The status carries no code; the refusal that stopped the item still holds.
+      out.code = cacheWriteRefusalCode() ?? "CG-DB02";
       break;
     }
 

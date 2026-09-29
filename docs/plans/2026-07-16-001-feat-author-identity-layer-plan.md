@@ -6,9 +6,12 @@ timestamp: 2026-07-16
 tags: [citegeist, plan, authors, openalex, disambiguation, cache, api-key, obsidian]
 date: 2026-07-16
 origin: docs/brainstorms/2026-07-16-author-identity-layer-requirements.md
+status: implemented
 ---
 
 # feat: Author Identity Layer
+
+> **Implemented, not released (2026-09-28).** Merged to `main` in #75 (2026-07-18) and ships in v3.0.0, which is U13 of the live plan, `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`. Two parts changed before merge: the Zotero-relation handoff is disabled because Zotero's sync server rejects the predicate (see CLAUDE.md, Caching), and curation became author links. The "My Authors" follow-up lives in `docs/BACKLOG.md`.
 
 > Requirement IDs (R1–R13) and Acceptance Examples (AE1–AE3) are defined in the origin doc: `docs/brainstorms/2026-07-16-author-identity-layer-requirements.md`. This plan references them; it does not redefine them.
 

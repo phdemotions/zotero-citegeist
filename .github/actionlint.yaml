@@ -1,0 +1,9 @@
+# actionlint reads this file when it lints the workflows (`actionlint`, from the repository root).
+paths:
+  .github/workflows/publish-release.yml:
+    ignore:
+      # GitHub documents `queue: max` for job concurrency since 2026-05-06
+      # (https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idconcurrency),
+      # and actionlint 1.7.12, the newest release, does not know the key yet. Publish uses it so a
+      # waiting publish is queued rather than cancelled. Remove this once actionlint knows `queue`.
+      - 'unexpected key "queue" for "concurrency" section'

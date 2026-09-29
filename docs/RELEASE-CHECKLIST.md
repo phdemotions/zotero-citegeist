@@ -1,146 +1,146 @@
 ---
 type: checklist
-title: Citegeist — release gate checklist
-description: Manual verification gates that must pass before tagging any v* release.
-timestamp: 2026-08-02
+title: Citegeist — release checklist
+description: The steps of every release, in order, from the automated gate to the post-release watch.
+timestamp: 2026-09-28
 tags: [citegeist, release, checklist, quality-gate]
 ---
 
-# Citegeist — Release Gate Checklist
+# Citegeist — Release Checklist
 
-Run this **before every `v*` tag**, in order. It is not optional and it is not
-the automated gate.
+Run this for every release, in order. Every installed copy takes a published
+release on its next update check, with no canary, and the tests mock Zotero,
+so the host checks below are the only real-runtime gate. Install the built
+XPI (`npm run build`), not a proxy file.
 
-**Why a manual gate exists.** Two structural facts raise the bar:
-
-1. **Auto-update hits 100% of users, with no canary.** `manifest.json` points
-   `update_url` at the `release` floating tag; every installed copy updates on
-   next Zotero restart. A bad tag is a fleet-wide incident, not a staged one.
-2. **The tests mock Zotero.** All 519 vitest tests run against a mocked host, so
-   the highest-risk surface — does the pane actually draw, does the icon show,
-   does sync survive — has **zero real-runtime coverage** until a human installs
-   the XPI. This surface has silently regressed in production before (the blank-UI
-   / broken-sync incident that created the whole diagnostics branch).
-
-Each check below is tied to a **known failure mode** — this is a regression
-gate, not a formality. Install the **built XPI** (`npm run build`), not a proxy
-file (proxy install is unreliable in practice).
+Everything that is not a per-release step lives in
+[RELEASE-RUNBOOK.md](RELEASE-RUNBOOK.md): what each refusal means, re-run
+recovery, one-time repository setup, the review loop, the fork proofs and the
+break-glass release.
 
 ---
 
 ## 0. Automated gate — must be green first
 
-- [ ] `npm run typecheck && npm test && npm run lint && npm run format:check && npm run okf:check && npm run build`
-      (on **Node ≥22** — vitest 4's ESM config can't be `require()`d on Node 20).
-      If `npm test` flakes, re-run with `--no-file-parallelism` to separate real
-      failures from the known parallel-timeout flakiness.
-- [ ] Build produced `build/citegeist-x.y.z.xpi`.
-
-If the automated gate is red, stop — nothing below matters yet.
+- [ ] `npm run verify` passes on **Node ≥22**. If `npm test` flakes, re-run it
+      with `--no-file-parallelism` to separate real failures from the known
+      parallel-timeout flakiness.
+- [ ] `CI gate` is green on the release pull request. It passes only when
+      `test (22)`, the workflow audit and every real-Zotero cell
+      (`Real Zotero / Zotero 8.0.4`, `Real Zotero / Zotero 9.0.6`,
+      `Real Zotero / Zotero 10.0.3`) succeeded.
 
 ---
 
-## 1. Real-Zotero smoke — run on Zotero **7, 8, AND 9**
+## 1. Real-Zotero smoke — on every version in `real-zotero.yml`'s `zotero-versions`
 
-The three supported hosts diverge exactly where it hurts (MenuManager, icon
-paint, FTL, `context-fill`). Install the XPI in each and verify:
+Today that is Zotero 8, 9 and 10. Install the XPI in each and check:
 
-- [ ] **The pane section appears** in the item pane, and its **sidenav icon is
-      visible in BOTH light and dark mode.** — _Failure modes: `registerSection`
-      must use `l10nID` not `label` (Z9 throws → pane vanishes); must set `icon`
-      AND `darkIcon` (omitting `darkIcon` → blank icon in dark mode); FTL must
-      load by bare filename in `onStartup` and `onMainWindowLoad`;
-      `bootstrap.js` must retain the `registerChrome` handle._
-- [ ] **The pane renders its composition** (impact hero → metric line → two
-      explore buttons → author rows), **not blank.** — _Failure mode: a raw `<`
-      or `&` in the `bodyXHTML` embedded `<style>` aborts the XML parse and the
-      pane silently vanishes (columns survive)._
-- [ ] **Theme follows Zotero, not the OS.** Set Zotero to light while the OS is
-      dark (and vice versa); the pane AND the citation-network dialog must match
-      Zotero's theme. — _Failure mode: UI that inherits `color-scheme` follows
-      the OS; both surfaces must force it via `resolveHostScheme` (`ui/theme.ts`)._
-- [ ] **No raw-hex contrast bugs.** Eyeball links, chips, the picker checkmark,
-      and any status text in both themes — all legible. — _Failure mode: raw hex
-      in component CSS doesn't adapt to theme (caused two v2.0.4 contrast bugs);
-      a `light-dark()` arm that `var()`s its own property collapses to transparent._
-- [ ] **Right-click menu** shows the Citegeist items with real labels (no blank
-      or duplicate entries). — _Failure modes: Z8+ `MenuManager` items need
-      `l10nID` (bare `label` → textless item); Z7 uses the DOM fallback;
-      registration is process-global (guard against double-register)._
-- [ ] **Fetch works end to end:** run "Fetch Citation Counts" on an item →
-      columns populate and the pane hero shows the count. Run it on a small
-      collection → columns fill progressively. — _Failure mode: columns only
-      repaint via `refreshAndMaintainSelection`, per-item-invalidated + debounced._
-- [ ] **Both dialogs open:** citation-network (citing / references) and the
-      author-works view from an author row.
-- [ ] **No console errors** in Zotero's Debug Output on startup, item-select, or
+- [ ] **The pane section appears** and its **sidenav icon shows in light and
+      dark mode**. — _`registerSection` uses `l10nID`, sets `icon` and
+      `darkIcon`; the FTL loads by bare filename; `bootstrap.js` keeps the
+      `registerChrome` handle._
+- [ ] **The pane renders its composition** (impact hero, metric line, the two
+      explore buttons, author rows), not blank. — _A raw `<` or `&` in the
+      `bodyXHTML` style aborts the XML parse._
+- [ ] **Theme follows Zotero, not the OS**, in the pane and the
+      citation-network dialog. — _Both surfaces force it via
+      `resolveHostScheme`._
+- [ ] **No contrast bugs**: links, chips, the picker checkmark and status text
+      are legible in both themes. — _Raw hex, or a `light-dark()` arm that
+      `var()`s its own property._
+- [ ] **The right-click menu** shows Citegeist's items with real labels, once.
+      — _MenuManager items need `l10nID`; registration is process-global._
+- [ ] **Fetch works end to end** on one item (columns fill, the hero shows the
+      count) and on a small collection (columns fill as it goes). — _Columns
+      repaint only through `refreshAndMaintainSelection`._
+- [ ] **Both dialogs open**: the citation network and an author's works.
+- [ ] **No console errors** in Debug Output at startup, item select or
       shutdown.
 
----
+## 2. Diagnostics end to end
 
-## 2. Diagnostics end-to-end — the new subsystem, never exercised live before
+- [ ] A garbage API key shows **`CG-API01`** with a **Copy report** button.
+- [ ] Offline, an uncached item shows **`CG-NET01`**.
+- [ ] Paste the copied report and read it: it holds no title, DOI, OpenAlex id,
+      API key or username. A leak here is a privacy incident.
+- [ ] No surface hangs on a spinner; a bulk fetch with the bad key stops and
+      says to check the key.
 
-The diagnostics layer is unit-tested but has never met a real user hitting a
-real error in real Zotero. Force each class and confirm the coded UI:
-
-- [ ] **Bad API key** (enter a garbage key in settings, fetch an item) → the
-      pane shows a coded failure with **`CG-API01`** and a "Copy report" button.
-- [ ] **Offline** (disable network, fetch an uncached item) → **`CG-NET01`**.
-- [ ] **Copy report works** and the pasted report is **clean**: it contains no
-      paper title, DOI, OpenAlex id, API key, or your username. Paste it and read
-      it. — _This is the redaction promise; a leak here is a privacy incident._
-- [ ] **No surface hangs on a spinner** through any of the above — every failure
-      resolves to a terminal state with something to quote.
-- [ ] A bulk "Fetch All" with the bad key **stops** and says to check the key,
-      rather than grinding through the whole library.
-
----
-
-## 3. Sync integrity — 2-device round-trip (**P0 blast radius — non-negotiable**)
-
-The `openalex:author` relation once halted the user's **entire** Zotero sync
-(the server rejects the custom predicate: "Unsupported predicate
-'openalex:author'" → "Made no progress during upload"). A regression here breaks
-the user's whole library, not just Citegeist.
+## 3. Sync integrity — two devices (P0 blast radius)
 
 - [ ] **Device A:** run "Resolve Author Identities" on an item, then sync.
-- [ ] **Device B:** sync, and confirm the library sync **completes** — no 400,
-      no "Made no progress during upload," no stall.
-- [ ] Confirm author data is present on Device B (via the pane, or a direct
-      `citegeist.sqlite` read — the documented fallback).
+- [ ] **Device B:** sync; it **completes**, with no 400 and no "Made no progress
+      during upload", and the author data is there, in the pane or read straight
+      from `citegeist.sqlite`. — _The `openalex:author` relation once halted a
+      user's whole library sync._
 
-Do not tag if this gate has not been run against a real second device.
+Do not release if this has not run against a real second device.
 
----
+## 4. Before you release
 
-## 4. Sequencing / risk judgment — decide before you tag
-
-- [ ] **Is this release bundling too much?** A fat major (e.g. author identity +
-      diagnostics + pane rebuild in one tag) is a lot of independent risk behind
-      one irreversible auto-update. Prefer shipping the **diagnostics safety net
-      as its own smaller release first** — then the next, riskier release lands
-      with the net already in users' hands and every failure is addressable.
-- [ ] **Self-dogfood first.** Install the dev build for your own daily use for a
-      day or two before the auto-update tag — the cheapest canary available.
+- [ ] **Is this release bundling too much?** A fat release is a lot of
+      independent risk behind one irreversible auto-update; ship the safety net
+      first when you can.
+- [ ] **Dogfood first**: run the dev build for a day or two.
 
 ---
 
-## 5. Tag + release — mechanical (canonical steps in `CLAUDE.md` → Release Process)
+## 5. Release
 
-- [ ] Bump the version in `package.json`, `package-lock.json` (top-level +
-      `packages[""]`, via `npm install`), and `CITATION.cff` — all three match.
-- [ ] Move `[Unreleased]` in `CHANGELOG.md` to the new version with today's date;
-      add the comparison link.
-- [ ] Commit, then `git tag vX.Y.Z && git push origin main && git push origin vX.Y.Z`
-      (or `npm run release`).
+Between releases `main` carries the next version's development version,
+`X.Y.Z-alpha.0`. The release pull request changes it to `X.Y.Z`, and the
+**Publish release** workflow releases that pull request's merge commit. No one
+pushes a `v*` tag: ruleset 24140405 refuses it, and Publish creates the tag
+once every gate has passed.
+
+- [ ] Branch from an up-to-date `main`:
+      `git switch main && git pull --ff-only && git switch -c release/vX.Y.Z`.
+      `package.json` there has `"version": "X.Y.Z-alpha.0"`; if it does not,
+      first merge a pull request that sets it.
+- [ ] Update `CITATION.cff` (`version`, `date-released`) and move
+      `[Unreleased]` in `CHANGELOG.md` to the new version with today's date and
+      its comparison link. Leave both uncommitted.
+- [ ] `npm run release -- X.Y.Z`. It refuses to run while any other tracked
+      file has changes, then changes `package.json` and `package-lock.json`
+      from `X.Y.Z-alpha.0` to `X.Y.Z` and commits `release: vX.Y.Z`, with no
+      tag and no push. Confirm the three files agree.
+- [ ] `git push -u origin release/vX.Y.Z`, open a pull request to `main`, and
+      **Squash and merge** it once `CI gate` is green.
+- [ ] **Actions → Publish release → Run workflow**, on `main`, with **version**
+      `X.Y.Z`. Leave **commit** empty to release `main` as it stands, which is
+      right when nothing has merged since the release pull request; otherwise
+      give that pull request's merge commit:
+      `gh pr view <number> --json mergeCommit --jq .mergeCommit.oid`.
+- [ ] Watch the run. `Build` refuses a run from any branch but `main`, and a
+      commit or version the release pull request did not produce, before
+      installing anything, then builds; `Verify` and every
+      `Real Zotero / Zotero <version>` cell test that build; `Publish` checks the
+      bytes and the live channel, attests the assets, creates the `vX.Y.Z` tag,
+      publishes the release and moves the channel; `README badges` runs last.
+      **A failed gate publishes nothing.** If a job fails, see
+      [RELEASE-RUNBOOK.md, "Re-run recovery"](RELEASE-RUNBOOK.md#re-run-recovery)
+      before re-running anything.
+- [ ] **Confirm the channel serves the release:**
+      `curl -sL https://github.com/phdemotions/zotero-citegeist/releases/download/release/update.json`
+      lists `X.Y.Z`.
+- [ ] **Confirm the provenance:** download the XPI from the release and run
+      `gh attestation verify citegeist-X.Y.Z.xpi --repo phdemotions/zotero-citegeist`.
+- [ ] **Start the next version on `main`:** a pull request that runs
+      `npm version --no-git-tag-version X.Y.(Z+1)-alpha.0`, or the `-alpha.0` of
+      whichever version comes next, and commits
+      `chore: start X.Y.(Z+1) development`. Until it merges, `main` carries a
+      shipped version and the next release's guard refuses. A later pull
+      request can change the development version if the plan changes; the guard
+      reads only the one `main` carries just before the release pull request.
 
 ---
 
-## 6. Post-release watch
+## 6. After the release
 
-- [ ] GitHub Actions built the XPI, created the Release, and force-updated the
-      `release` floating tag with a fresh `update.json`.
-- [ ] Install an older copy and confirm it auto-updates on restart.
-- [ ] Zenodo archived the new `v*`.
-- [ ] Triage incoming issues **by `CG-*` code** — users can now quote them; a
-      code maps straight to `docs/ERROR-CODES.md` and the producing module.
+- [ ] Every job of the run passed, and the release carries the XPI and
+      `update.json`.
+- [ ] An older installed copy auto-updates on restart.
+- [ ] Zenodo archived the new `vX.Y.Z`.
+- [ ] Triage incoming issues **by `CG-*` code**; each maps to
+      `docs/ERROR-CODES.md` and the module that raised it.

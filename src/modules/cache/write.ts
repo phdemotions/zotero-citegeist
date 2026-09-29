@@ -23,7 +23,6 @@ import {
 } from "./types";
 import { saveItemGuarded } from "../utils";
 import { deleteRow, mutateRow } from "./db";
-import { isMigrationInProgress } from "./migration";
 
 /** Pending-suggestion fields cleared together on confirm/dismiss. */
 const PENDING_CLEARED = {
@@ -137,6 +136,9 @@ export async function cacheWorkData(
  * a full `_ZoteroTypes.Item` get the mirror cleanup.
  */
 export async function clearCache(item: CacheItemKey | _ZoteroTypes.Item): Promise<void> {
+  // deleteRow runs first and rejects on a cache that refuses writes, so the
+  // Extra strip below never runs alone: a row that keeps its confirmation never
+  // loses the Extra line that mirrors it.
   await deleteRow(item.libraryID, item.key);
   // Detect whether the caller passed a full Item (with getField/saveTx) vs.
   // just the structural { libraryID, key } shape used by tests + internal code.
@@ -287,8 +289,8 @@ export async function clearPendingSuggestion(item: CacheItemKey): Promise<void> 
  * Returns a copy of `lines` with any existing `Citegeist match ID:` line
  * removed and `openAlexId` (if non-null) appended as a fresh entry.
  *
- * Pure — no side effects. Shared by the runtime confirm-match path and the
- * one-shot legacy migration, both of which need the same line-rewrite rule.
+ * Pure — no side effects. Shared by the confirm-match path and `clearCache`,
+ * which need the same line-rewrite rule.
  */
 export function setExtraConfirmedMatch(lines: string[], openAlexId: string | null): string[] {
   const prefix = `${CONFIRMED_MATCH_EXTRA_PREFIX}:`;
@@ -310,22 +312,8 @@ async function writeConfirmedMatchToExtra(
   item: _ZoteroTypes.Item,
   openAlexId: string,
 ): Promise<void> {
-  // Defer Extra writes while migration is mid-loop. Without this, the
-  // runtime saveTx could race with migration's Step 2 strip and either
-  // (a) resurrect legacy `Citegeist.*` lines that migration was about
-  // to remove, or (b) clobber a stripped Extra with the pre-strip
-  // contents. SQLite still got updated by the caller's `mutateRow`, so
-  // the user's confirmation is persisted; the Extra mirror just waits
-  // for the next confirmTitleMatch (or skips this round entirely —
-  // acceptable, the mirror is only used for downgrade/cross-device).
-  if (isMigrationInProgress()) {
-    Zotero.debug(
-      `[Citegeist] writeConfirmedMatchToExtra deferred while migration is running (item ${item.key})`,
-    );
-    return;
-  }
-  // openAlexId is already validated by cacheWorkData / writePendingSuggestion /
-  // buildRowFromLegacy at the row's write boundary — no re-check here.
+  // openAlexId is already validated at the row's write boundary, by
+  // cacheWorkData and writePendingSuggestion — no re-check here.
   const extra = item.getField("extra") ?? "";
   const newLines = setExtraConfirmedMatch(extra.split("\n"), openAlexId);
   const cleaned = newLines.join("\n").replace(/\n+$/, "");

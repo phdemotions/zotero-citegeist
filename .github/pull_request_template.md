@@ -14,10 +14,8 @@
 ## Testing
 
 <!-- How did you verify this works? -->
-- [ ] `npm test`
-- [ ] `npm run typecheck`
-- [ ] `npm run lint` (if configured)
-- [ ] Manually verified in a dev Zotero install
+- [ ] `npm run verify` (typecheck, lint, format, OKF, shellcheck, tests, build)
+- [ ] Manually verified in a real Zotero install (write the Zotero version and OS below)
 - [ ] Screenshots / recording attached (for UI changes)
 
 ## Checklist
@@ -26,3 +24,12 @@
 - [ ] Added tests for new logic where reasonable
 - [ ] Updated CHANGELOG.md under the "Unreleased" section
 - [ ] Updated README / docs for user-visible changes
+
+## Review loop (maintainer)
+
+<!--
+Contributors: leave this section empty. The maintainer runs the multi-lens
+review in docs/RELEASE-RUNBOOK.md ("Review loop") before merging, and posts
+the round log as a comment on this PR.
+-->
+- [ ] Round log posted as a PR comment, ending in two consecutive rounds with no confirmed P2+ finding

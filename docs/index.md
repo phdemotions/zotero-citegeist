@@ -20,7 +20,8 @@ JOSS-exempt.
 - [Status](STATUS.md) — current state, last session, upcoming work
 - [Issues](ISSUES.md) — open bugs and feature requests by priority
 - [Backlog](BACKLOG.md) — curated longer-term enhancement ideas
-- [Release checklist](RELEASE-CHECKLIST.md) — manual verification gates before tagging any `v*`
+- [Release checklist](RELEASE-CHECKLIST.md) — the steps of every release, in order, from the automated gate to the post-release watch
+- [Release runbook](RELEASE-RUNBOOK.md) — how a release runs, refusals and re-run recovery, one-time repository setup, the review loop, fork proofs, provenance checks, break-glass and the one-off v2.0.6
 
 ## Architecture & migration
 
@@ -36,10 +37,13 @@ JOSS-exempt.
 
 ## Plans
 
-- [Citation-pane metric grid (feat)](plans/2026-04-19-001-feat-citation-pane-metric-grid-plan.md)
-- [SQLite cache migration (feat)](plans/2026-05-27-001-feat-sqlite-cache-migration-plan.md)
-- [MenuManager registration lifecycle (fix)](plans/2026-07-06-001-fix-menu-manager-registration-lifecycle-plan.md)
-- [Author identity layer (feat)](plans/2026-07-16-001-feat-author-identity-layer-plan.md)
+The live plan is the Zotero 10 plan. Every other plan is a record of shipped or replaced work.
+
+- [Zotero 10 compatibility, host bugs, Zotero-version gate (fix)](plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md) — **live**; carries the path to v3.0.0
+- [Author identity layer (feat)](plans/2026-07-16-001-feat-author-identity-layer-plan.md) — implemented on `main`, ships in v3.0.0
+- [MenuManager registration lifecycle (fix)](plans/2026-07-06-001-fix-menu-manager-registration-lifecycle-plan.md) — shipped in v2.0.5, did not fix #67/#72; superseded by the live plan's U7
+- [SQLite cache migration (feat)](plans/2026-05-27-001-feat-sqlite-cache-migration-plan.md) — shipped in v2.0.0
+- [Citation-pane metric grid (feat)](plans/2026-04-19-001-feat-citation-pane-metric-grid-plan.md) — shipped in v1.3.0, replaced by the v3.0.0 pane rebuild
 
 ## Brainstorms & ideation
 

@@ -5,28 +5,26 @@
  * Journal-level:  2yr Citedness (JIF equiv), Journal H-Index
  * Rankings:       UTD24, FT50, ABDC (2022), AJG (2021)
  *
- * Uses Zotero 7's ItemTreeManager.registerColumn API.
- * Reads cached data from Extra field and triggers background fetches.
- * All columns share a single fetch queue to avoid duplicate requests.
- * Journal rankings are resolved from a bundled lookup table (zero API calls).
+ * Uses Zotero's ItemTreeManager.registerColumn API. The metric columns read
+ * cached metrics and hand each drawn row to the registration's background
+ * fetcher (backgroundFetch.ts), which decides whether the row is due a lookup;
+ * all five share it, so a row is looked up once. Journal rankings come from a
+ * bundled lookup table (zero API calls).
+ *
+ * A row whose data changed is redrawn with a targeted refresh of that row (see
+ * {@link requestRows}), never by reloading the item list.
  */
 
-import { getCachedMetrics, isNoMatchSuppressed, type AllMetrics } from "./cache";
-import { fetchAndCacheItem, extractIdentifier } from "./citationService";
+import { getCachedMetrics, type AllMetrics } from "./cache";
+import { fetchAndCacheItem, type FetchResult } from "./citationService";
+import { createBackgroundFetcher, type BackgroundFetcher } from "./backgroundFetch";
 import { lookupRanking, RANKING_VERSIONS, type JournalRanking } from "../data/journalRankings";
-import { getCachedSourceISSNs } from "./openalex";
+import { apiKeyForRequests, getCachedSourceISSNs } from "./openalex";
+import { selectedItemsInWindow } from "./host/selection";
 import { logError, isBookType } from "./utils";
 import { guard } from "./diagnostics";
-import {
-  AUTO_FETCH_PREF_TTL_MS,
-  COLUMN_REPAINT_DEBOUNCE_MS,
-  FETCH_BATCH_DELAY_MS,
-  FETCH_BATCH_SIZE,
-  FETCH_QUEUE_DEBOUNCE_MS,
-  MAX_ATTEMPTED_FETCH_CACHE,
-  NO_MATCH_RETRY_DAYS,
-  PREF_AUTO_FETCH,
-} from "../constants";
+import { COLUMN_REFRESH_THROTTLE_MS, RECENTLY_DRAWN_ROWS } from "../constants";
+import { isAutoFetchEnabled } from "./prefs";
 
 // Column data keys
 const COL_CITATIONS = "citegeist-citation-count";
@@ -51,40 +49,34 @@ const ALL_COLUMNS = [
   COL_AJG,
 ];
 
-let registered = false;
-let registeredPluginID: string | null = null;
-let fetchTimer: ReturnType<typeof setTimeout> | null = null;
-let processingQueue = false;
-const fetchQueue = new Set<number>();
-const fetchAttempted = new Set<number>();
-let repaintTimer: ReturnType<typeof setTimeout> | null = null;
+type Item = _ZoteroTypes.Item;
+type TimerHandle = ReturnType<typeof setTimeout>;
+
+/** What one paint of a row reads, shared by its cells within that paint. */
+interface RowReading {
+  metrics?: AllMetrics;
+  ranking?: JournalRanking | null;
+}
 
 /**
- * Coalesced, reliable column repaint. `invalidateColumnCache` clears the per-row
- * memo and fires the lightweight refreshColumns/Notifier signals, but on Zotero
- * 9 those don't reliably re-run custom column dataProviders —
- * `refreshAndMaintainSelection()` does. Debounced so a burst of per-item
- * invalidations (a collection/library fetch landing row by row) collapses into
- * ONE refresh instead of N, so rows fill in progressively without thrash.
+ * One registration of the columns, from `registerCitationColumn` to
+ * `unregisterCitationColumn`. Everything that outlives a paint lives here and
+ * ends with it: the background fetcher, the batched row refresh and every timer.
+ * The dataProviders close over their own registration, so one Zotero still
+ * calls after an unregistration reaches a stopped fetcher, never the next
+ * registration's.
  */
-function scheduleColumnRepaint(): void {
-  if (repaintTimer) return;
-  repaintTimer = setTimeout(() => {
-    repaintTimer = null;
-    try {
-      const view = Zotero.getActiveZoteroPane()?.itemsView;
-      if (view?.refreshAndMaintainSelection) {
-        void view.refreshAndMaintainSelection();
-      } else if (view?.refresh) {
-        void view.refresh();
-      } else if (view?.invalidate) {
-        view.invalidate();
-      }
-    } catch (e) {
-      logError("scheduleColumnRepaint", e);
-    }
-  }, COLUMN_REPAINT_DEBOUNCE_MS);
+interface ColumnRegistration {
+  readonly pluginID: string;
+  readonly fetcher: BackgroundFetcher;
+  readonly rows: RowRefresher;
+  readonly drawn: RecentlyDrawn;
+  /** This paint's readings, by row, cleared once the paint is over. */
+  readonly paint: Map<number, RowReading>;
+  paintTimer: TimerHandle | null;
 }
+
+let registration: ColumnRegistration | null = null;
 
 /**
  * Build the same namespaced key Zotero stores internally for a
@@ -103,77 +95,83 @@ function namespacedColumnKey(pluginID: string, dataKey: string): string {
   return raw.replace(/[@.]/g, "\\$&");
 }
 
-/**
- * Per-render-tick memo so all 9 columns share one `queueFetch` decision and
- * one `AllMetrics` object identity per item. The underlying `getCachedMetrics`
- * is already O(1) against the in-memory mirror, but consolidating here
- * ensures fetch queueing fires at most once per item per tick regardless of
- * which column triggered the render.
- */
-const metricsCache = new Map<number, AllMetrics | null>();
+// ── Reading a row ────────────────────────────────────────────────────────────
 
 /**
- * Per-item ranking cache. Resolved from ISSN on the Zotero item
- * against the bundled ranking table. No API calls.
+ * The row's item when it is a regular Zotero item, else null. Zotero hands a
+ * column whatever the row holds, and in the trash that includes deleted
+ * collections and saved searches (itemTree.jsx@8.0.4 lines 4146-4155 and
+ * @9.0.6 lines 4377-4386 pass `this.ref`; itemTreeRow.js@10.0.2 lines 590-597
+ * and 627-634), which have no `isRegularItem`. A Zotero item's `objectType` is
+ * "item", or "feedItem" in a feed (dataObject.js@10.0.2 lines 75-77, item.js
+ * line 99, feedItem.js line 41), so it is checked before anything is called.
  */
-const rankingCache = new Map<number, JournalRanking | null | undefined>();
-
-let autoFetchCached: boolean | null = null;
-let autoFetchCacheTime = 0;
-
-function getAutoFetch(): boolean {
-  const now = Date.now();
-  if (autoFetchCached === null || now - autoFetchCacheTime > AUTO_FETCH_PREF_TTL_MS) {
-    autoFetchCached = Zotero.Prefs.get(PREF_AUTO_FETCH) as boolean;
-    autoFetchCacheTime = now;
-  }
-  return autoFetchCached;
+function asRegularItem(row: unknown): Item | null {
+  if (typeof row !== "object" || row === null) return null;
+  const objectType = (row as { objectType?: unknown }).objectType;
+  if (objectType !== "item" && objectType !== "feedItem") return null;
+  const item = row as Item;
+  return item.isRegularItem() ? item : null;
 }
 
 /**
- * Shared logic: check if an item needs fetching and queue it if so.
- * Returns the cached metrics for immediate display.
+ * This paint's reading of a row. Zotero paints a row by calling each column's
+ * dataProvider in turn, so the five metric columns and the four ranking columns
+ * share one reading; it is cleared once the paint is over, so the next paint of
+ * the row reads the cache again and sees data that went stale meanwhile.
  */
-function getMetricsAndMaybeQueue(item: _ZoteroTypes.Item): AllMetrics | null {
-  if (!item.isRegularItem()) return null;
-
-  if (metricsCache.has(item.id)) {
-    return metricsCache.get(item.id)!;
+function reading(reg: ColumnRegistration, item: Item): RowReading {
+  let entry = reg.paint.get(item.id);
+  if (entry === undefined) {
+    entry = {};
+    reg.paint.set(item.id, entry);
+    if (reg.paintTimer === null) {
+      reg.paintTimer = setTimeout(() => {
+        reg.paintTimer = null;
+        reg.paint.clear();
+      }, 0);
+    }
   }
+  return entry;
+}
 
-  const metrics = getCachedMetrics(item);
-  const hasFetchable = extractIdentifier(item) !== null;
-  const hasUsableTitle = ((item.getField("title") as string) || "").trim().length > 0;
+/** The row's cached metrics. Reads the cache; queues nothing. */
+function cachedMetrics(reg: ColumnRegistration, item: Item): AllMetrics {
+  const entry = reading(reg, item);
+  entry.metrics ??= getCachedMetrics(item);
+  return entry.metrics;
+}
 
-  // Nothing to show and nothing to fetch — skip entirely
-  if (!hasFetchable && !hasUsableTitle && metrics.count === null && metrics.suggestion === null)
-    return null;
+/** What a metric column draws from: the row's cached metrics, and whether a lookup is coming. */
+interface MetricCell {
+  readonly item: Item;
+  readonly metrics: AllMetrics;
+  /** A background lookup is queued or running: the cell shows "…" until it lands. */
+  readonly pending: boolean;
+}
 
-  metricsCache.set(item.id, metrics);
-
-  // Queue for fetch if stale/missing, not already attempted, and not suppressed
-  if (
-    getAutoFetch() &&
-    (metrics.count === null || metrics.isStale) &&
-    !fetchAttempted.has(item.id) &&
-    !isNoMatchSuppressed(item, NO_MATCH_RETRY_DAYS)
-  ) {
-    queueFetch(item.id);
-  }
-
-  return metrics;
+/**
+ * A metric cell's inputs: the row's cached metrics, and the fetcher's answer to
+ * whether a lookup is coming, which queues one when it is due.
+ */
+function metricCell(reg: ColumnRegistration, row: unknown): MetricCell | null {
+  const item = asRegularItem(row);
+  if (!item) return null;
+  reg.drawn.note(item.id);
+  const metrics = cachedMetrics(reg, item);
+  return { item, metrics, pending: reg.fetcher.offer(item, metrics) };
 }
 
 /**
  * Get journal ranking for an item. Uses the item's ISSN field
  * to look up against the bundled ranking table.
  */
-function getRanking(item: _ZoteroTypes.Item): JournalRanking | null {
-  if (!item.isRegularItem()) return null;
+function getRanking(reg: ColumnRegistration, row: unknown): JournalRanking | null {
+  const item = asRegularItem(row);
+  if (!item) return null;
 
-  if (rankingCache.has(item.id)) {
-    return rankingCache.get(item.id) ?? null;
-  }
+  const entry = reading(reg, item);
+  if (entry.ranking !== undefined) return entry.ranking;
 
   // Collect ISSNs from multiple sources for best match coverage
   const issns: string[] = [];
@@ -190,18 +188,16 @@ function getRanking(item: _ZoteroTypes.Item): JournalRanking | null {
     // Item type may not have ISSN field
   }
 
-  // 2. ISSNs stored in Extra from previous OpenAlex fetch (persists across sessions)
-  const metrics = metricsCache.get(item.id);
-  if (metrics?.sourceISSNs) {
-    for (const stored of metrics.sourceISSNs) {
-      if (stored && !issns.some((i) => i.toUpperCase() === stored.toUpperCase())) {
-        issns.push(stored);
-      }
+  // 2. ISSNs stored from a previous OpenAlex fetch (persist across sessions)
+  const metrics = cachedMetrics(reg, item);
+  for (const stored of metrics.sourceISSNs) {
+    if (stored && !issns.some((i) => i.toUpperCase() === stored.toUpperCase())) {
+      issns.push(stored);
     }
   }
 
   // 3. In-memory OpenAlex source cache (current session, best coverage)
-  if (metrics?.sourceId) {
+  if (metrics.sourceId) {
     for (const oa of getCachedSourceISSNs(metrics.sourceId)) {
       if (oa && !issns.some((i) => i.toUpperCase() === oa.toUpperCase())) {
         issns.push(oa);
@@ -209,20 +205,244 @@ function getRanking(item: _ZoteroTypes.Item): JournalRanking | null {
     }
   }
 
-  const ranking = issns.length > 0 ? lookupRanking(issns) : null;
-  rankingCache.set(item.id, ranking);
-  return ranking;
+  entry.ranking = issns.length > 0 ? lookupRanking(issns) : null;
+  return entry.ranking;
+}
+
+// ── Redrawing rows ───────────────────────────────────────────────────────────
+
+/**
+ * The rows the dataProviders drew last, newest last. Used only to lead a redraw
+ * on Zotero 8 and 9 (see {@link orderForHost}).
+ */
+class RecentlyDrawn {
+  private readonly ids = new Set<number>();
+
+  note(id: number): void {
+    this.ids.delete(id);
+    this.ids.add(id);
+    if (this.ids.size > RECENTLY_DRAWN_ROWS) {
+      const oldest = this.ids.values().next().value;
+      if (oldest !== undefined) this.ids.delete(oldest);
+    }
+  }
+
+  /** The most recently drawn row that passes `accept`. */
+  latest(accept: (id: number) => boolean): number | undefined {
+    return [...this.ids].reverse().find(accept);
+  }
+}
+
+/** Collects the rows to redraw and sends them together. */
+interface RowRefresher {
+  /**
+   * Redraw these rows: at the next turn, at most once per
+   * COLUMN_REFRESH_THROTTLE_MS, or at once when `now` (the end of a pass, a
+   * pause lifting). Never sends within the call, which can come from a
+   * dataProvider in the middle of Zotero's paint.
+   */
+  request(ids: readonly number[], now: boolean): void;
+  /** Drop what is waiting and clear the timer. */
+  stop(): void;
+}
+
+function createRowRefresher(drawn: RecentlyDrawn): RowRefresher {
+  const waiting = new Set<number>();
+  let timer: TimerHandle | null = null;
+  let timerDue = 0;
+  let lastSentAt: number | null = null;
+  let stopped = false;
+
+  function send(): void {
+    timer = null;
+    if (stopped || waiting.size === 0) return;
+    const ids = [...waiting];
+    waiting.clear();
+    lastSentAt = Date.now();
+    sendRowRefresh(ids, drawn);
+  }
+
+  return {
+    request(ids, now) {
+      if (stopped) return;
+      for (const id of ids) waiting.add(id);
+      if (waiting.size === 0) return;
+      const at = Date.now();
+      // A clock set backwards is treated as a window already over.
+      const since = lastSentAt === null || at < lastSentAt ? Infinity : at - lastSentAt;
+      const delay = now ? 0 : Math.max(0, COLUMN_REFRESH_THROTTLE_MS - since);
+      if (timer !== null) {
+        if (at + delay >= timerDue) return;
+        clearTimeout(timer);
+      }
+      timerDue = at + delay;
+      timer = setTimeout(() => guard("column row refresh", send), delay);
+    },
+    stop() {
+      stopped = true;
+      waiting.clear();
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    },
+  };
+}
+
+/**
+ * Forget this paint's readings of the rows and ask for them to be redrawn. The
+ * one path by which a change of Citegeist's data reaches the item tree: the
+ * background fetcher, the item pane, the citation browser and the menu's fetch
+ * all come through here.
+ */
+function requestRows(reg: ColumnRegistration, ids: readonly number[], now: boolean): void {
+  for (const id of ids) reg.paint.delete(id);
+  reg.rows.request(ids, now);
+}
+
+/** `Zotero.Notifier`, limited to the one call the row refresh makes. */
+interface ItemNotifier {
+  trigger(event: "refresh", type: "item", ids: number[]): Promise<unknown>;
+}
+
+/**
+ * Send one item "refresh" for these rows. Every window's item tree answers it
+ * by dropping just those rows' cached cells and redrawing them, which calls the
+ * dataProviders again (itemTree.jsx@8.0.4 lines 532-562 and @9.0.6 lines
+ * 539-569; @10.0.2 through the row provider, itemTree.jsx lines 1322-1356 and
+ * 854-868, collectionViewItemTree.jsx lines 719-762). It reloads no item list:
+ * `ItemTreeManager.refreshColumns()` queues an "itemtree" refresh
+ * (pluginAPIBase.mjs@10.0.2 lines 325-337) that makes every tree reset its
+ * columns and reload every item (itemTree.jsx@8.0.4 lines 458-461, @10.0.2
+ * lines 1324-1327), so it is left to Zotero's own register and unregister.
+ * `trigger` queues the event while a notifier transaction is open
+ * (notifier.js@10.0.2 lines 132-135), and runs each observer in turn.
+ */
+function sendRowRefresh(ids: readonly number[], drawn: RecentlyDrawn): void {
+  const ordered = orderForHost(ids, drawn);
+  if (ordered.length === 0) return;
+  const notifier = Zotero.Notifier as ItemNotifier | undefined;
+  if (typeof notifier?.trigger !== "function") return;
+  void notifier
+    .trigger("refresh", "item", ordered)
+    .catch((e: unknown) => logError("column row refresh", e));
+}
+
+/**
+ * The rows in an order Zotero redraws without touching the selection.
+ *
+ * Zotero 8 and 9 answer an item "refresh" whose first ID is a tree's only
+ * selected item by redrawing that row alone, then deselecting and reselecting it
+ * (itemTree.jsx@8.0.4 lines 545-553, @9.0.6 lines 552-560). The reselection
+ * renders the item pane empty and then again (zoteroPane.js@8.0.4 lines
+ * 1929-1974), which can take the focus from a field the user is typing in, and
+ * the rest of the rows go unredrawn in that tree. Zotero 10 has no such branch
+ * (itemTree.jsx@10.0.2 lines 854-868; collectionViewItemTree.jsx@10.0.2 lines
+ * 719-762). So on hosts before 10 the refresh leads with a row that is no main
+ * window's only selection: one of its own rows, or else a row drawn recently.
+ * With neither, the only-selected rows wait for their next paint.
+ */
+function orderForHost(ids: readonly number[], drawn: RecentlyDrawn): number[] {
+  if (!refreshReselectsSoleSelection()) return [...ids];
+  const sole = soleSelectedItemIDs();
+  if (sole.size === 0) return [...ids];
+  const lead =
+    ids.find((id) => !sole.has(id)) ?? drawn.latest((id) => !sole.has(id) && itemExists(id));
+  if (lead === undefined) {
+    Zotero.debug("[Citegeist] Row refresh skipped: its only rows are a window's sole selection");
+    return [];
+  }
+  return [lead, ...ids.filter((id) => id !== lead)];
+}
+
+/** Whether an item "refresh" led by a tree's only selected item reselects it: every Zotero before 10. */
+function refreshReselectsSoleSelection(): boolean {
+  const major = Number.parseInt(String(Zotero.version), 10);
+  return !(major >= 10);
+}
+
+/** The items that are the only selected item in some main window. */
+function soleSelectedItemIDs(): Set<number> {
+  const sole = new Set<number>();
+  let windows: Window[] = [];
+  try {
+    windows = Zotero.getMainWindows();
+  } catch {
+    return sole;
+  }
+  for (const win of windows) {
+    try {
+      const selected = selectedItemsInWindow(win);
+      if (selected.length === 1) sole.add(selected[0].id);
+    } catch {
+      // A window whose selection cannot be read has none to protect.
+    }
+  }
+  return sole;
+}
+
+function itemExists(id: number): boolean {
+  try {
+    return Boolean(Zotero.Items.get(id));
+  } catch {
+    return false;
+  }
+}
+
+// ── Registration ─────────────────────────────────────────────────────────────
+
+/** One background lookup: identifier lookups only, and failures that pause lookups left to the fetcher to record. */
+async function lookUpInBackground(id: number): Promise<FetchResult> {
+  const item = Zotero.Items.get(id);
+  if (!item) return { status: "error", error: "invalid-item" };
+  return fetchAndCacheItem(item, { identifierLookupsOnly: true, callerRecordsStops: true });
+}
+
+function createRegistration(pluginID: string): ColumnRegistration {
+  const drawn = new RecentlyDrawn();
+  const rows = createRowRefresher(drawn);
+  const paint = new Map<number, RowReading>();
+  const reg: ColumnRegistration = {
+    pluginID,
+    drawn,
+    rows,
+    paint,
+    paintTimer: null,
+    // Zotero's pref observer (Zotero.Prefs.registerObserver, prefs.js@10.0.2
+    // lines 485-493) reaches the fetcher as `watchSettings` once prefs.ts, the
+    // only module allowed to touch Zotero.Prefs, offers one. Until then a
+    // changed setting takes effect on the row's next paint.
+    fetcher: createBackgroundFetcher({
+      fetchItem: lookUpInBackground,
+      refreshRows: (ids, now) => requestRows(reg, ids, now),
+      readAutoFetch: isAutoFetchEnabled,
+      readApiKey: apiKeyForRequests,
+      now: () => Date.now(),
+      setTimer: (callback, ms) => setTimeout(callback, ms),
+      clearTimer: (handle) => clearTimeout(handle),
+    }),
+  };
+  return reg;
+}
+
+/** End a registration: stop its fetcher, its row refresh and its timers. Resolves once a running pass has ended. */
+function retire(reg: ColumnRegistration): Promise<void> {
+  reg.rows.stop();
+  if (reg.paintTimer !== null) {
+    clearTimeout(reg.paintTimer);
+    reg.paintTimer = null;
+  }
+  reg.paint.clear();
+  return reg.fetcher.stop();
 }
 
 export async function registerCitationColumn(pluginID: string): Promise<void> {
-  if (registered) return;
-  // Flip the flag BEFORE the first await so a parallel/re-entrant call
-  // (Zotero fires onStartup + onMainWindowLoad on the same launch and
-  // can race) doesn't try to register again mid-flight. Previous code
-  // set `registered = true` only at the END — every register call
-  // racing past the guard hit "dataKey must be unique" and silently
-  // never wired its dataProvider, leaving columns blank.
-  registered = true;
+  if (registration) return;
+  // Claim the registration BEFORE the first await so a parallel/re-entrant call
+  // (Zotero fires onStartup + onMainWindowLoad on the same launch and can race)
+  // doesn't register again mid-flight: every register call racing past the
+  // guard hit "dataKey must be unique" and silently never wired its
+  // dataProvider, leaving columns blank.
+  const reg = createRegistration(pluginID);
+  registration = reg;
 
   // FIRST PRINCIPLES: Zotero's pluginAPIBase stores registered keys
   // as `CSS.escape(${pluginID}-${dataKey})` — see
@@ -233,7 +453,6 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
   // lifetime stay, and the next `registerColumn` throws
   // "dataKey must be unique" on the namespaced form — exactly the
   // error the user reported.
-  registeredPluginID = pluginID;
   for (const key of ALL_COLUMNS) {
     try {
       await Zotero.ItemTreeManager.unregisterColumn(namespacedColumnKey(pluginID, key));
@@ -249,8 +468,8 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
   const registeredKeys: string[] = [];
 
   // Fail closed on any registration error: roll back the columns we already
-  // wired (plus best-effort the one that just failed), reset state so a
-  // retry starts clean, and rethrow so the caller (hooks.onStartup) can tear
+  // wired (plus best-effort the one that just failed), end this registration so
+  // a retry starts clean, and rethrow so the caller (hooks.onStartup) can tear
   // down the cache and alert. The pre-registration unregister loop above
   // already clears stale columns, so a genuine throw here means the item
   // tree can't be wired correctly — better to surface it than to leave half
@@ -281,8 +500,8 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
           // best-effort cleanup
         }
       }
-      registered = false;
-      registeredPluginID = null;
+      if (registration === reg) registration = null;
+      void retire(reg);
       throw e;
     }
   };
@@ -295,9 +514,10 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     pluginID,
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
-    dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const metrics = getMetricsAndMaybeQueue(item);
-      if (!metrics) return "";
+    dataProvider: (row: _ZoteroTypes.Item, _dataKey: string) => {
+      const cell = metricCell(reg, row);
+      if (!cell) return "";
+      const { item, metrics } = cell;
       if (metrics.count !== null) {
         // Suppress zero for books — OpenAlex coverage is incomplete for books,
         // so 0 almost always means "not tracked" rather than genuinely uncited.
@@ -309,7 +529,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
         if (metrics.suggestion.count === 0 && isBookType(item)) return "";
         return metrics.suggestion.tier === "high" ? `~${metrics.suggestion.count}` : "?";
       }
-      return getAutoFetch() ? "…" : "";
+      return cell.pending ? "…" : "";
     },
   });
 
@@ -319,9 +539,10 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     pluginID,
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
-    dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const metrics = getMetricsAndMaybeQueue(item);
-      if (!metrics) return "";
+    dataProvider: (row: _ZoteroTypes.Item, _dataKey: string) => {
+      const cell = metricCell(reg, row);
+      if (!cell) return "";
+      const { item, metrics } = cell;
       if (metrics.fwci !== null) return metrics.fwci.toFixed(2);
       if (metrics.count !== null) {
         // Suppress the "—" placeholder for 0-count books (same coverage rationale)
@@ -332,7 +553,7 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
       if (metrics.suggestion?.tier === "high" && metrics.suggestion.fwci !== null) {
         return `~${metrics.suggestion.fwci.toFixed(2)}`;
       }
-      return getAutoFetch() ? "…" : "";
+      return cell.pending ? "…" : "";
     },
   });
 
@@ -342,15 +563,16 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     pluginID,
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
-    dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const metrics = getMetricsAndMaybeQueue(item);
-      if (!metrics) return "";
+    dataProvider: (row: _ZoteroTypes.Item, _dataKey: string) => {
+      const cell = metricCell(reg, row);
+      if (!cell) return "";
+      const { item, metrics } = cell;
       if (metrics.percentile !== null) return metrics.percentile.toFixed(1);
       if (metrics.count !== null) {
         if (metrics.count === 0 && isBookType(item)) return "";
         return "—";
       }
-      return getAutoFetch() ? "…" : "";
+      return cell.pending ? "…" : "";
     },
   });
 
@@ -362,12 +584,13 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     pluginID,
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
-    dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const metrics = getMetricsAndMaybeQueue(item);
-      if (!metrics) return "";
+    dataProvider: (row: _ZoteroTypes.Item, _dataKey: string) => {
+      const cell = metricCell(reg, row);
+      if (!cell) return "";
+      const { metrics } = cell;
       if (metrics.citedness2yr !== null) return metrics.citedness2yr.toFixed(2);
       if (metrics.count !== null) return "—";
-      return getAutoFetch() ? "…" : "";
+      return cell.pending ? "…" : "";
     },
   });
 
@@ -377,12 +600,13 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     pluginID,
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
-    dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const metrics = getMetricsAndMaybeQueue(item);
-      if (!metrics) return "";
+    dataProvider: (row: _ZoteroTypes.Item, _dataKey: string) => {
+      const cell = metricCell(reg, row);
+      if (!cell) return "";
+      const { metrics } = cell;
       if (metrics.journalHIndex !== null) return String(metrics.journalHIndex);
       if (metrics.count !== null) return "—";
-      return getAutoFetch() ? "…" : "";
+      return cell.pending ? "…" : "";
     },
   });
 
@@ -394,8 +618,8 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     pluginID,
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
-    dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const r = getRanking(item);
+    dataProvider: (row: _ZoteroTypes.Item, _dataKey: string) => {
+      const r = getRanking(reg, row);
       return r?.utd24 ? "✓" : "";
     },
   });
@@ -406,8 +630,8 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     pluginID,
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
-    dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const r = getRanking(item);
+    dataProvider: (row: _ZoteroTypes.Item, _dataKey: string) => {
+      const r = getRanking(reg, row);
       return r?.ft50 ? "✓" : "";
     },
   });
@@ -418,8 +642,8 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     pluginID,
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
-    dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const r = getRanking(item);
+    dataProvider: (row: _ZoteroTypes.Item, _dataKey: string) => {
+      const r = getRanking(reg, row);
       return r?.abdc ?? "";
     },
   });
@@ -430,8 +654,8 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
     pluginID,
     zoteroPersist: ["width", "hidden", "sortDirection"],
     sortReverse: true,
-    dataProvider: (item: _ZoteroTypes.Item, _dataKey: string) => {
-      const r = getRanking(item);
+    dataProvider: (row: _ZoteroTypes.Item, _dataKey: string) => {
+      const r = getRanking(reg, row);
       return r?.ajg ?? "";
     },
   });
@@ -440,152 +664,36 @@ export async function registerCitationColumn(pluginID: string): Promise<void> {
 }
 
 /**
- * Invalidate the per-item metrics cache so columns re-read the SQLite mirror,
- * then force Zotero's item tree to repaint.
- *
- * Three layers of repaint signal because Zotero's column refresh
- * behavior is inconsistent across views (Library vs. saved searches vs.
- * collection):
- *   1. `metricsCache.delete(...)` clears OUR local memo so the next
- *      `dataProvider` invocation hits the fresh mirror.
- *   2. `Zotero.Notifier.trigger("modify", "item", ids)` — canonical
- *      "this item changed" event. ItemTreeManager listens and re-runs
- *      column dataProviders on the affected rows. Required: without
- *      it the menu-driven fetch path updated SQLite + mirror but the
- *      visible columns stayed stale until the user sorted/scrolled
- *      manually. (Reported during v2.0.0 testing.)
- *   3. `refreshAndMaintainSelection()` — belt-and-suspenders for
- *      builds where the Notifier path doesn't fully redraw.
- *
- * Pass `itemIds` (preferred) for targeted refresh of just the affected
- * rows. Plain `itemId` keeps backward compatibility with existing
- * callers; calling with no argument clears all caches but cannot
- * target a Notifier event (no ids to notify about).
+ * Redraw these rows' Citegeist cells after their cached data changed: this
+ * paint's reading of them is dropped, and a targeted refresh of just those rows
+ * follows, batched with other rows that change within
+ * COLUMN_REFRESH_THROTTLE_MS. The item pane, the citation browser and the
+ * menu's fetch call it; a fetch the user starts redraws its rows as they land.
+ * Does nothing while the columns are not registered.
  */
-export async function invalidateColumnCache(itemId?: number | number[]): Promise<void> {
-  const ids = itemId === undefined ? null : Array.isArray(itemId) ? itemId : [itemId];
-  if (ids === null) {
-    metricsCache.clear();
-    rankingCache.clear();
-  } else {
-    for (const id of ids) {
-      metricsCache.delete(id);
-      rankingCache.delete(id);
-    }
-  }
-  try {
-    // Lightweight, immediate signals: ask Zotero to refresh its column manager
-    // and fire the targeted "redraw" Notifier for the affected rows. Necessary
-    // but NOT sufficient on Zotero 9 — neither reliably re-runs a custom column
-    // dataProvider — so we ALSO schedule the coalesced reliable repaint below.
-    const refreshFn = (Zotero.ItemTreeManager as unknown as { refreshColumns?: () => void })
-      .refreshColumns;
-    if (typeof refreshFn === "function") {
-      refreshFn.call(Zotero.ItemTreeManager);
-    }
-    if (ids !== null && ids.length > 0) {
-      const notifier = (
-        Zotero as unknown as {
-          Notifier?: { trigger: (...args: unknown[]) => Promise<unknown> };
-        }
-      ).Notifier;
-      notifier?.trigger("redraw", "item", ids);
-    }
-
-    // **Reliable repaint.** `refreshAndMaintainSelection()` is what actually
-    // re-evaluates custom dataProviders on Zotero 8/9. It used to be gated
-    // behind `refreshColumns` being ABSENT — so on 8/9 (where refreshColumns
-    // exists) it never ran, and batch / collection / library fetches updated
-    // the cache but never repainted the columns. Always schedule it now; the
-    // debounce coalesces a burst of per-item invalidations into one refresh.
-    scheduleColumnRepaint();
-  } catch (e) {
-    logError("invalidateColumnCache refresh", e);
-  }
+export function invalidateColumnCache(itemIds: number | readonly number[]): void {
+  const reg = registration;
+  if (reg === null) return;
+  requestRows(reg, typeof itemIds === "number" ? [itemIds] : itemIds, false);
 }
 
-export function unregisterCitationColumn(): void {
-  if (!registered) return;
+/**
+ * Take the columns down and end their registration: the background fetcher
+ * stops, and no timer of the registration is left behind. Resolves once a pass
+ * that was running has ended; the columns are gone before it resolves.
+ */
+export function unregisterCitationColumn(): Promise<void> {
+  const reg = registration;
+  if (reg === null) return Promise.resolve();
+  registration = null;
+  const stopped = retire(reg);
 
-  if (fetchTimer) {
-    clearTimeout(fetchTimer);
-    fetchTimer = null;
-  }
-  fetchQueue.clear();
-  fetchAttempted.clear();
-  metricsCache.clear();
-  rankingCache.clear();
-  autoFetchCached = null;
-  processingQueue = false;
-  registered = false;
-
-  if (registeredPluginID) {
-    for (const key of ALL_COLUMNS) {
-      try {
-        Zotero.ItemTreeManager.unregisterColumn(namespacedColumnKey(registeredPluginID, key));
-      } catch {
-        // Column may already be removed
-      }
-    }
-    registeredPluginID = null;
-  }
-}
-
-function queueFetch(itemId: number): void {
-  fetchQueue.add(itemId);
-  if (!fetchTimer) {
-    fetchTimer = setTimeout(processFetchQueue, FETCH_QUEUE_DEBOUNCE_MS);
-  }
-}
-
-async function processFetchQueue(): Promise<void> {
-  fetchTimer = null;
-  if (!registered || processingQueue) return;
-  processingQueue = true;
-
-  const ids = Array.from(fetchQueue);
-  fetchQueue.clear();
-
-  if (fetchAttempted.size > MAX_ATTEMPTED_FETCH_CACHE) {
-    fetchAttempted.clear();
-  }
-
-  for (let i = 0; i < ids.length; i += FETCH_BATCH_SIZE) {
-    if (!registered) break;
-
-    const batch = ids.slice(i, i + FETCH_BATCH_SIZE);
-    await Promise.all(
-      batch.map(async (id) => {
-        fetchAttempted.add(id);
-        try {
-          const item = Zotero.Items.get(id);
-          if (item) {
-            const result = await fetchAndCacheItem(item as _ZoteroTypes.Item);
-            // Invalidate per-id for both "ok" (real metrics) and "suggestion"
-            // (pending preview) so individual rows refresh as soon as their
-            // data lands, instead of waiting for the bulk metricsCache.clear()
-            // + refreshAndMaintainSelection() at the end of the batch. Makes
-            // partial-batch repaints crisper on large queues.
-            if (result.status === "ok" || result.status === "suggestion") {
-              invalidateColumnCache(id);
-            }
-          }
-        } catch (e) {
-          logError(`processFetchQueue item ${id}`, e);
-        }
-      }),
-    );
-
-    if (i + FETCH_BATCH_SIZE < ids.length) {
-      await new Promise((r) => setTimeout(r, FETCH_BATCH_DELAY_MS));
+  for (const key of ALL_COLUMNS) {
+    try {
+      Zotero.ItemTreeManager.unregisterColumn(namespacedColumnKey(reg.pluginID, key));
+    } catch {
+      // Column may already be removed
     }
   }
-
-  processingQueue = false;
-  metricsCache.clear();
-  scheduleColumnRepaint();
-
-  if (fetchQueue.size > 0 && !fetchTimer && registered) {
-    fetchTimer = setTimeout(processFetchQueue, FETCH_QUEUE_DEBOUNCE_MS);
-  }
+  return stopped;
 }

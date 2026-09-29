@@ -1,10 +1,13 @@
 ---
 title: "fix: Repair Zotero MenuManager context-menu registration lifecycle"
 type: fix
+status: superseded
 date: 2026-07-06
 ---
 
 # fix: Repair Zotero MenuManager context-menu registration lifecycle
+
+> **Superseded (2026-09-28).** This fix shipped in v2.0.5 (2026-07-09) and did not cure the bug: three users confirmed the right-click menu still dies after one use on v2.0.5 (#67, #72). The live plan for it is U7 in `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`, which root-causes the bug on a real host before changing code. Kept as a record of what was tried.
 
 ## Summary
 

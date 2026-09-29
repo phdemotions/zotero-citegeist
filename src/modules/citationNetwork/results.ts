@@ -22,11 +22,8 @@ import {
   type NetworkState,
 } from "./types";
 import { getDefaultCollectionName } from "./actions";
-import {
-  DEFAULT_NETWORK_PAGE_SIZE,
-  OPENALEX_BOOK_WORK_TYPES,
-  PREF_NETWORK_PAGE_SIZE,
-} from "../../constants";
+import { OPENALEX_BOOK_WORK_TYPES } from "../../constants";
+import { getNetworkPageSize } from "../prefs";
 
 /**
  * Inner HTML for the results empty-state. Pure (no DOM/state) so each branch —
@@ -102,8 +99,7 @@ export async function loadResults(state: NetworkState, append = false): Promise<
   }
 
   try {
-    const perPage =
-      (Zotero.Prefs.get(PREF_NETWORK_PAGE_SIZE) as number) || DEFAULT_NETWORK_PAGE_SIZE;
+    const perPage = getNetworkPageSize();
     let response;
     if (state.mode === "author") {
       response = await fetchAuthorWorks(state.authorId ?? "", state.cursor, perPage);

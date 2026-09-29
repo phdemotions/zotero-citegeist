@@ -2,15 +2,15 @@
 type: status
 title: Citegeist — project status
 description: Current project state, last session's work, and upcoming priorities.
-timestamp: 2026-08-13
+timestamp: 2026-09-28
 tags: [citegeist, status]
 ---
 
 # Citegeist — Status
 
-> **Last Updated:** 2026-08-13 (planning unification: the stale "Upcoming" table — five rows describing work already shipped between v1.1.0 and v3.0.0 — replaced with the sequenced plan below; feature requests consolidated into BACKLOG.md + GitHub; release history table completed through v2.0.5.)
-> **Phase:** **v3.0.0 staged on `main`, untagged.** Author identity (#75) and the diagnostics + Zotero-9 host-contract + pane-rebuild branch (#77, squash `277444b`, 2026-08-01) are both merged but **not tagged** — staged behind one future v3.0.0 release. #77 added a user-facing diagnostics layer (append-only `CG-*` error codes users can quote, guard/guardAsync boundaries on every Zotero callback, a redaction net, and metered-API budget/auth/response/network discrimination), fixed two silent-spinner-hang classes and closed the DB-write-leak class with a structural invariant test, and cleaned the review tail. Reviewed across 12 escalating adversarial rounds — converged with two consecutive full-panel rounds clean of P2+. **v2.0.5 is the last released version** (2026-07-09, a right-click-menu hotfix shipped isolated while v3.0.0 waited).
-> **Build:** typecheck (strict, no errors) · **519 tests** · lint (0 errors, 3 pre-existing `any` warnings) · format · OKF · build → `citegeist-3.0.0.xpi` (~107 KB), all green on **Node ≥22** (required by `.nvmrc`/CI — vitest 4's ESM config can't be `require()`d on Node 20; use `--no-file-parallelism` to distinguish real failures from the known parallel flakiness).
+> **Last Updated:** 2026-09-28 (plan consolidation and review of draft PR #93. The one live plan is `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`; its "Status on 2026-09-28" section holds the unit ledger, the open review findings, the next steps and the decisions waiting on Josh. Older plans are bannered as shipped or superseded.)
+> **Phase:** **Zotero 10 compatibility and the path to v3.0.0.** Every Zotero 10 user has been locked out since Zotero 10.0 shipped on 2026-08-17, because v2.0.5 caps the plugin at `9.*`; the no-code bridge (plan U17) is prepared and waits on a smoke run and Josh's approval. Draft PR #93 (`fix/zotero-10-compat`, 30 commits written 2026-09-13) carries the Zotero 10 selection fix, the single-sourced compatibility range, a real-Zotero test suite, hardened CI and release workflows, the cache schema stamp and the preference-name fix. GitHub Actions ran nothing from 2026-08-27 to 2026-09-15 because of a billing lock; the first real-Zotero run, on 2026-09-28, passed 23 of 27 specs on each of Zotero 8.0.4, 9.0.6 and 10.0.2. `main` still stages the unreleased v3.0.0 work (#75, #77). **v2.0.5 is the last released version** (2026-07-09).
+> **Build (branch, `8a8ef46`):** typecheck clean · **1,574 tests** · lint 0 errors (3 old `any` warnings) · format · OKF · build → `citegeist-3.0.0-alpha.0.xpi` (110.4 KB, Zotero 7.0.10 to `10.0.*`), on **Node ≥22**. On GitHub the unit-test job passes and the real-Zotero cells fail four specs, the same four on every Zotero version: two test bugs and two real bugs that date back to released versions (BUG-DISABLE-L10N, and BUG-MIGRATION from v2.0.0).
 
 ---
 
@@ -18,18 +18,20 @@ tags: [citegeist, status]
 
 | Attribute        | Value                                                                                                                |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **Version**      | 3.0.0 (#75 + #77 merged to `main`, untagged; **2.0.5 last released 2026-07-09**)                                     |
-| **Build Status** | Clean — 519 tests, typecheck/lint/format/OKF clean, XPI ~107 KB (Node ≥22)                                           |
-| **Open Issues**  | P0: 0, P1: 2, P2: 2, P3: 7 (see ISSUES.md; P1 = BUG-MENU #67/#72, BUG-QUIT #78; feature requests live in BACKLOG.md) |
-| **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, Zotero 7.0.10–9, SQLite, Node 22                                       |
-| **Data Source**  | OpenAlex (free, unauthenticated, CC0)                                                                                |
+| **Version**      | 2.0.5 released (2026-07-09); `main` stages 3.0.0 untagged; draft PR #93 carries `3.0.0-alpha.0`                    |
+| **Build Status** | Branch: 1,574 tests and every local gate green; real-Zotero CI 23 of 27 on Zotero 8, 9 and 10 (Node ≥22)            |
+| **Open Issues**  | P0: 3, P1: 3, P2: 8, P3: 7 (see ISSUES.md; P0 = BUG-Z10-INSTALL, BUG-PANE-XML, BUG-QUIT)                              |
+| **Stack**        | TypeScript 6, esbuild, vitest 4.1, ESLint 10, SQLite, Node 22; Zotero 7.0.10–9 released, 7.0.10–`10.0.*` on #93     |
+| **Data Source**  | OpenAlex (CC0; metered since July 2026: lookups by ID or DOI free, search metered; optional API key)               |
 | **Distribution** | GitHub Releases → auto-update via `release` Release (self-maintaining); Zenodo-archived                              |
 
 ---
 
 ## In Progress
 
-**No active feature work — author identity (#75) and the diagnostics + Zotero-9 + pane-rebuild branch (#77) are both merged to `main`, untagged.** Remaining follow-ups: a real-Zotero visual-verify of the rebuilt pane (composition + the Zotero 8/9 sidenav icon), a 2-device sync round-trip check, and the `v3.0.0` release (tag + `CITATION.cff`/`CHANGELOG` date) when it's time to ship to users. Origin docs: `docs/brainstorms/2026-07-16-author-identity-layer-requirements.md` + `docs/plans/2026-07-16-001-feat-author-identity-layer-plan.md`.
+**Zotero 10 compatibility, host bugs and the path to v3.0.0 — draft PR [#93](https://github.com/phdemotions/zotero-citegeist/pull/93).** The plan is `docs/plans/2026-09-13-001-fix-zotero-10-compat-host-bugs-plan.md`, and its "Status on 2026-09-28" section is the current state of record: which units are done, the open findings from review rounds that never finished (U5 round 3, U18 round 2) and from round B, the first real-Zotero run, and the decisions waiting on Josh. Nothing here is released, and no `v*` tag may be pushed until the release trigger moves to a dispatch from `main` (plan R3-1).
+
+**Merged to `main`, unreleased: author identity (#75) and the diagnostics + Zotero-9 + pane-rebuild branch (#77).** No feature work is active. Both ship in v3.0.0 (plan U13), whose gates include the pane visual check (VERIFY-001) and the 2-device sync check (VERIFY-002); the release itself follows the live plan, not a hand-pushed tag. Origin docs: `docs/brainstorms/2026-07-16-author-identity-layer-requirements.md` + `docs/plans/2026-07-16-001-feat-author-identity-layer-plan.md`.
 
 **Diagnostics + Zotero-9 host contracts + pane rebuild — merged to `main` ([#77](https://github.com/phdemotions/zotero-citegeist/pull/77), squash `277444b`, 2026-08-01; untagged).** A user-facing diagnostics layer so every failure is addressable, plus the Zotero-9 host-contract fixes and the item-pane rebuild.
 
@@ -163,22 +165,27 @@ Initial public release. See `CHANGELOG.md` for full feature list.
 
 ## Blockers
 
-_None currently._
+- **Zotero 10 users are locked out** (BUG-Z10-INSTALL), and released v2.0.5 is broken on the hosts it supports: on Zotero 9.0.6 and 10.0.4 it renders no pane and hides other plugins' panes (BUG-PANE-XML), shows blank menu labels, and crashes Zotero on quit after 61 s (BUG-QUIT). The no-code bridge was withdrawn after its smoke run on 2026-09-28; v2.0.6 is the fix (plan U3).
+- **SEC-001**, a security defect in the citation browser, reaches every released version. Its details are held in a private security advisory until v2.0.6 ships the fix (plan, next steps, step 3).
 
 ---
 
 ## Upcoming
 
-One sequenced plan. The detail lives in exactly one place per item — bugs, verification gates, and debt in `ISSUES.md`; feature ideas in `BACKLOG.md`; release gates in `RELEASE-CHECKLIST.md` — and this table only orders it.
+The order lives in the plan's "Next steps", and the detail of each item lives in exactly one place: bugs, verification gates and debt in `ISSUES.md`; feature ideas in `BACKLOG.md`; release gates in `RELEASE-CHECKLIST.md`. In short:
 
-| #   | Step                            | Detail lives in             | Notes                                                                                                                                                                                             |
-| --- | ------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Run the v3.0.0 release gate     | `RELEASE-CHECKLIST.md`      | Real-Zotero smoke on 7/8/9 (VERIFY-001: pane composition + sidenav icon), diagnostics end-to-end, 2-device sync round-trip (VERIFY-002), BUG-MENU (#67/#72) + BUG-QUIT (#78) checked on a real Z9 |
-| 2   | Tag + ship v3.0.0               | `RELEASE-CHECKLIST.md` §5–6 | `CITATION.cff` + `CHANGELOG` date bump happen at tag time (deliberately held until the gate passes); post-release watch; close #22, and #67/#72/#78 once users confirm                            |
-| 3   | JOSS submission (JOSS-001)      | `ISSUES.md` P2              | Confirm target journal, final checks on `paper/paper.md`, submit                                                                                                                                  |
-| 4   | OKF pin review (OKF-DRIFT, #79) | `ISSUES.md` P3              | Deliberate monthly review + re-pin; never auto-follow upstream                                                                                                                                    |
-| 5   | Debt tail (DEBT-009, 011–014)   | `ISSUES.md` P3              | Batch as one single-concern cleanup PR after the release                                                                                                                                          |
-| 6   | Next feature from the backlog   | `BACKLOG.md`                | Leading candidates: export citation report (#4), collection analytics (#5), "My Authors" (v2 of the author-identity layer)                                                                        |
+| #   | Step                                                            | Detail lives in                             |
+| --- | --------------------------------------------------------------- | ------------------------------------------- |
+| 1   | v2.0.6 for Zotero 7–10 (the bridge's smoke run failed)          | Plan U3, "U17 smoke run"; `ISSUES.md` P0     |
+| 2   | Tag ruleset blocking `v*` tags: done 2026-09-28 (24140405)      | Plan, next steps, step 2                    |
+| 3   | Fix SEC-001 privately; publish with v2.0.6                     | `ISSUES.md` SEC-001; plan step 3            |
+| 4   | Green real-Zotero CI; fix the open findings on #93; merge it    | Plan, "First real-Zotero run" and "Open findings" |
+| 5   | Small Zotero watch with an outside heartbeat                    | Plan U10                                    |
+| 6   | Quit hang (#78) on macOS; menu (#67, #72) on Windows            | Plan U6, U7; `ISSUES.md` BUG-QUIT, BUG-MENU |
+| 7   | Host hardening, drop Zotero 7, republish workflow               | Plan U8, U9, U15                            |
+| 8   | v3.0.0 and the reporter loop                                    | Plan U13, U14; `RELEASE-CHECKLIST.md`       |
+| 9   | JOSS submission, OKF pin review (#79), debt tail                | `ISSUES.md` JOSS-001, OKF-DRIFT, DEBT-*     |
+| 10  | Next feature from the backlog                                   | `BACKLOG.md`                                |
 
 ---
 

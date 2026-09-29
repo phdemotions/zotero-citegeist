@@ -14,7 +14,7 @@
  *     fields back out.
  */
 
-import { DEFAULT_CACHE_LIFETIME_DAYS, PREF_CACHE_LIFETIME_DAYS } from "../../constants";
+import { getCacheLifetimeDays } from "../prefs";
 import { getRow, mirrorSnapshot } from "./db";
 import {
   type AllMetrics,
@@ -48,7 +48,7 @@ const EMPTY_METRICS: AllMetrics = Object.freeze({
 /**
  * Tiny memoization for the cache-lifetime pref. Column rendering can call
  * `isLastFetchedStaleRow` thousands of times per tick (one per visible row
- * per column); a 1-second TTL collapses that to a single `Zotero.Prefs.get`.
+ * per column); a 1-second TTL collapses that to a single pref read.
  */
 let cachedLifetimeMs = 0;
 let cachedLifetimeReadAt = 0;
@@ -59,12 +59,7 @@ function getCacheLifetimeMs(): number {
   if (now - cachedLifetimeReadAt < LIFETIME_MEMO_TTL_MS && cachedLifetimeMs > 0) {
     return cachedLifetimeMs;
   }
-  const rawLifetime = Zotero.Prefs.get(PREF_CACHE_LIFETIME_DAYS);
-  const lifetimeDays =
-    typeof rawLifetime === "number" && Number.isFinite(rawLifetime) && rawLifetime > 0
-      ? rawLifetime
-      : DEFAULT_CACHE_LIFETIME_DAYS;
-  cachedLifetimeMs = lifetimeDays * 24 * 60 * 60 * 1000;
+  cachedLifetimeMs = getCacheLifetimeDays() * 24 * 60 * 60 * 1000;
   cachedLifetimeReadAt = now;
   return cachedLifetimeMs;
 }

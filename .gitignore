@@ -15,6 +15,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# zotero-plugin-scaffold (real-Zotero suite): staged XPI, load dir, profile, logs, Zotero binary
+.scaffold/
+
 # Environment
 .env
 .env.local
