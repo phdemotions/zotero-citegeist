@@ -72,7 +72,27 @@ function outcome(promise: Promise<unknown>): Promise<string> {
   );
 }
 
-/** Translate `element` and everything in it with the main window's localization. */
+/**
+ * Elements anywhere in the main window that still carry one of Citegeist's l10n
+ * IDs. Once Zotero unregisters Citegeist's strings, each of them makes every
+ * translation of a fragment containing it reject, so none may remain while
+ * Citegeist is disabled.
+ */
+function citegeistL10nElements(): string[] {
+  return [...mainWindow().document.querySelectorAll('[data-l10n-id^="citegeist-"]')].map(
+    (el: Element) => `${el.localName}[${el.getAttribute("data-l10n-id")}]`,
+  );
+}
+
+/**
+ * Translate `element` and everything in it with the main window's localization.
+ *
+ * Only fragments, never `document.documentElement`: Zotero's main window as a
+ * whole rejects translation with no Citegeist installed at all (a local control
+ * on Zotero 9.0.6 and 10.0.4, 2026-09-28) and right after Citegeist starts on
+ * 8.0.4, 9.0.6 and 10.0.3 (CI run 36500566197), so a whole-window check fails
+ * whatever Citegeist does.
+ */
 async function expectTranslates(element: Element, what: string): Promise<void> {
   const translated = await outcome(mainWindow().document.l10n.translateFragment(element));
   expect(translated, `translating ${what}`).to.equal("resolved");
@@ -106,7 +126,10 @@ async function expectOneSet(phase: string): Promise<void> {
       `${phase}: the label of ${entry.getAttribute("data-l10n-id")}`,
     ).to.not.equal("");
   }
-  await expectTranslates(doc.documentElement, `the whole main window ${phase}`);
+  await expectTranslates(
+    doc.getElementById("zotero-collectionmenu"),
+    `the collection context menu ${phase}`,
+  );
 }
 
 describe("plugin lifecycle", function () {
@@ -154,7 +177,14 @@ describe("plugin lifecycle", function () {
       win.document.getElementById("zotero-itemmenu"),
       "Zotero's item context menu while disabled",
     );
-    await expectTranslates(win.document.documentElement, "the whole main window while disabled");
+    await expectTranslates(
+      win.document.getElementById("zotero-collectionmenu"),
+      "Zotero's collection context menu while disabled",
+    );
+    expect(
+      citegeistL10nElements(),
+      "elements carrying a Citegeist l10n ID while disabled",
+    ).to.deep.equal([]);
     // buildItemContextMenu awaits the item menu's translation before it reaches MenuManager.
     expect(
       await outcome(win.ZoteroPane.buildItemContextMenu()),
