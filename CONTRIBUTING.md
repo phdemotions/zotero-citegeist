@@ -73,7 +73,7 @@ If a test fails, look for unhandled promise rejections and missing mock setup â€
 5. Describe what your PR does and why, and link any related issues
 6. Fill out the PR template checklist, including the Zotero version and OS you tested on
 
-Before merging, the maintainer runs a multi-lens review of every code change (see the "Review loop" section of [`docs/RELEASE-CHECKLIST.md`](docs/RELEASE-CHECKLIST.md)) and posts the round log on the PR. You don't need to run it yourself; tests and a note on how you verified the change are enough.
+Before merging, the maintainer runs a multi-lens review of every code change (see the "Review loop" section of [`docs/RELEASE-RUNBOOK.md`](docs/RELEASE-RUNBOOK.md)) and posts the round log on the PR. You don't need to run it yourself; tests and a note on how you verified the change are enough.
 
 ## Reporting Bugs
 

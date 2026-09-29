@@ -36,7 +36,7 @@ on:
           JSON array of Zotero release versions, one cell each. The default is the
           supported matrix, with a cell for every Zotero major package.json's range
           admits (test/workflow-invariants.test.ts); test/buildMetadata.test.ts
-          ties the cap to it. ci.yml and release.yml keep the default.
+          ties the cap to it. ci.yml and publish-release.yml keep the default.
         type: string
         required: false
         # Not 10.0.4: it shipped for macOS only (its Linux tarball is 403), and it
@@ -45,7 +45,7 @@ on:
       negative-control-version:
         description: >-
           The cell that also proves a build capped one major lower is refused.
-          It must be one of zotero-versions. ci.yml and release.yml keep the default.
+          It must be one of zotero-versions. ci.yml and publish-release.yml keep the default.
         type: string
         required: false
         default: "10.0.3"
@@ -61,10 +61,11 @@ defaults:
 
 env:
   # SHA-256 of each Zotero tarball, so a replaced or corrupted download fails its
-  # cell. UNPINNED only warns and prints the computed hash; pin the values from
-  # the first green run (docs/RELEASE-CHECKLIST.md, section 0). 8.0.4 and 9.0.6
-  # are the hashes CI run 34803412726 printed on 2026-09-28; 10.0.3 is the hash
-  # CI run 36495398532 printed on 2026-09-28, matched by an independent download.
+  # cell. UNPINNED only warns and prints the computed hash: when a cell's version
+  # changes, pin the hash its first run prints once an independent download of
+  # the same URL matches it. 8.0.4 and 9.0.6 are the hashes CI run 34803412726
+  # printed on 2026-09-28; 10.0.3 is the hash CI run 36495398532 printed on
+  # 2026-09-28, matched by an independent download.
   ZOTERO_TARBALL_SHA256: >-
     {"8.0.4": "be7e77d33a6bdc27db61df558d5868d5bd73de4f1ee42900cb7c267e9c249673",
     "9.0.6": "0db6e8f94bd0d84e862e6ef5c3e217030e173c0cd3c6dfbc836252c650fea3dd",

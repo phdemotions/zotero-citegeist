@@ -112,9 +112,11 @@ CI run 34803412726 re-ran the checks for `8a8ef46` on 2026-09-28, the first time
 
 ### Open findings
 
+**Landed on 2026-09-28** (on `fix/zotero-10-compat`, CI running): the triage's harness fixes and all three tarball pins (c897d94, e9b51e9); BUG-MIGRATION as an import that never writes Extra, with spec 93 (9300a25); BUG-DISABLE-L10N, ADV-B1 and startup that stops once a shutdown begins (307faff, b846b4c), with spec 90 checking fragments, not the whole window (750be72); U18 round 2 batch A (cc0290f); U5 round 3 (1f663e0). The findings below keep their text; the round headings say what is fixed.
+
 Each list below is one fix batch. The IDs are the reviewers' own, so a finding traces back to its round.
 
-**U5 round 3** (CI and release; reviewed 2026-09-14; not clean, nothing fixed yet)
+**U5 round 3** (CI and release; reviewed 2026-09-14; R3-1 to R3-13 fixed on 2026-09-28 in 1f663e0, with build provenance and zizmor; the fixes are not yet reviewed)
 
 - **P1 R3-1.** A pushed tag runs the workflow stored in the tagged commit. The reviewers counted 23 older commits that carry the unguarded `release.yml` and say version 3.0.0, so tagging the wrong merge commit publishes old code to every installed copy. Fix: delete `release.yml`; add a release workflow at a new path, triggered only by `workflow_dispatch` (inputs `version` and an optional `commit`) and refused unless dispatched from `main`; `Publish` creates the tag itself after every gate; a test asserts that no workflow has a `push: tags` trigger. After it merges, the maintainer disables the legacy workflow, adds a ruleset that lets only GitHub Actions create `v*` tags, and proves on a fork that a tag on an old commit starts no run. Until then, push no `v*` tag.
 - **P1 R3-2.** Re-running a half-finished release needs reproducible bytes. 8a8ef46 made production builds reproducible; still missing are an invariant that `Build` takes `SOURCE_DATE_EPOCH` from the commit on the pinned `ubuntu-24.04` image, and recovery text rewritten to match.
@@ -128,7 +130,7 @@ Each list below is one fix batch. The IDs are the reviewers' own, so a finding t
 - **P2 R3-10.** Release rules are written in several places and two copies have drifted. One `npm run verify` becomes the pre-commit line, and CLAUDE.md's release sections become pointers.
 - **P3 R3-11 to R3-13.** Split the 374-line checklist into a per-release checklist and a runbook; retries and timeouts in the release scripts; the badges job's empty tag; CODEOWNERS missing `vitest.config.ts`.
 
-**U18 round 2** (preferences and background lookups; reviewed 2026-09-14; not clean, nothing fixed yet)
+**U18 round 2** (preferences and background lookups; reviewed 2026-09-14; R2-1 to R2-5 and the P3s fixed on 2026-09-28 in cc0290f, except the preference observer, which needs an `observePrefs` helper in `prefs.ts`; R2-B1 open; the fixes are not yet reviewed)
 
 - **P1 R2-1.** Every background lookup that lands calls `refreshColumns`, which makes every item tree in every window reload all its items (`itemTree.jsx`, `refreshAndMaintainSelection`). Fix: collect the landed item IDs and refresh only those rows with `Zotero.Notifier.trigger("refresh", "item", ids)`, at most once every 1–2 s and once at the end of a pass. `refreshColumns` stays for registration changes, and the menu's fetch uses the same path.
 - **P2 R2-2.** The background queue becomes its own module, `backgroundFetch.ts`, with explicit phases (idle, scheduled, running, paused, stopped) and a `stop()` that resolves when a pass ends. U6 builds its quit handling on it.
@@ -199,7 +201,7 @@ Correctness (all P3; the U2 selection rule and U16's mirror-after-commit orderin
 The branch was designed in September to the standard of the day. These are the practices the plan now adopts on top, each with the unit or step that carries it:
 
 - **Releases start from a button, never a hand-pushed tag.** A `workflow_dispatch` on `main` creates the tag after every gate (R3-1), and the tag ruleset stops anyone pushing one by hand (done).
-- **Build provenance for the XPI.** `Publish` attests the XPI and `update.json` with `actions/attest-build-provenance`, so anyone can check with `gh attestation verify` that a file came from this repository's release workflow at a named commit (U5, with R3-1).
+- **Build provenance for the XPI.** `Publish` attests the XPI and `update.json` with `actions/attest` (the action `attest-build-provenance` now wraps), so anyone can check with `gh attestation verify` that a file came from this repository's release workflow at a named commit (U5, with R3-1).
 - **Workflow security linting.** `zizmor` runs on every workflow in CI, a maintained rule set beside `test/workflow-invariants.test.ts` (U5).
 - **Escaping enforced by the type system.** `safeHTML` returns a branded value and `safeInnerHTML` accepts nothing else, the way the cache write gate is enforced (SEC-001's class fix).
 - **Real SQLite under the unit tests.** An in-memory SQLite (sql.js, which needs no install scripts) replaces the regex emulator in `fakeDb.ts`, so schema, column and statement-shape mistakes fail in `npm test` (M3, T3, T4).

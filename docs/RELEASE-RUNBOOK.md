@@ -468,22 +468,36 @@ sections 1 to 3, are mandatory.
 
 ## The one-off v2.0.6
 
-There is no maintenance line (plan, "Decisions", item 2). If Josh decides to
-ship v2.0.6 for SEC-001, it is released once, from the v2.0.5 tag, by v2.0.5's
-own legacy workflow, before that workflow is disabled
-([One-time repository setup](#one-time-repository-setup), step 4):
+There is no maintenance line (plan, "Decisions", item 2). v2.0.6 is built on the
+local branch `release/v2.0.6` from the v2.0.5 tag, released once, and never merged
+to `main`. It reaches users only after Josh approves the release.
 
-1. `git switch -c hotfix/2.0.6 v2.0.5`; apply the fixes the plan lists for
-   v2.0.6; set the version to `2.0.6` in `package.json`, `package-lock.json` and
-   `CITATION.cff`, and add its CHANGELOG entry; push the branch. It never merges
-   to `main`.
-2. Josh sets ruleset 24140405's enforcement to **Disabled**, pushes the tag
-   (`git tag v2.0.6 && git push origin refs/tags/v2.0.6`), and sets it back to
-   **Active** once the run has started. The tag runs the `release.yml` stored in
-   that commit, which builds, publishes and moves the channel.
-3. Confirm the channel lists 2.0.6, then disable the legacy workflow (step 4
-   above). The release guard needs no branch option: every later release comes
-   from `main`.
+**Recommended: publish by hand from the tested bytes** (waiting on Josh). v2.0.5's
+legacy workflow rebuilds the XPI with a plain `zip -r`, so users would get bytes
+nobody tested, and it runs `npm install` with install scripts while holding
+`contents: write`. The `release/v2.0.6` tree therefore has no `release.yml`, so
+creating its tag runs nothing, and a local script:
+
+1. Checks that the XPI's SHA-256 is the one the release smoke test passed; that
+   the manifest and `update.json` carry version `2.0.6`, cap `10.0.*`, the
+   release's download link and a matching `update_hash`; that the tree has no
+   `release.yml`; that no v2.0.6 tag or release exists; that the live channel
+   serves 2.0.5; and that ruleset 24140405 is active. `PREFLIGHT_ONLY=1` stops
+   here and writes nothing.
+2. Pushes the branch, sets the ruleset to **Disabled**, creates the v2.0.6
+   release with the XPI and `update.json` (which creates the tag), and sets the
+   ruleset back to **Active**, also when a step fails.
+3. Moves the `release` tag and replaces the channel's `update.json`.
+4. Downloads both files back and compares them with what was tested.
+
+**Fallback: the legacy workflow**, as first planned. Lift the ruleset, push the
+tag on a tree that still has `release.yml`, and restore the ruleset once the run
+starts. It publishes rebuilt bytes, so repeat the smoke test on the published
+XPI.
+
+After either path, confirm the channel lists 2.0.6, then disable the legacy
+workflow ([One-time repository setup](#one-time-repository-setup), step 4). The
+release guard needs no branch option: every later release comes from `main`.
 
 ---
 

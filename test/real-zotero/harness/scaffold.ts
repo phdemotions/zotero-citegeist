@@ -15,8 +15,9 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "
 import { join, relative } from "node:path";
 
 /**
- * Where real-zotero.yml unzips the release XPI: the one `npm run build` made on a
- * pull request, or the one release.yml's Verify job built, checked by digest, on a tag.
+ * Where real-zotero.yml unzips the release XPI: the one the build made on a pull
+ * request, or, for a release, the one publish-release.yml's Build job made, checked
+ * by digest.
  */
 export const STAGED_XPI_DIR = ".scaffold/xpi";
 /** scaffold's `dist`. Its build empties this directory on every run. */
