@@ -59,6 +59,21 @@ The smoke run behind the bridge used Zotero 10.0.4 (installed at `~/Applications
 
 Re-enabling v2.0.5 on Zotero 10 would therefore give those users a crash on every quit and no pane, and would hide other plugins' panes, so the bridge is not published. The fix for Zotero 10 users is a v2.0.6 that ports the host-contract fixes `main` already has, and that fix is equally urgent for Zotero 8 and 9 users, who have these bugs today. See Decisions, item 2, and U3.
 
+### v2.0.6 candidate: smoke run passed (2026-09-28, evening)
+
+v2.0.6 was built on the local branch `release/v2.0.6` from the v2.0.5 tag. It stays off GitHub until Josh approves the release, because it carries a security fix (SEC-001). The candidate XPI (SHA-256 `6961327f…3e41`) ran the same driver, now hardened so each step records its own result and every run reaches quit. It ran in fresh profiles on Zotero 10.0.4 and 9.0.6, beside control runs with no Citegeist installed. On both versions:
+
+- **The pane renders with data** (85,142 citations, FWCI, percentile, the citing-works and references buttons), and the driver's own control section renders beside it.
+- **Menus are labelled** on five builds of five, and again after a forced garbage collection.
+- **A fetch lands:** the column cell shows 85142.
+- **Refreshing an item cached in the previous launch works.** On both versions, spreading a row from a Zotero `DBConnection` throws ("DB column 'getResultByName' not found"), so every v2.0.x refresh of such an item failed: BUG-ROWPROXY is confirmed and fixed by copying rows at load.
+- **Disabling leaves no Citegeist element or strings link behind**, the item menu builds and translates while Citegeist is off, and every entry is labelled again after re-enabling. Translating the whole main window rejects in stock Zotero with no Citegeist installed, so that check cannot attribute a fault; spec 90 now checks fragments instead.
+- **Quit exits with code 0 in 2.0 to 5.8 s** (seven runs). The control quit in 1.0 to 3.1 s (four runs). In the slowest run Zotero logged 0.55 s of work after the quit began, and Citegeist's cache close added no visible gap; the rest is process teardown. v2.0.5 took 61 s and crashed.
+
+Still to run before the release: the same smoke on Zotero 8.0.4 and on 7.0.10, the oldest version 2.0.6 supports, and one review round over the v2.0.6 diff.
+
+**Publishing (recommended, waiting on Josh).** Publish 2.0.6 by hand from the tested XPI and its `update.json`, not through v2.0.5's tag workflow. That workflow rebuilds the XPI with a plain `zip -r`, so users would get bytes nobody tested, and it runs `npm install` with install scripts while holding `contents: write`. The v2.0.6 tree drops `release.yml`, so creating the tag runs nothing, and a local publish script checks the version, cap, link and `update_hash`, lifts ruleset 24140405 for the one tag and restores it, points the channel at the release, then downloads both files and compares them with what was tested. The cost: 2.0.6 has no CI build record.
+
 ### Unit ledger
 
 | Unit | State | Commits | Review |
@@ -66,13 +81,13 @@ Re-enabling v2.0.5 on Zotero 10 would therefore give those users a crash on ever
 | U12 review loop | Done | 979f800 | — |
 | U1 single-source range and build | Done | 4a51fa0, f45945a, 8dd2106, 6e1f5ef, 8a8ef46 | 4 rounds, none clean; round B below |
 | U2 context-row selection | Done on this branch; not ported to `maint/2.x` | a35c42e, cbfd680, 657c4e4, 0b91826 | 3 rounds, none clean; round B below |
-| U4 real-Zotero harness | Done except the AE3 multi-select spec, still `09-multiselect-collections.todo.ts`, and the Windows and macOS runner attempt; four specs fail on the first run | f5bd47f, c9cdf7e, f1b4c51, b4f2f37, c8ebae8, 0a68b39 | 1 round; round B below |
+| U4 real-Zotero harness | Done except the AE3 multi-select spec, still `09-multiselect-collections.todo.ts`, and the Windows and macOS runner attempt. Triage fixes landed 2026-09-28: pane reveal through `scrollToPane`, all three tarballs pinned (10.0.3 from its first run, matched by an independent download), suite-hook error lines judged | f5bd47f, c9cdf7e, f1b4c51, b4f2f37, c8ebae8, 0a68b39, c897d94, e9b51e9, 750be72 | 1 round; round B below |
 | U5 CI and release gates | Code done; round 3 open, with a P1 | d03af69, 384a412, 1f2a4ab | 3 rounds, none clean |
 | U16 cache schema stamp | Done | c80d189, e14d538, 318885c | 2 rounds, none clean; round B below |
 | U18 preference names | Done; round 2 open, with a P1 | 6215ec0, 330c9a0, efa2107, fc936a3 | 2 rounds, none clean |
 | U17 bridge | Smoke run failed 2026-09-28; bridge withdrawn in favour of v2.0.6 | — | — |
-| U3 v2.0.6 | Now the fix for Zotero 8, 9 and 10 users; scope widened by the smoke run | — | — |
-| U6 quit hang (#78) | Not started | — | — |
+| U3 v2.0.6 | Built on local branch `release/v2.0.6`; smoke run passed on Zotero 9.0.6 and 10.0.4; waits for Josh's approval | local: 639618b, f446324, d3ad191, 0474fd7 | none yet |
+| U6 quit hang (#78) | Root cause fixed in v2.0.6 (the cache closes on quit); not yet on this branch | — | — |
 | U7 right-click menu (#67, #72) | Not started; the menu split in 0b91826 prepares it | — | — |
 | U8 host hardening | Not started. Spec 05 passing on 10.0.2 shows columns repaint on Zotero 10 | — | — |
 | U9 drop Zotero 7 | Not started; every deletion is marked in the code | — | — |
