@@ -174,6 +174,12 @@ Feature requests are not tracked here — they live in [`BACKLOG.md`](BACKLOG.md
 **Fix:** clear `repaintTimer` in `unregisterCitationColumn` alongside `fetchTimer`.
 **Effort:** Trivial.
 
+### BUG-REPAINT-SOLE: On Zotero 8/9 a fetched sole-selected item's cell never repaints (regression from U18 R2-1)
+
+**Impact:** CI-confirmed on branch commit 4795293: on Zotero 8.0.4 and 9.0.6, real-Zotero spec 05 "paints the stub's count into the Citations cell after a fetch" times out with the cell blank; it passes on Zotero 10.0.3. The U18 round-2 batch (cc0290f) replaced the full-reload `refreshColumns()` with a targeted `Zotero.Notifier.trigger("refresh", "item", ids)`. Its `orderForHost` avoids the disruptive deselect/reselect Zotero 8/9 do when a refresh leads with a tree's sole selection by leading with another row — but when the only rows to refresh ARE a window's sole selection and there is no other own-row or recently-drawn row to lead with, it skips the refresh entirely ("Row refresh skipped"), so the cell waits for its next paint. A user who fetches the one item they have selected sees the citation cell stay blank until they click away and back. This contradicts the standing note that Zotero 8/9 columns repaint only via `refreshAndMaintainSelection`, not the Notifier path.
+**Fix:** for the sole-selected-with-no-safe-lead case on Zotero 8/9, repaint that row through a path that updates the cell without stranding it — accept the one-time reselection for that row, or invalidate its cached cell directly. Add a real-Zotero case that fetches the sole selection. Must be fixed before the 3.0.0 merge; v2.0.6 is unaffected (it keeps v2.0.5's repaint path).
+**Found:** 2026-09-29 (first green-enough CI run after the billing lock).
+
 ### V206-REVIEW: v2.0.6 release-review findings, for 3.0.0
 
 Three parallel reviews of the v2.0.6 candidate (lifecycle/host, security, data/update-path, 2026-09-28/29) found no release blocker for 2.0.6. These items are recorded for the 3.0.0 line, and the smoke-verified 2.0.6 candidate ships without them. Sources checked against Zotero 7.0.10, 8.0.4, 9.0.6 and 10.0.4 omni.ja and Firefox ESR 115/140.
