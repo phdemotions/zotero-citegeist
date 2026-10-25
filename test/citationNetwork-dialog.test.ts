@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  bindEarlyClose,
   buildDialogHTML,
   buildAuthorDialogHTML,
   getItemSourceMetaLine,
@@ -222,5 +223,53 @@ describe("showCitationNetwork identifier gate", () => {
     expect(String(alert.mock.calls[0][2])).toMatch(/can't identify this item/i);
     // Gate rejected before any resolution work.
     expect(serviceMocks.resolveWorkForItem).not.toHaveBeenCalled();
+  });
+});
+
+// The "not found on OpenAlex" and load-failure paths return before
+// bindDialogEvents runs. The full-window overlay then had a dead × button and
+// an Escape that never reached it (focus stayed in the item tree) — Zotero
+// looked frozen. bindEarlyClose keeps all three exits alive until hand-over.
+describe("bindEarlyClose", () => {
+  function makeShell() {
+    const overlay = new EventTarget() as unknown as HTMLElement;
+    const closeBtn = Object.assign(new EventTarget(), { focus: vi.fn() });
+    const dialog = {
+      querySelector: (sel: string) => (sel === "#cg-btn-close" ? closeBtn : null),
+    } as unknown as HTMLElement;
+    return { overlay, dialog, closeBtn };
+  }
+  const key = (k: string) => Object.assign(new Event("keydown"), { key: k });
+
+  it("closes on the × button, Escape and a backdrop click", () => {
+    const { overlay, dialog, closeBtn } = makeShell();
+    const close = vi.fn();
+    bindEarlyClose(overlay, dialog, close);
+
+    closeBtn.dispatchEvent(new Event("click"));
+    overlay.dispatchEvent(key("Escape"));
+    overlay.dispatchEvent(new Event("click"));
+    overlay.dispatchEvent(key("Enter"));
+
+    expect(close).toHaveBeenCalledTimes(3);
+  });
+
+  it("focuses the × button so Escape reaches the overlay", () => {
+    const { overlay, dialog, closeBtn } = makeShell();
+    bindEarlyClose(overlay, dialog, vi.fn());
+    expect(closeBtn.focus).toHaveBeenCalled();
+  });
+
+  it("detaches every handler when bindDialogEvents takes over", () => {
+    const { overlay, dialog, closeBtn } = makeShell();
+    const close = vi.fn();
+    const unbind = bindEarlyClose(overlay, dialog, close);
+    unbind();
+
+    closeBtn.dispatchEvent(new Event("click"));
+    overlay.dispatchEvent(key("Escape"));
+    overlay.dispatchEvent(new Event("click"));
+
+    expect(close).not.toHaveBeenCalled();
   });
 });

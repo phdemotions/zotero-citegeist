@@ -41,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The citation network window can always be closed.** For a work OpenAlex
+  can't resolve (for example a book looked up by ISBN), the window showed "Not
+  found on OpenAlex", but its × button did nothing and Escape never reached it.
+  The window covers all of Zotero, so Zotero looked frozen. The ×, Escape and a
+  click outside now close it in every state, including load failures.
 - **The right-click menu no longer leaves a stray empty section.** Right-clicking a
   single item with no DOI or other recognized identifier used to show a lone
   separator with no Citegeist entries beneath it. (#72)

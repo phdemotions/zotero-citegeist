@@ -156,6 +156,41 @@ function createDialogShell(
   return { overlay, dialog };
 }
 
+/**
+ * Close handlers for the window between opening the shell and
+ * `bindDialogEvents`: the × button, Escape and a backdrop click. The "not found
+ * on OpenAlex" and load-failure paths return before `bindDialogEvents` runs;
+ * without these the full-window overlay kept a dead × and Zotero looked frozen.
+ * Focuses the × so Escape reaches the overlay instead of the item tree.
+ * Returns the unbind for the hand-over to `bindDialogEvents`.
+ *
+ * Raw listeners on purpose: they are removed by identity, and a guard wrapper
+ * would make removeEventListener silently no-op. `earlyClose` only removes the
+ * dialog, so there is nothing here that can fail.
+ */
+export function bindEarlyClose(
+  overlay: HTMLElement,
+  dialog: HTMLElement,
+  earlyClose: () => void,
+): () => void {
+  const earlyCloseOnKeydown = (e: Event) => {
+    if ((e as KeyboardEvent).key === "Escape") earlyClose();
+  };
+  const earlyCloseOnBackdrop = (e: Event) => {
+    if (e.target === overlay) earlyClose();
+  };
+  const closeBtn = dialog.querySelector("#cg-btn-close") as HTMLElement | null;
+  overlay.addEventListener("keydown", earlyCloseOnKeydown);
+  overlay.addEventListener("click", earlyCloseOnBackdrop);
+  closeBtn?.addEventListener("click", earlyClose);
+  closeBtn?.focus();
+  return () => {
+    overlay.removeEventListener("keydown", earlyCloseOnKeydown);
+    overlay.removeEventListener("click", earlyCloseOnBackdrop);
+    closeBtn?.removeEventListener("click", earlyClose);
+  };
+}
+
 // ────────────────────────────────────────────────────────
 // Entry point
 // ────────────────────────────────────────────────────────
@@ -216,28 +251,22 @@ export async function showCitationNetwork(
   const body = dialog.querySelector(".cg-dialog-body") as HTMLElement;
   if (body) renderSkeletonRows(body);
 
-  // Close on Escape/backdrop while loading. We flip `phase` to "closed"
+  // Close on ×/Escape/backdrop while loading. We flip `phase` to "closed"
   // BEFORE the DOM removal so any awaiter that resumes between this handler
   // and `closedBeforeReady` returning true sees a consistent state — without
   // it, the post-await "happy path" (work fetched after early-close) would
   // proceed to bind events on a detached overlay and fire network calls
   // against an orphaned UI.
-  const earlyClose = (e: Event) => {
-    if ((e as KeyboardEvent).key === "Escape" || e.target === overlay) {
-      phase = "closed";
-      try {
-        overlay.remove();
-      } catch {
-        /* gone */
-      }
-      if (activeDialog === overlay) activeDialog = null;
+  const earlyClose = () => {
+    phase = "closed";
+    try {
+      overlay.remove();
+    } catch {
+      /* gone */
     }
+    if (activeDialog === overlay) activeDialog = null;
   };
-  // Raw listeners on purpose: earlyClose is removed by identity below, and a
-  // wrapper would make removeEventListener silently no-op. The handler itself
-  // only closes the dialog, so there is nothing here that can fail.
-  overlay.addEventListener("keydown", earlyClose);
-  overlay.addEventListener("click", earlyClose);
+  const unbindEarlyClose = bindEarlyClose(overlay, dialog, earlyClose);
 
   // Dialog lifecycle is tracked via an external phase variable until the
   // full state object exists. Guards below early-return when phase flips to
@@ -298,8 +327,7 @@ export async function showCitationNetwork(
   if (closedBeforeReady()) return;
 
   // Remove early close handlers, bind full event set
-  overlay.removeEventListener("keydown", earlyClose);
-  overlay.removeEventListener("click", earlyClose);
+  unbindEarlyClose();
   // Ensure close handlers update the phase variable the closures above use.
   bindGuarded(
     overlay,

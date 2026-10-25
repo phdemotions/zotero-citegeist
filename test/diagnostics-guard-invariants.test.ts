@@ -371,9 +371,9 @@ describe("host entry points are guarded", () => {
     ]) {
       const text = src(file);
       // A raw addEventListener means a handler whose throw goes nowhere: the
-      // click silently does nothing and the modal reads as frozen. The two
-      // permitted exceptions are the `earlyClose` bindings, which must keep
-      // their identity so removeEventListener can find them.
+      // click silently does nothing and the modal reads as frozen. The
+      // permitted exceptions are the `earlyClose*` bindings (bindEarlyClose),
+      // which must keep their identity so removeEventListener can find them.
       const raw = [...text.matchAll(/\.addEventListener\(\s*"[^"]+"\s*,\s*(\S+)/g)]
         .map((m) => m[1])
         .filter((handler) => !handler.startsWith("earlyClose"));
