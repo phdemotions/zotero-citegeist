@@ -44,12 +44,16 @@ async function startup({ id, version, rootURI }, reason) {
   await citegeist.startup({ id, version, rootURI, reason });
 }
 
-function shutdown({ id, version, rootURI }, reason) {
-  if (reason === APP_SHUTDOWN) return;
+async function shutdown({ id, version, rootURI }, reason) {
+  // Also on APP_SHUTDOWN: onShutdown closes citegeist.sqlite. Skipping it left
+  // the connection open, and Firefox's Sqlite.sys.mjs shutdown blocker waited
+  // on it forever ("citegeist.sqlite#0: waiting for shutdown") — Zotero never
+  // quit. Zotero awaits the promise a bootstrap method returns.
   if (citegeist) {
-    citegeist.shutdown({ id, version, rootURI, reason });
+    await citegeist.shutdown({ id, version, rootURI, reason });
     citegeist = undefined;
   }
+  if (reason === APP_SHUTDOWN) return;
   // Tear down the chrome:// registration we own. Explicit here so an
   // uninstall/disable/upgrade unmaps chrome://citegeist/ deterministically
   // instead of waiting on GC.

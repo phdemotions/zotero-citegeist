@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Zotero quits normally again.** On quit, Citegeist skipped its own shutdown
+  and left its citation database open. Zotero then waited for it indefinitely
+  and had to be force-quit. The database is now closed on quit, and Zotero
+  waits for that before exiting.
 - **The right-click menu no longer leaves a stray empty section.** Right-clicking a
   single item with no DOI or other recognized identifier used to show a lone
   separator with no Citegeist entries beneath it. (#72)
